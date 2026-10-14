@@ -13,6 +13,19 @@ Format versi menggunakan skema `MAJOR.MINOR.PATCH`:
 - **MINOR (x.Y.0):** Penambahan fitur atau kapabilitas baru yang tetap kompatibel ke belakang (*backward-compatible new features*). Digit PATCH direset ke 0.
 - **PATCH (x.y.Z):** Perbaikan bug, peningkatan stabilitas, atau perbaikan internal tanpa penambahan fitur baru (*backward-compatible bug fixes*).
 
+## [2.6.0] - 2026-10-14
+
+*Alasan kenaikan MINOR (2.5.0 → 2.6.0): penambahan fitur filter katalog (sort Terbaru + filter tahun rilis) yang tetap kompatibel ke belakang.*
+
+### Ditambahkan
+- **Filter Katalog: Sort Terbaru & Filter Tahun (Android):** Tab Katalog kini memiliki panel filter: pilihan urutan **Populer** / **Terbaru** serta deretan chip **tahun rilis** (Semua, tahun berjalan s/d 1990, dapat di-scroll horizontal). Perintah terminal baru `:tahun <YYYY>` untuk menerapkan filter tahun langsung, lengkap dengan entri di dialog `:help`. Backend: `/api/browse` kini menerima juga nilai sort asli form filter hianime (`added_date`, `updated_date`, `release_date`, `title_az`, `avg_score`, `mal_score`, `most_viewed`, `most_followed`, `episode_count`).
+
+### Diperbaiki
+- **Pemetaan Nilai Sort Katalog:** Nilai sort lama yang tidak dikenali situs (`popularity`, `latest`, `score`, `az`, `most_favorite`) kini dipetakan ke nilai resmi (`""`, `added_date`, `avg_score`, `title_az`, `most_followed`) sehingga pilihan urutan benar-benar berfungsi alih-alih jatuh ke urutan default.
+
+### Diubah
+- **Nama Aplikasi Menjadi "Tatapan":** Label aplikasi diperbarui — mobile: **Tatapan** (sebelumnya "Tatap Personal"), TV: **Tatapan TV**. `applicationId` tetap `id.tatap.personal` / `id.tatap.personal.tv` agar jalur upgrade dari v2.5.0 tetap mulus tanpa instalasi ulang.
+
 ## [2.5.0] - 2026-10-14
 
 *Alasan kenaikan MINOR (2.4.2 → 2.5.0): penambahan fitur favorit yang tetap kompatibel ke belakang. Perubahan `applicationId` hanya berlaku pada fork personal (`id.tatap.personal`) dan tidak mengubah perilaku versi resmi.*

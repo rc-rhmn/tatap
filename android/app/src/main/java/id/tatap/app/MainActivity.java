@@ -26,6 +26,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -88,6 +89,15 @@ public class MainActivity extends Activity {
     private TextView tvActiveFilterLabel;
     private Button btnClearFilter;
     private TextView btnClearHistoryAll;
+
+    // Katalog Filter (Sort Populer/Terbaru + Tahun Rilis)
+    private View layoutKatalogFilter;
+    private TextView btnSortPopular, btnSortNewest;
+    private LinearLayout layoutYearChips;
+    private String catalogSort = "popularity";
+    private int catalogYear = 0;
+    private final List<TextView> yearChipViews = new ArrayList<>();
+    private final List<Integer> yearChipValues = new ArrayList<>();
 
     private final Handler bannerHandler = new Handler(Looper.getMainLooper());
     private final Runnable hideBannerRunnable = () -> {
@@ -164,6 +174,12 @@ public class MainActivity extends Activity {
         btnClearFilter = findViewById(R.id.btn_clear_filter);
         btnClearHistoryAll = findViewById(R.id.btn_clear_history_all);
 
+        layoutKatalogFilter = findViewById(R.id.layout_katalog_filter);
+        btnSortPopular = findViewById(R.id.btn_sort_popular);
+        btnSortNewest = findViewById(R.id.btn_sort_newest);
+        layoutYearChips = findViewById(R.id.layout_year_chips);
+        buildYearChips();
+
         int spanCount = getResources().getInteger(R.integer.anime_grid_columns);
         rvGrid.setLayoutManager(new GridLayoutManager(this, spanCount));
         adapter = new AnimeAdapter(this);
@@ -231,6 +247,13 @@ public class MainActivity extends Activity {
         btnTabKatalog.setOnClickListener(v -> {
             resetFiltersToTab("katalog");
         });
+
+        if (btnSortPopular != null) {
+            btnSortPopular.setOnClickListener(v -> setCatalogSort("popularity"));
+        }
+        if (btnSortNewest != null) {
+            btnSortNewest.setOnClickListener(v -> setCatalogSort("latest"));
+        }
 
         if (btnTabJadwal != null) {
             btnTabJadwal.setOnClickListener(v -> {
@@ -363,6 +386,8 @@ public class MainActivity extends Activity {
         TvFocusHelper.attachFocusScale(btnTabMusim, 1.08f, 6f);
         TvFocusHelper.attachFocusScale(btnTabAiring, 1.08f, 6f);
         TvFocusHelper.attachFocusScale(btnTabKatalog, 1.08f, 6f);
+        TvFocusHelper.attachFocusScale(btnSortPopular, 1.1f, 6f);
+        TvFocusHelper.attachFocusScale(btnSortNewest, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnPrevPage, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnNextPage, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnEmptyRetry, 1.08f, 6f);
@@ -508,6 +533,23 @@ public class MainActivity extends Activity {
             case "katalog":
             case "catalog":
                 resetFiltersToTab("katalog");
+                break;
+
+            case "tahun":
+            case "year":
+                try {
+                    int y = Integer.parseInt(args.trim());
+                    if (y >= 1950 && y <= 2100) {
+                        catalogYear = y;
+                        currentPage = 1;
+                        switchView("katalog");
+                        showCommandOutput("> tatap$ :tahun " + y + " [Filter Tahun Diterapkan]", false);
+                    } else {
+                        showCommandOutput("> tatap$ :tahun [Gagal: tahun di luar rentang wajar]", true);
+                    }
+                } catch (Exception e) {
+                    showCommandOutput("> tatap$ Format: :tahun <YYYY> (contoh: :tahun 2024)", true);
+                }
                 break;
 
             case "jadwal":
@@ -867,6 +909,17 @@ public class MainActivity extends Activity {
             });
         }
 
+        View itemTahun = dialog.findViewById(R.id.cmd_item_tahun);
+        if (itemTahun != null) {
+            itemTahun.setOnClickListener(v -> {
+                dialog.dismiss();
+                etSearch.setText(":tahun ");
+                etSearch.setSelection(8);
+                etSearch.requestFocus();
+                showCommandOutput("> tatap$ Masukkan tahun rilis (contoh: 2024) lalu tekan Enter", false);
+            });
+        }
+
         View itemUpdate = dialog.findViewById(R.id.cmd_item_update);
         if (itemUpdate != null) {
             itemUpdate.setOnClickListener(v -> {
@@ -882,7 +935,7 @@ public class MainActivity extends Activity {
             R.id.cmd_item_ping, R.id.cmd_item_ai, R.id.cmd_item_apikey,
             R.id.cmd_item_gemini, R.id.cmd_item_groq, R.id.cmd_item_ollama,
             R.id.cmd_item_model, R.id.cmd_item_logs, R.id.cmd_item_riwayat,
-            R.id.cmd_item_favorit, R.id.cmd_item_update, R.id.cmd_item_clear
+            R.id.cmd_item_favorit, R.id.cmd_item_tahun, R.id.cmd_item_update, R.id.cmd_item_clear
         };
         for (int id : cmdItemIds) {
             View item = dialog.findViewById(id);
@@ -1397,6 +1450,13 @@ public class MainActivity extends Activity {
             }
         }
 
+        if (layoutKatalogFilter != null) {
+            layoutKatalogFilter.setVisibility(isKatalog ? View.VISIBLE : View.GONE);
+            if (isKatalog) {
+                updateKatalogFilterUi();
+            }
+        }
+
         if (btnHeaderHistory != null) {
             btnHeaderHistory.setTextColor(isRiwayat ? 0xFF38BDF8 : 0xFF94A3B8);
         }
@@ -1426,6 +1486,76 @@ public class MainActivity extends Activity {
 
         btnDayTomorrow.setBackgroundResource(isTomorrow ? R.drawable.bg_tab_active : R.drawable.bg_header_button);
         btnDayTomorrow.setTextColor(isTomorrow ? 0xFFFFFFFF : 0xFF8892B0);
+    }
+
+    private void buildYearChips() {
+        if (layoutYearChips == null) return;
+        layoutYearChips.removeAllViews();
+        yearChipViews.clear();
+        yearChipValues.clear();
+        int currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR);
+        addYearChip(0, "Semua");
+        for (int y = currentYear; y >= 1990; y--) {
+            addYearChip(y, String.valueOf(y));
+        }
+        updateKatalogFilterUi();
+    }
+
+    private void addYearChip(int year, String label) {
+        TextView chip = new TextView(this);
+        chip.setText(label);
+        chip.setTextSize(11f);
+        chip.setTypeface(chip.getTypeface(), android.graphics.Typeface.BOLD);
+        chip.setTextColor(0xFF8892B0);
+        chip.setBackgroundResource(R.drawable.bg_header_button);
+        chip.setGravity(android.view.Gravity.CENTER);
+        float density = getResources().getDisplayMetrics().density;
+        int padH = (int) (12 * density);
+        chip.setPadding(padH, 0, padH, 0);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, (int) (30 * density));
+        lp.setMarginEnd((int) (4 * density));
+        chip.setLayoutParams(lp);
+        chip.setClickable(true);
+        chip.setFocusable(true);
+        chip.setOnClickListener(v -> setCatalogYear(year));
+        TvFocusHelper.attachFocusScale(chip, 1.1f, 6f);
+        yearChipViews.add(chip);
+        yearChipValues.add(year);
+        layoutYearChips.addView(chip);
+    }
+
+    private void setCatalogSort(String sort) {
+        catalogSort = sort;
+        currentPage = 1;
+        updateKatalogFilterUi();
+        fetchData();
+    }
+
+    private void setCatalogYear(int year) {
+        catalogYear = year;
+        currentPage = 1;
+        updateKatalogFilterUi();
+        fetchData();
+    }
+
+    private void updateKatalogFilterUi() {
+        if (btnSortPopular != null) {
+            boolean pop = "popularity".equals(catalogSort);
+            btnSortPopular.setBackgroundResource(pop ? R.drawable.bg_tab_active : R.drawable.bg_header_button);
+            btnSortPopular.setTextColor(pop ? 0xFFFFFFFF : 0xFF8892B0);
+        }
+        if (btnSortNewest != null) {
+            boolean newest = "latest".equals(catalogSort);
+            btnSortNewest.setBackgroundResource(newest ? R.drawable.bg_tab_active : R.drawable.bg_header_button);
+            btnSortNewest.setTextColor(newest ? 0xFFFFFFFF : 0xFF8892B0);
+        }
+        for (int i = 0; i < yearChipViews.size(); i++) {
+            TextView chip = yearChipViews.get(i);
+            boolean active = yearChipValues.get(i) == catalogYear;
+            chip.setBackgroundResource(active ? R.drawable.bg_tab_active : R.drawable.bg_header_button);
+            chip.setTextColor(active ? 0xFFFFFFFF : 0xFF8892B0);
+        }
     }
 
     private void hideKeyboard() {
@@ -1524,8 +1654,14 @@ public class MainActivity extends Activity {
             title = "Masih Tayang (Hal " + currentPage + ")";
             endpoint = "/api/seasonal?which=airing&page=" + currentPage;
         } else if ("katalog".equals(currentView)) {
-            title = "Katalog Populer (Hal " + currentPage + ")";
-            endpoint = "/api/catalog?page=" + currentPage;
+            String modeLabel = "latest".equals(catalogSort) ? "Terbaru" : "Populer";
+            if (catalogYear > 0) {
+                title = "Katalog " + modeLabel + " · " + catalogYear + " (Hal " + currentPage + ")";
+                endpoint = "/api/browse?sort=" + catalogSort + "&sy=" + catalogYear + "&ey=" + catalogYear + "&page=" + currentPage;
+            } else {
+                title = "Katalog " + modeLabel + " (Hal " + currentPage + ")";
+                endpoint = "/api/browse?sort=" + catalogSort + "&page=" + currentPage;
+            }
         } else if ("jadwal".equals(currentView)) {
             String dayLabel = "Hari Ini";
             if ("yesterday".equals(currentScheduleDay)) dayLabel = "Kemarin";

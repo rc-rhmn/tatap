@@ -500,6 +500,34 @@
                     android:fontFamily="monospace" />
             </LinearLayout>
 
+            <!-- Item: :tahun -->
+            <LinearLayout
+                android:id="@+id/cmd_item_tahun"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_command_tag"
+                android:orientation="vertical"
+                android:padding="8dp"
+                android:layout_marginBottom="6dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text=":tahun"
+                    android:textColor="#38BDF8"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:fontFamily="monospace" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Filter katalog berdasarkan tahun rilis anime (contoh: :tahun 2024)"
+                    android:textColor="#8892B0"
+                    android:textSize="11sp"
+                    android:fontFamily="monospace" />
+            </LinearLayout>
+
             <!-- Item: :update -->
             <LinearLayout
                 android:id="@+id/cmd_item_update"

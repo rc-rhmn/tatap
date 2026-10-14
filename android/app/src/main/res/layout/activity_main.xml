@@ -468,6 +468,67 @@
             android:textStyle="bold" />
     </LinearLayout>
 
+    <!-- Katalog Filter Panel: Sort (Populer/Terbaru) + Filter Tahun Rilis -->
+    <LinearLayout
+        android:id="@+id/layout_katalog_filter"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="14dp"
+        android:layout_marginBottom="6dp"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/btn_sort_popular"
+                android:layout_width="0dp"
+                android:layout_height="30dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:background="@drawable/bg_tab_active"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="Populer"
+                android:textColor="#FFFFFF"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btn_sort_newest"
+                android:layout_width="0dp"
+                android:layout_height="30dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:background="@drawable/bg_header_button"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="Terbaru"
+                android:textColor="#8892B0"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="5dp"
+            android:scrollbars="none"
+            android:overScrollMode="never">
+
+            <LinearLayout
+                android:id="@+id/layout_year_chips"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+    </LinearLayout>
+
     <!-- Section Title & Counter Bar -->
     <LinearLayout
         android:layout_width="match_parent"

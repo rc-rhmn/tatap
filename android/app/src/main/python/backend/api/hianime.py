@@ -124,7 +124,19 @@ FILTERS = {
     "score": ["10", "9", "8", "7", "6", "5", "4", "3", "2", "1"],
     "season": ["spring", "summer", "fall", "winter"],
     "language": ["sub", "dub"],
-    "sort": ["popularity", "trending", "score", "latest", "az", "most_favorite"],
+    "sort": ["popularity", "trending", "score", "latest", "az", "most_favorite",
+             # Nilai sort asli form filter hianime (select name="sort").
+             "updated_date", "added_date", "release_date", "title_az",
+             "avg_score", "mal_score", "most_viewed", "most_followed", "episode_count"],
+}
+
+# Alias nilai sort gaya lama -> nilai asli situs (cegah sort jadi no-op).
+SORT_ALIASES = {
+    "popularity": "",                  # default situs (urutan bawaan)
+    "latest": "added_date",            # Recently Added
+    "score": "avg_score",              # Score
+    "az": "title_az",                  # Name A-Z
+    "most_favorite": "most_followed",  # Most Followed
 }
 
 
@@ -166,6 +178,10 @@ def browse(params: dict = None, page: int = 1):
             clean[k] = v
         elif k in ("keyword", "sy", "sm", "ey", "em", "genre"):
             clean[k] = v
+    if "sort" in clean:
+        clean["sort"] = SORT_ALIASES.get(clean["sort"], clean["sort"])
+        if not clean["sort"]:
+            clean.pop("sort")
     if clean.get("genre") == "hentai" or "hentai" in str(clean.get("genre", "")):
         return {"items": [], "page": clean["page"], "total_pages": 1, "params": clean}
     url = BROWSE_API + "?" + urlencode(clean)

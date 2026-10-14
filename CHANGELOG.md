@@ -13,6 +13,17 @@ Format versi menggunakan skema `MAJOR.MINOR.PATCH`:
 - **MINOR (x.Y.0):** Penambahan fitur atau kapabilitas baru yang tetap kompatibel ke belakang (*backward-compatible new features*). Digit PATCH direset ke 0.
 - **PATCH (x.y.Z):** Perbaikan bug, peningkatan stabilitas, atau perbaikan internal tanpa penambahan fitur baru (*backward-compatible bug fixes*).
 
+## [2.5.0] - 2026-10-14
+
+*Alasan kenaikan MINOR (2.4.2 → 2.5.0): penambahan fitur favorit yang tetap kompatibel ke belakang. Perubahan `applicationId` hanya berlaku pada fork personal (`id.tatap.personal`) dan tidak mengubah perilaku versi resmi.*
+
+### Ditambahkan
+- **Fitur Star / Favorit Anime (Android + Backend):** Menambahkan sistem penanda favorit. Halaman detail kini memiliki tombol bintang (☆/★) untuk menandai atau menghapus anime dari daftar favorit; menu header beranda memiliki tombol **★ Favorit** yang membuka grid daftar favorit; terminal mendukung perintah `:favorit`. Sisi backend menambahkan tabel SQLite `favorites` serta endpoint `GET /api/favorites`, `GET /api/favorites/check`, `POST /api/favorites`, dan `DELETE /api/favorites`.
+
+### Diubah
+- **Rebranding Fork Personal (Tatap Personal):** `applicationId` Android diubah dari `id.tatap.app` menjadi `id.tatap.personal` (varian TV: `id.tatap.personal.tv`) dan nama aplikasi menjadi "Tatap Personal", sehingga dapat dipasang berdampingan dengan versi resmi tanpa saling menimpa.
+- **Pemeriksa Pembaruan Mengarah ke Fork:** Endpoint `/api/update/check` kini memeriksa rilis terbaru dari repositori fork personal, bukan repositori upstream.
+
 ## [2.4.2] - 2026-10-13
 
 ### Diperbaiki

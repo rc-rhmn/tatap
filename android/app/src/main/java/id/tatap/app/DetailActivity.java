@@ -44,7 +44,8 @@ public class DetailActivity extends Activity {
     private String eps;
     private String sub;
 
-    private TextView tvTitle, tvTitleFull, tvSlug, tvTypeBadge;
+    private TextView tvTitle, tvTitleFull, tvSlug, tvTypeBadge, btnStarFavorite;
+    private boolean isFavorite = false;
     private ImageView ivPoster;
     private Button btnQuickPlay, btnSortOrder;
     private ProgressBar pbLoading;
@@ -100,6 +101,7 @@ public class DetailActivity extends Activity {
         btnSortOrder = findViewById(R.id.btn_sort_order);
         pbLoading = findViewById(R.id.pb_detail_loading);
         ImageButton btnBack = findViewById(R.id.btn_back);
+        btnStarFavorite = findViewById(R.id.btn_star_favorite);
         rvEpisodes = findViewById(R.id.rv_episodes);
         layoutSeasons = findViewById(R.id.layout_detail_seasons);
         rvSeasons = findViewById(R.id.rv_detail_seasons);
@@ -122,6 +124,10 @@ public class DetailActivity extends Activity {
         TvFocusHelper.attachFocusScale(btnBack, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnQuickPlay, 1.05f, 6f);
         TvFocusHelper.attachFocusScale(btnSortOrder, 1.05f, 6f);
+        if (btnStarFavorite != null) {
+            btnStarFavorite.setOnClickListener(v -> toggleFavorite());
+            TvFocusHelper.attachFocusScale(btnStarFavorite, 1.15f, 6f);
+        }
 
         int epSpan = getResources().getInteger(R.integer.episode_grid_columns);
         rvEpisodes.setLayoutManager(new GridLayoutManager(this, epSpan));
@@ -164,6 +170,7 @@ public class DetailActivity extends Activity {
         }
         loadEpisodes();
         loadRelations();
+        loadFavoriteState();
     }
 
     @Override
@@ -498,6 +505,72 @@ public class DetailActivity extends Activity {
                 });
             }
         }).start();
+    }
+
+    private void loadFavoriteState() {
+        if (slug == null || slug.isEmpty() || btnStarFavorite == null) return;
+        new Thread(() -> {
+            try {
+                String u = "http://127.0.0.1:8767/api/favorites/check?slug=" + URLEncoder.encode(slug, "UTF-8");
+                HttpURLConnection conn = (HttpURLConnection) new URL(u).openConnection();
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                reader.close();
+                JSONObject res = new JSONObject(sb.toString());
+                boolean fav = false;
+                if (res.optBoolean("success")) {
+                    JSONObject d = res.optJSONObject("data");
+                    fav = d != null && d.optBoolean("favorite");
+                }
+                final boolean favFinal = fav;
+                runOnUiThread(() -> {
+                    isFavorite = favFinal;
+                    updateStarUi();
+                });
+            } catch (Exception ignored) {}
+        }).start();
+    }
+
+    private void toggleFavorite() {
+        if (slug == null || slug.isEmpty()) return;
+        final boolean target = !isFavorite;
+        isFavorite = target;
+        updateStarUi();
+        Toast.makeText(this, target ? "Ditambahkan ke Favorit" : "Dihapus dari Favorit", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                String base = "http://127.0.0.1:8767/api/favorites";
+                String u = target ? base : base + "?slug=" + URLEncoder.encode(slug, "UTF-8");
+                HttpURLConnection conn = (HttpURLConnection) new URL(u).openConnection();
+                conn.setRequestMethod(target ? "POST" : "DELETE");
+                conn.setConnectTimeout(3000);
+                conn.setReadTimeout(3000);
+                if (target) {
+                    JSONObject b = new JSONObject();
+                    b.put("slug", slug);
+                    b.put("title", title != null ? title : slug);
+                    b.put("poster", poster != null ? poster : "");
+                    b.put("type", type != null ? type : "");
+                    conn.setRequestProperty("Content-Type", "application/json");
+                    conn.setDoOutput(true);
+                    java.io.OutputStream os = conn.getOutputStream();
+                    os.write(b.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    os.close();
+                }
+                conn.getResponseCode();
+                conn.disconnect();
+            } catch (Exception ignored) {}
+        }).start();
+    }
+
+    private void updateStarUi() {
+        if (btnStarFavorite == null) return;
+        btnStarFavorite.setText(isFavorite ? "★" : "☆");
+        btnStarFavorite.setTextColor(isFavorite ? 0xFFFACC15 : 0xFF64748B);
     }
 
     class SeasonAdapter extends RecyclerView.Adapter<SeasonAdapter.SeasonViewHolder> {

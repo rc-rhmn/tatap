@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse, FileResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from config import APP_PORT, APP_HOST, HI_BASE, HI_UA
-from database import init_db, get_search_cache, set_search_cache, get_episode_cache, set_episode_cache, add_history, get_history, clear_history, get_setting, set_setting, get_browse_cache, set_browse_cache, get_slug_map, set_slug_map, get_subtitle_cache, set_subtitle_cache, delete_subtitle_cache, get_today_char_count, add_today_char_count
+from database import init_db, get_search_cache, set_search_cache, get_episode_cache, set_episode_cache, add_history, get_history, clear_history, get_setting, set_setting, get_browse_cache, set_browse_cache, get_slug_map, set_slug_map, get_subtitle_cache, set_subtitle_cache, delete_subtitle_cache, get_today_char_count, add_today_char_count, add_favorite, remove_favorite, get_favorites, is_favorite
 from api import hianime as hi
 from api import anilist as al
 from api import otakudesu as otaku
@@ -45,9 +45,9 @@ async def check_update():
     4. Tatap-x86_64.AppImage (Linux AppImage)
     """
     try:
-        url = "https://api.github.com/repos/asfaraguest/tatap/releases/latest"
+        url = "https://api.github.com/repos/rc-rhmn/tatap/releases/latest"
         headers = {
-            "User-Agent": f"Tatap-App/{CURRENT_VERSION} (https://github.com/asfaraguest/tatap)",
+            "User-Agent": f"Tatap-App/{CURRENT_VERSION} (https://github.com/rc-rhmn/tatap)",
             "Accept": "application/vnd.github.v3+json"
         }
         async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
@@ -100,7 +100,7 @@ async def check_update():
             "release_name": rel_data.get("name") or tag_name,
             "body": rel_data.get("body") or "",
             "published_at": rel_data.get("published_at") or "",
-            "release_url": rel_data.get("html_url") or "https://github.com/asfaraguest/tatap/releases/latest",
+            "release_url": rel_data.get("html_url") or "https://github.com/rc-rhmn/tatap/releases/latest",
             "assets": assets_out
         })
     except Exception as e:
@@ -1562,6 +1562,31 @@ async def save_hist(body: dict = None):
 @app.delete("/api/history")
 async def del_hist():
     await clear_history()
+    return ok(True)
+
+@app.get("/api/favorites")
+async def favorites():
+    return ok(await get_favorites())
+
+@app.get("/api/favorites/check")
+async def favorite_check(slug: str = ""):
+    return ok({"slug": slug, "favorite": await is_favorite(slug)})
+
+@app.post("/api/favorites")
+async def save_favorite(body: dict = None):
+    body = body or {}
+    slug = (body.get("slug") or "").strip()
+    if not slug:
+        return fail("slug wajib diisi")
+    await add_favorite(slug, body.get("title", slug), body.get("poster", ""), body.get("type", ""))
+    return ok(True)
+
+@app.delete("/api/favorites")
+async def del_favorite(slug: str = ""):
+    slug = (slug or "").strip()
+    if not slug:
+        return fail("slug wajib diisi")
+    await remove_favorite(slug)
     return ok(True)
 
 @app.get("/api/settings")

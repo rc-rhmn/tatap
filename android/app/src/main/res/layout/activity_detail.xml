@@ -44,6 +44,20 @@
             android:singleLine="true"
             android:ellipsize="end" />
 
+        <TextView
+            android:id="@+id/btn_star_favorite"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginEnd="2dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Tandai favorit"
+            android:gravity="center"
+            android:text="&#9734;"
+            android:textColor="#64748B"
+            android:textSize="24sp" />
+
         <ProgressBar
             android:id="@+id/pb_detail_loading"
             android:layout_width="20dp"

@@ -154,6 +154,22 @@
                     android:textColor="#94A3B8"
                     android:textSize="11sp" />
 
+                <!-- Header Quick Action: Favorites Button -->
+                <TextView
+                    android:id="@+id/btn_header_favorites"
+                    android:layout_width="wrap_content"
+                    android:layout_height="30dp"
+                    android:layout_marginEnd="5dp"
+                    android:background="@drawable/bg_header_button"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:foreground="?attr/selectableItemBackground"
+                    android:gravity="center"
+                    android:paddingHorizontal="9dp"
+                    android:text="&#9733; Favorit"
+                    android:textColor="#94A3B8"
+                    android:textSize="11sp" />
+
                 <!-- Header Quick Action: Terminal Help Button -->
                 <TextView
                     android:id="@+id/btn_header_help"

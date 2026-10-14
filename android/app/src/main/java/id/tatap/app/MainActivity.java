@@ -65,7 +65,7 @@ public class MainActivity extends Activity {
     private boolean isFoldedMenuOpen = false;
 
     // Header Quick Actions
-    private TextView btnHeaderAi, btnHeaderGenre, btnHeaderHelp, btnHeaderHistory;
+    private TextView btnHeaderAi, btnHeaderGenre, btnHeaderHelp, btnHeaderHistory, btnHeaderFavorites;
 
     // Segmented Tabs & Pagination
     private TextView btnTabMusim, btnTabAiring, btnTabKatalog;
@@ -127,6 +127,7 @@ public class MainActivity extends Activity {
         btnHeaderGenre = findViewById(R.id.btn_header_genre);
         btnHeaderHelp = findViewById(R.id.btn_header_help);
         btnHeaderHistory = findViewById(R.id.btn_header_history);
+        btnHeaderFavorites = findViewById(R.id.btn_header_favorites);
 
         btnTabMusim = findViewById(R.id.btn_tab_musim);
         btnTabAiring = findViewById(R.id.btn_tab_airing);
@@ -297,6 +298,13 @@ public class MainActivity extends Activity {
             });
         }
 
+        if (btnHeaderFavorites != null) {
+            btnHeaderFavorites.setOnClickListener(v -> {
+                setFoldedMenuOpen(false);
+                switchView("favorit");
+            });
+        }
+
         if (btnClearHistoryAll != null) {
             btnClearHistoryAll.setOnClickListener(v -> confirmAndClearHistory());
         }
@@ -351,6 +359,7 @@ public class MainActivity extends Activity {
         TvFocusHelper.attachFocusScale(btnHeaderGenre, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnHeaderHelp, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnHeaderHistory, 1.1f, 6f);
+        TvFocusHelper.attachFocusScale(btnHeaderFavorites, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnTabMusim, 1.08f, 6f);
         TvFocusHelper.attachFocusScale(btnTabAiring, 1.08f, 6f);
         TvFocusHelper.attachFocusScale(btnTabKatalog, 1.08f, 6f);
@@ -443,6 +452,10 @@ public class MainActivity extends Activity {
             layoutActiveFilter.setVisibility(View.VISIBLE);
             tvActiveFilterLabel.setText("RIWAYAT TONTONAN");
             if (btnClearHistoryAll != null) btnClearHistoryAll.setVisibility(View.VISIBLE);
+        } else if ("favorit".equals(currentView)) {
+            layoutActiveFilter.setVisibility(View.VISIBLE);
+            tvActiveFilterLabel.setText("FAVORIT SAYA");
+            if (btnClearHistoryAll != null) btnClearHistoryAll.setVisibility(View.GONE);
         } else {
             layoutActiveFilter.setVisibility(View.GONE);
             if (btnClearHistoryAll != null) btnClearHistoryAll.setVisibility(View.GONE);
@@ -592,6 +605,12 @@ public class MainActivity extends Activity {
                     switchView("riwayat");
                     showCommandOutput("> tatap$ :riwayat [Menampilkan Riwayat Tontonan]", false);
                 }
+                break;
+
+            case "favorit":
+            case "fav":
+                switchView("favorit");
+                showCommandOutput("> tatap$ :favorit [Menampilkan Daftar Favorit]", false);
                 break;
 
             case "logs":
@@ -840,6 +859,14 @@ public class MainActivity extends Activity {
             });
         }
 
+        View itemFavorit = dialog.findViewById(R.id.cmd_item_favorit);
+        if (itemFavorit != null) {
+            itemFavorit.setOnClickListener(v -> {
+                dialog.dismiss();
+                switchView("favorit");
+            });
+        }
+
         View itemUpdate = dialog.findViewById(R.id.cmd_item_update);
         if (itemUpdate != null) {
             itemUpdate.setOnClickListener(v -> {
@@ -855,7 +882,7 @@ public class MainActivity extends Activity {
             R.id.cmd_item_ping, R.id.cmd_item_ai, R.id.cmd_item_apikey,
             R.id.cmd_item_gemini, R.id.cmd_item_groq, R.id.cmd_item_ollama,
             R.id.cmd_item_model, R.id.cmd_item_logs, R.id.cmd_item_riwayat,
-            R.id.cmd_item_update, R.id.cmd_item_clear
+            R.id.cmd_item_favorit, R.id.cmd_item_update, R.id.cmd_item_clear
         };
         for (int id : cmdItemIds) {
             View item = dialog.findViewById(id);
@@ -1347,6 +1374,7 @@ public class MainActivity extends Activity {
         boolean isKatalog = "katalog".equals(currentView);
         boolean isJadwal = "jadwal".equals(currentView);
         boolean isRiwayat = "riwayat".equals(currentView);
+        boolean isFavorit = "favorit".equals(currentView);
 
         btnTabMusim.setBackgroundResource(isMusim ? R.drawable.bg_tab_active : R.drawable.bg_tab_inactive);
         btnTabMusim.setTextColor(isMusim ? 0xFFFFFFFF : 0xFF8892B0);
@@ -1371,6 +1399,10 @@ public class MainActivity extends Activity {
 
         if (btnHeaderHistory != null) {
             btnHeaderHistory.setTextColor(isRiwayat ? 0xFF38BDF8 : 0xFF94A3B8);
+        }
+
+        if (btnHeaderFavorites != null) {
+            btnHeaderFavorites.setTextColor(isFavorit ? 0xFFFACC15 : 0xFF94A3B8);
         }
     }
 
@@ -1506,6 +1538,9 @@ public class MainActivity extends Activity {
         } else if ("season_filter".equals(currentView)) {
             title = "Musim: " + currentSeasonName.toUpperCase() + " " + currentSeasonYear + " (Hal " + currentPage + ")";
             endpoint = "/api/seasonal?season=" + URLEncoder.encode(currentSeasonName) + "&year=" + currentSeasonYear + "&page=" + currentPage;
+        } else if ("favorit".equals(currentView)) {
+            title = "Favorit Saya";
+            endpoint = "/api/favorites";
         } else if ("riwayat".equals(currentView)) {
             title = "Riwayat Tontonan";
             endpoint = "/api/history";
@@ -1516,7 +1551,7 @@ public class MainActivity extends Activity {
 
         tvSectionTitle.setText(title);
         if (layoutPagination != null) {
-            layoutPagination.setVisibility("riwayat".equals(currentView) || "jadwal".equals(currentView) ? View.GONE : View.VISIBLE);
+            layoutPagination.setVisibility("riwayat".equals(currentView) || "jadwal".equals(currentView) || "favorit".equals(currentView) ? View.GONE : View.VISIBLE);
         }
 
         new Thread(() -> {
@@ -1569,6 +1604,9 @@ public class MainActivity extends Activity {
                                     else if ("tomorrow".equals(currentScheduleDay)) dayLabel = "besok";
                                     tvEmptyTitle.setText("Tidak Ada Jadwal Rilis");
                                     tvEmptyDesc.setText("Tidak ada rilis anime untuk " + dayLabel + " yang tersedia di aplikasi.");
+                                } else if ("favorit".equals(currentView)) {
+                                    tvEmptyTitle.setText("Belum Ada Favorit");
+                                    tvEmptyDesc.setText("Tandai anime dengan tombol ★ di halaman detail untuk menyimpannya di sini.");
                                 } else {
                                     tvEmptyTitle.setText("Tidak Ada Anime Ditemukan");
                                     tvEmptyDesc.setText("Tidak ada judul anime yang cocok dengan filter atau pencarian ini.");

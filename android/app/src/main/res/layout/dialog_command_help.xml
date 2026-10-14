@@ -472,6 +472,34 @@
                     android:fontFamily="monospace" />
             </LinearLayout>
 
+            <!-- Item: :favorit -->
+            <LinearLayout
+                android:id="@+id/cmd_item_favorit"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_command_tag"
+                android:orientation="vertical"
+                android:padding="8dp"
+                android:layout_marginBottom="6dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text=":favorit"
+                    android:textColor="#38BDF8"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:fontFamily="monospace" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Buka daftar anime favorit yang Anda tandai dengan tombol bintang"
+                    android:textColor="#8892B0"
+                    android:textSize="11sp"
+                    android:fontFamily="monospace" />
+            </LinearLayout>
+
             <!-- Item: :update -->
             <LinearLayout
                 android:id="@+id/cmd_item_update"

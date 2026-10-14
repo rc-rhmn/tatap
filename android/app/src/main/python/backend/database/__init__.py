@@ -37,6 +37,10 @@ async def init_db():
             await db.execute("ALTER TABLE watch_history ADD COLUMN type TEXT DEFAULT ''")
         except Exception:
             pass
+        # Favorit/star anime user (fitur mark favorite lintas platform).
+        await db.execute("""CREATE TABLE IF NOT EXISTS favorites(
+            slug TEXT PRIMARY KEY, title TEXT, poster TEXT, type TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
         await db.execute("""CREATE TABLE IF NOT EXISTS settings(
             key TEXT PRIMARY KEY, value TEXT)""")
         await db.execute("""CREATE TABLE IF NOT EXISTS browse_cache(
@@ -142,6 +146,36 @@ async def clear_history():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM watch_history")
         await db.commit()
+
+async def add_favorite(slug, title, poster="", type=""):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO favorites(slug,title,poster,type) VALUES(?,?,?,?)
+               ON CONFLICT(slug) DO UPDATE SET title=excluded.title, poster=excluded.poster, type=excluded.type""",
+            (slug, title or slug, poster or "", type or ""))
+        await db.commit()
+
+async def remove_favorite(slug):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM favorites WHERE slug=?", (slug,))
+        await db.commit()
+
+async def get_favorites():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM favorites ORDER BY created_at DESC") as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+            for r in rows:
+                if r.get("slug"):
+                    r["id"] = r["slug"]
+            return rows
+
+async def is_favorite(slug):
+    if not slug:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT 1 FROM favorites WHERE slug=?", (slug,)) as cur:
+            return await cur.fetchone() is not None
 
 async def get_browse_cache(key: str, ttl=6*3600):
     async with aiosqlite.connect(DB_PATH) as db:

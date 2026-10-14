@@ -19,7 +19,7 @@ android {
     compileSdk 34
 
     defaultConfig {
-        applicationId "id.tatap.app"
+        applicationId "id.tatap.personal"
         minSdk 24
         targetSdk 34
         versionCode parseVersionCode(currentVersionName)

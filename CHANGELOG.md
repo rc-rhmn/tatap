@@ -13,6 +13,17 @@ Format versi menggunakan skema `MAJOR.MINOR.PATCH`:
 - **MINOR (x.Y.0):** Penambahan fitur atau kapabilitas baru yang tetap kompatibel ke belakang (*backward-compatible new features*). Digit PATCH direset ke 0.
 - **PATCH (x.y.Z):** Perbaikan bug, peningkatan stabilitas, atau perbaikan internal tanpa penambahan fitur baru (*backward-compatible bug fixes*).
 
+## [2.7.0] - 2026-10-14
+
+*Alasan kenaikan MINOR (2.6.0 → 2.7.0): penggabungan (merge) seluruh perubahan upstream v2.4.3 ke jalur fork personal — menghadirkan fitur dan peningkatan baru (perbaikan pemutaran 1080p, optimasi Android TV, UI) yang tetap kompatibel ke belakang. Fitur personal v2.5.0/v2.6.0 (favorit, filter katalog, branding Tatapan) tidak hilang.*
+
+### Ditingkatkan
+- **Sinkronisasi Upstream v2.4.3:** Merge `asfaraguest/tatap@63226a5` ke fork — termasuk: perbaikan stuttering pemutaran 1080p (async MediaCodec, buffer 25s/50s, HLS chunkless preparation, keepalive pool HTTPX 20/30), perbaikan zoom/crop awal pemutar, *true seamless quality switching* khusus Android TV, isolasi optimasi low-RAM Android TV (`largeHeap` TV, downsampling poster 180x260, buffer TV 8s/15s, PRAGMA SQLite hemat memori via `TATAP_IS_TV`, tuning GC), kompresi top-bar TV (10-foot UI), *floating navigation capsule* transparan, auto-dismiss banner proporsional panjang teks, dan optimasi performa low-end (panel solid tanpa blur, ambient blur 24px, RecyclerView tuning, animasi D-Pad 90ms).
+- **Test Suite Diperluas:** `tests/test_regression_e2e.py` (E2E headless Chromium: player modal, subtitle dual-layer, navigasi episode, recovery koneksi) dan `tests/test_regression_playback.py` (rewrite m3u8 & audio demux proxy). Total suite: **26 test**.
+
+### Diperbaiki
+- **Portabilitas Test E2E (Chromium):** Path binary Chromium pada test E2E tidak lagi terikat satu mesin — dapat dioverride via env `TATAP_TEST_CHROME_PATH`, dengan fallback otomatis ke binary bawaan Playwright.
+
 ## [2.6.0] - 2026-10-14
 
 *Alasan kenaikan MINOR (2.5.0 → 2.6.0): penambahan fitur filter katalog (sort Terbaru + filter tahun rilis) yang tetap kompatibel ke belakang.*

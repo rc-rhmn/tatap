@@ -51,8 +51,13 @@ public class ImageLoader {
         }
 
         imageView.setTag(urlString);
+        imageView.setImageDrawable(new android.graphics.drawable.ColorDrawable(0xFF151822));
+        final boolean isTv = TvFocusHelper.isTv(imageView.getContext());
         executor.execute(() -> {
             try {
+                if (!urlString.equals(imageView.getTag())) {
+                    return;
+                }
                 URL url = new URL(urlString);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 conn.setConnectTimeout(7000);
@@ -64,13 +69,19 @@ public class ImageLoader {
                 byte[] data = readFully(input);
                 conn.disconnect();
 
+                if (!urlString.equals(imageView.getTag())) {
+                    return;
+                }
+
                 if (data != null && data.length > 0) {
                     BitmapFactory.Options opts = new BitmapFactory.Options();
                     opts.inJustDecodeBounds = true;
                     BitmapFactory.decodeByteArray(data, 0, data.length, opts);
 
-                    // Downsample target maksimal 300x420 px (cukup tajam untuk layar TV 4K, hemat RAM 90%)
-                    opts.inSampleSize = calculateInSampleSize(opts, 300, 420);
+                    // Downsample target: TV 180x260 (hemat 63% RAM), Mobile 300x420
+                    int reqW = isTv ? 180 : 300;
+                    int reqH = isTv ? 260 : 420;
+                    opts.inSampleSize = calculateInSampleSize(opts, reqW, reqH);
                     opts.inJustDecodeBounds = false;
                     // Gunakan format 16-bit RGB_565 (2 byte/pixel) alih-alih ARGB_8888 (4 byte/pixel)
                     opts.inPreferredConfig = Bitmap.Config.RGB_565;

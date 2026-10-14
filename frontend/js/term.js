@@ -139,6 +139,7 @@ var Tui = (function () {
     if(!S.items.length){box.innerHTML="<p class='dim'>Kosong.</p>";return;}
     if(isTxt){
       var nowTs=Math.floor(Date.now()/1000);
+      var frag=document.createDocumentFragment();
       for(var i=0;i<S.items.length;i++){
         (function(a,idx){
           if(S.view==="terbaru"){
@@ -156,6 +157,7 @@ var Tui = (function () {
               var img=document.createElement("img");
               img.className="tr-thumb";
               img.loading="lazy";
+              img.decoding="async";
               img.alt=a.title||"";
               img.src=a.poster;
               img.onerror=function(){
@@ -211,7 +213,7 @@ var Tui = (function () {
               if(typeof App==="undefined"){log("App belum siap, coba lagi","err");return;}
               App.openTitle(a.id,a.title);
             });
-            box.appendChild(d);
+            frag.appendChild(d);
           } else {
             var d2=document.createElement("div");
             d2.className="trow trow-media"+(idx===S.sel?" sel":"");
@@ -227,6 +229,7 @@ var Tui = (function () {
               var img2=document.createElement("img");
               img2.className="tr-thumb";
               img2.loading="lazy";
+              img2.decoding="async";
               img2.alt=a.title||"";
               img2.src=a.poster;
               img2.onerror=function(){
@@ -270,10 +273,11 @@ var Tui = (function () {
               if(typeof App==="undefined"){log("App belum siap, coba lagi","err");return;}
               App.openTitle(a.id,a.title);
             });
-            box.appendChild(d2);
+            frag.appendChild(d2);
           }
         })(S.items[i],i);
       }
+      box.appendChild(frag);
     } else {
       var grid=document.createElement("div");grid.className="poster-grid";
       for(var j=0;j<S.items.length;j++){
@@ -284,7 +288,7 @@ var Tui = (function () {
           d.tabIndex=0;
           var idxSpan=document.createElement("span");idxSpan.className="pc-idx";idxSpan.textContent=String(idx+1).padStart(2,"0");d.appendChild(idxSpan);
           if(isUnavail){var bad=document.createElement("span");bad.className="pc-bad";bad.textContent="?";bad.title="Tidak ada di hianime";d.appendChild(bad);}
-          if(a.poster){var im=document.createElement("img");im.loading="lazy";im.alt=a.title;im.src=a.poster;im.onerror=function(){this.style.display="none";};d.appendChild(im);}
+          if(a.poster){var im=document.createElement("img");im.loading="lazy";im.decoding="async";im.alt=a.title;im.src=a.poster;im.onerror=function(){this.style.display="none";};d.appendChild(im);}
           var body=document.createElement("div");body.className="poster-body";
           var b=document.createElement("b");b.textContent=a.title;body.appendChild(b);
           var meta=document.createElement("div");meta.className="poster-meta";

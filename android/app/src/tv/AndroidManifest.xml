@@ -15,7 +15,8 @@
 
     <application
         android:banner="@drawable/tv_banner"
-        android:isGame="false">
+        android:isGame="false"
+        android:largeHeap="true">
         <activity
             android:name=".MainActivity"
             android:screenOrientation="landscape">

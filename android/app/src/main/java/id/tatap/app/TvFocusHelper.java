@@ -20,12 +20,18 @@ public class TvFocusHelper {
 
     public static boolean isTv(Context context) {
         if (context == null) return false;
+        if (context.getPackageName().endsWith(".tv")) {
+            return true;
+        }
         UiModeManager uiModeManager = (UiModeManager) context.getSystemService(Context.UI_MODE_SERVICE);
         if (uiModeManager != null && uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) {
             return true;
         }
-        // Fallback: perangkat tanpa layar sentuh adalah Android TV box / stick
         PackageManager pm = context.getPackageManager();
+        if (pm.hasSystemFeature("android.software.leanback")) {
+            return true;
+        }
+        // Fallback: perangkat tanpa layar sentuh adalah Android TV box / stick
         return !pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN);
     }
 
@@ -42,7 +48,7 @@ public class TvFocusHelper {
             v.animate()
                     .scaleX(scale)
                     .scaleY(scale)
-                    .setDuration(130)
+                    .setDuration(90)
                     .start();
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -74,6 +80,6 @@ public class TvFocusHelper {
     }
 
     public static void attachCardFocus(final MaterialCardView card) {
-        attachFocusScale(card, 1.06f, 10f);
+        attachFocusScale(card, 1.04f, 0f);
     }
 }

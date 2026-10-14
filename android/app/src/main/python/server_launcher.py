@@ -1,8 +1,25 @@
 import os, sys, threading
 
-def start_server(data_dir=None):
+def trim_memory():
+    """Trigger Python garbage collection explicitly on memory trim (Android TV only)."""
+    if os.environ.get("TATAP_IS_TV") == "1":
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
+
+def start_server(data_dir=None, is_tv=False):
     """Jalankan server Uvicorn Tatap di background thread Android."""
     try:
+        if is_tv or os.environ.get("TATAP_IS_TV") == "1":
+            os.environ["TATAP_IS_TV"] = "1"
+            try:
+                import gc
+                gc.set_threshold(100, 5, 5)
+            except Exception:
+                pass
+
         base_dir = os.path.dirname(os.path.abspath(__file__))
         backend_dir = os.path.join(base_dir, "backend")
         frontend_dir = os.path.join(base_dir, "frontend")
@@ -30,13 +47,14 @@ def start_server(data_dir=None):
                 # Pass karena dijalankan di secondary thread Android
                 pass
 
+        is_tv_mode = (os.environ.get("TATAP_IS_TV") == "1")
         config = uvicorn.Config(
             main.app,
             host="127.0.0.1",
             port=8767,
             loop="asyncio",
             http="h11",
-            log_level="info",
+            log_level="warning" if is_tv_mode else "info",
             access_log=False
         )
         server = AndroidServer(config=config)
@@ -45,7 +63,7 @@ def start_server(data_dir=None):
         import traceback
         print(f"[TATAP-SERVER-ERROR] {e}\n{traceback.format_exc()}", flush=True)
 
-def run_in_background(data_dir=None):
-    t = threading.Thread(target=start_server, args=(data_dir,), daemon=True, name="TatapBackendThread")
+def run_in_background(data_dir=None, is_tv=False):
+    t = threading.Thread(target=start_server, args=(data_dir, is_tv), daemon=True, name="TatapBackendThread")
     t.start()
     return True

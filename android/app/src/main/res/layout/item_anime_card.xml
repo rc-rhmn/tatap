@@ -7,7 +7,7 @@
     android:clickable="true"
     android:focusable="true"
     android:foreground="?attr/selectableItemBackground"
-    app:cardCornerRadius="@dimen/tv_card_corner_radius"
+    app:cardCornerRadius="8dp"
     app:cardElevation="0dp"
     app:cardBackgroundColor="#11141C"
     app:strokeColor="#1C202C"
@@ -22,7 +22,7 @@
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="@dimen/tv_card_poster_height"
-            android:background="#151822">
+            android:background="@android:color/transparent">
 
             <ImageView
                 android:id="@+id/iv_poster"
@@ -92,7 +92,7 @@
             android:paddingHorizontal="@dimen/tv_card_padding_horizontal"
             android:paddingTop="@dimen/tv_card_padding_top"
             android:paddingBottom="@dimen/tv_card_padding_bottom"
-            android:background="#11141C">
+            android:background="@android:color/transparent">
 
             <TextView
                 android:id="@+id/tv_title"
@@ -103,8 +103,8 @@
                 android:text="Judul Anime"
                 android:textColor="#F8FAFC"
                 android:textSize="@dimen/tv_card_title_text_size"
-                android:textStyle="bold"
-                android:lineSpacingExtra="1dp" />
+                android:fontFamily="sans-serif-medium"
+                android:lineSpacingExtra="1.5dp" />
 
             <TextView
                 android:id="@+id/tv_meta"

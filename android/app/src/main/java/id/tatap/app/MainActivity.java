@@ -69,6 +69,7 @@ public class MainActivity extends Activity {
     private TextView btnHeaderAi, btnHeaderGenre, btnHeaderHelp, btnHeaderHistory, btnHeaderFavorites;
 
     // Segmented Tabs & Pagination
+    private View layoutTabsSegmented;
     private TextView btnTabMusim, btnTabAiring, btnTabKatalog;
     private TextView btnTabJadwal;
     private View layoutScheduleDays;
@@ -100,9 +101,7 @@ public class MainActivity extends Activity {
     private final List<Integer> yearChipValues = new ArrayList<>();
 
     private final Handler bannerHandler = new Handler(Looper.getMainLooper());
-    private final Runnable hideBannerRunnable = () -> {
-        if (layoutCommandBanner != null) layoutCommandBanner.setVisibility(View.GONE);
-    };
+    private final Runnable hideBannerRunnable = () -> hideCommandBanner(true);
 
     // State navigasi tampilan & paging
     private String currentView = "musim"; // "musim" | "airing" | "katalog" | "cari" | "genre" | "season_filter" | "riwayat"
@@ -139,6 +138,7 @@ public class MainActivity extends Activity {
         btnHeaderHistory = findViewById(R.id.btn_header_history);
         btnHeaderFavorites = findViewById(R.id.btn_header_favorites);
 
+        layoutTabsSegmented = findViewById(R.id.layout_tabs_segmented);
         btnTabMusim = findViewById(R.id.btn_tab_musim);
         btnTabAiring = findViewById(R.id.btn_tab_airing);
         btnTabKatalog = findViewById(R.id.btn_tab_katalog);
@@ -184,10 +184,20 @@ public class MainActivity extends Activity {
         rvGrid.setLayoutManager(new GridLayoutManager(this, spanCount));
         adapter = new AnimeAdapter(this);
         rvGrid.setAdapter(adapter);
+        // Performance tuning: bedakan antara Android TV (ramah low-RAM STB) dan Mobile
+        rvGrid.setHasFixedSize(true);
+        if (TvFocusHelper.isTv(this)) {
+            rvGrid.setItemViewCacheSize(4);
+        } else {
+            rvGrid.setItemViewCacheSize(20);
+            rvGrid.setDrawingCacheEnabled(true);
+            rvGrid.setDrawingCacheQuality(View.DRAWING_CACHE_QUALITY_LOW);
+        }
 
         setupTabsAndListeners();
 
         if (TvFocusHelper.isTv(this)) {
+            applyTvTopBarCompression();
             btnTabMusim.post(() -> btnTabMusim.requestFocus());
         }
 
@@ -196,6 +206,53 @@ public class MainActivity extends Activity {
 
         // 2. Tunggu backend siap lalu muat konten pertama
         waitForServerAndLoadCatalog(0);
+    }
+
+    private void applyTvTopBarCompression() {
+        if (layoutHeaderRoot != null) {
+            ViewGroup.LayoutParams lp = layoutHeaderRoot.getLayoutParams();
+            if (lp != null) {
+                lp.height = dpToPx(44);
+                layoutHeaderRoot.setLayoutParams(lp);
+            }
+        }
+        if (layoutSearchBox != null) {
+            ViewGroup.LayoutParams lp = layoutSearchBox.getLayoutParams();
+            if (lp != null) {
+                lp.height = dpToPx(32);
+                layoutSearchBox.setLayoutParams(lp);
+            }
+        }
+        if (btnToggleMenu != null) {
+            ViewGroup.LayoutParams lp = btnToggleMenu.getLayoutParams();
+            if (lp != null) {
+                lp.height = dpToPx(32);
+                btnToggleMenu.setLayoutParams(lp);
+            }
+        }
+        if (layoutTabsSegmented != null) {
+            ViewGroup.MarginLayoutParams mlp = (ViewGroup.MarginLayoutParams) layoutTabsSegmented.getLayoutParams();
+            if (mlp != null) {
+                mlp.topMargin = dpToPx(1);
+                mlp.bottomMargin = dpToPx(3);
+                layoutTabsSegmented.setLayoutParams(mlp);
+            }
+            layoutTabsSegmented.setPadding(dpToPx(2), dpToPx(2), dpToPx(2), dpToPx(2));
+        }
+        View[] tabs = new View[]{btnTabMusim, btnTabAiring, btnTabKatalog, btnTabJadwal};
+        for (View tab : tabs) {
+            if (tab != null) {
+                ViewGroup.LayoutParams lp = tab.getLayoutParams();
+                if (lp != null) {
+                    lp.height = dpToPx(30);
+                    tab.setLayoutParams(lp);
+                }
+            }
+        }
+    }
+
+    private int dpToPx(int dp) {
+        return (int) (dp * getResources().getDisplayMetrics().density + 0.5f);
     }
 
     private void setupTabsAndListeners() {
@@ -283,10 +340,12 @@ public class MainActivity extends Activity {
             fetchData();
         });
 
+        if (layoutCommandBanner != null) {
+            layoutCommandBanner.setOnClickListener(v -> hideCommandBanner(true));
+        }
+
         if (btnCloseCommandBanner != null) {
-            btnCloseCommandBanner.setOnClickListener(v -> {
-                if (layoutCommandBanner != null) layoutCommandBanner.setVisibility(View.GONE);
-            });
+            btnCloseCommandBanner.setOnClickListener(v -> hideCommandBanner(true));
         }
 
         if (btnClearFilter != null) {
@@ -448,14 +507,49 @@ public class MainActivity extends Activity {
         super.onBackPressed();
     }
 
+    private void hideCommandBanner(boolean animated) {
+        if (layoutCommandBanner == null || layoutCommandBanner.getVisibility() != View.VISIBLE) return;
+        bannerHandler.removeCallbacks(hideBannerRunnable);
+        if (animated) {
+            layoutCommandBanner.animate()
+                    .alpha(0f)
+                    .setDuration(220)
+                    .withEndAction(() -> {
+                        layoutCommandBanner.setVisibility(View.GONE);
+                        layoutCommandBanner.setAlpha(1.0f);
+                    })
+                    .start();
+        } else {
+            layoutCommandBanner.animate().cancel();
+            layoutCommandBanner.setVisibility(View.GONE);
+            layoutCommandBanner.setAlpha(1.0f);
+        }
+    }
+
     private void showCommandOutput(String message, boolean isError) {
         if (layoutCommandBanner == null || tvCommandOutput == null) return;
+        layoutCommandBanner.animate().cancel();
+        layoutCommandBanner.setAlpha(1.0f);
         tvCommandOutput.setText(message);
         tvCommandOutput.setTextColor(isError ? 0xFFEF4444 : 0xFF38BDF8);
         layoutCommandBanner.setVisibility(View.VISIBLE);
 
         bannerHandler.removeCallbacks(hideBannerRunnable);
-        bannerHandler.postDelayed(hideBannerRunnable, 8000);
+
+        // Durasi baca ergonomis berdasarkan panjang teks & kategori pesan
+        int len = message != null ? message.length() : 0;
+        long delayMs;
+        if (isError) {
+            delayMs = 4500; // Error / peringatan butuh waktu baca lebih panjang
+        } else if (len <= 35) {
+            delayMs = 2200; // Pergantian tab / status ringkas
+        } else if (len <= 65) {
+            delayMs = 3200; // Notifikasi sedang
+        } else {
+            delayMs = 4500; // Teks panjang
+        }
+
+        bannerHandler.postDelayed(hideBannerRunnable, delayMs);
     }
 
     private void updateActiveFilterBar() {
@@ -1577,9 +1671,10 @@ public class MainActivity extends Activity {
                 }
                 Object pyInstance = pyClass.getMethod("getInstance").invoke(null);
                 Object launcherMod = pyClass.getMethod("getModule", String.class).invoke(pyInstance, "server_launcher");
+                boolean isTv = TvFocusHelper.isTv(this);
                 String dataDir = getFilesDir().getAbsolutePath();
-                Log.d(TAG, "Menjalankan server_launcher.py dengan dataDir=" + dataDir);
-                launcherMod.getClass().getMethod("callAttr", String.class, Object[].class).invoke(launcherMod, "run_in_background", new Object[]{dataDir});
+                Log.d(TAG, "Menjalankan server_launcher.py dengan dataDir=" + dataDir + ", isTv=" + isTv);
+                launcherMod.getClass().getMethod("callAttr", String.class, Object[].class).invoke(launcherMod, "run_in_background", new Object[]{dataDir, isTv});
                 Log.d(TAG, "server_launcher.run_in_background dipanggil dengan sukses.");
             } catch (Throwable t) {
                 Log.e(TAG, "Error startEmbeddedBackend: " + t.getMessage(), t);
@@ -1729,6 +1824,9 @@ public class MainActivity extends Activity {
                         btnNextPage.setAlpha(count >= 10 ? 1.0f : 0.4f);
 
                         if (count == 0) {
+                            if (layoutPagination != null && currentPage == 1) {
+                                layoutPagination.setVisibility(View.GONE);
+                            }
                             if (layoutEmptyState != null) {
                                 layoutEmptyState.setVisibility(View.VISIBLE);
                                 if ("riwayat".equals(currentView)) {
@@ -1750,6 +1848,9 @@ public class MainActivity extends Activity {
                             }
                             if (rvGrid != null) rvGrid.setVisibility(View.GONE);
                         } else {
+                            if (layoutPagination != null && !"riwayat".equals(currentView) && !"jadwal".equals(currentView)) {
+                                layoutPagination.setVisibility(View.VISIBLE);
+                            }
                             if (layoutEmptyState != null) layoutEmptyState.setVisibility(View.GONE);
                             if (rvGrid != null) {
                                 rvGrid.setVisibility(View.VISIBLE);
@@ -1773,11 +1874,14 @@ public class MainActivity extends Activity {
                         if (pbLoading != null) pbLoading.setVisibility(View.GONE);
                         if (swipeRefreshLayout != null) swipeRefreshLayout.setRefreshing(false);
                         showCommandOutput("> tatap$ [ERROR] " + err, true);
-                        if (adapter.getItemCount() == 0 && layoutEmptyState != null) {
-                            layoutEmptyState.setVisibility(View.VISIBLE);
-                            if (rvGrid != null) rvGrid.setVisibility(View.GONE);
-                            tvEmptyTitle.setText("Gagal Memuat Data");
-                            tvEmptyDesc.setText(err);
+                        if (adapter.getItemCount() == 0) {
+                            if (layoutPagination != null) layoutPagination.setVisibility(View.GONE);
+                            if (layoutEmptyState != null) {
+                                layoutEmptyState.setVisibility(View.VISIBLE);
+                                if (rvGrid != null) rvGrid.setVisibility(View.GONE);
+                                tvEmptyTitle.setText("Gagal Memuat Data");
+                                tvEmptyDesc.setText(err);
+                            }
                         }
                     });
                 }
@@ -1786,11 +1890,14 @@ public class MainActivity extends Activity {
                     if (pbLoading != null) pbLoading.setVisibility(View.GONE);
                     if (swipeRefreshLayout != null) swipeRefreshLayout.setRefreshing(false);
                     showCommandOutput("> tatap$ [ERROR] Gagal terhubung: " + e.getMessage(), true);
-                    if (adapter.getItemCount() == 0 && layoutEmptyState != null) {
-                        layoutEmptyState.setVisibility(View.VISIBLE);
-                        if (rvGrid != null) rvGrid.setVisibility(View.GONE);
-                        tvEmptyTitle.setText("Koneksi Terputus");
-                        tvEmptyDesc.setText(e.getMessage());
+                    if (adapter.getItemCount() == 0) {
+                        if (layoutPagination != null) layoutPagination.setVisibility(View.GONE);
+                        if (layoutEmptyState != null) {
+                            layoutEmptyState.setVisibility(View.VISIBLE);
+                            if (rvGrid != null) rvGrid.setVisibility(View.GONE);
+                            tvEmptyTitle.setText("Koneksi Terputus");
+                            tvEmptyDesc.setText(e.getMessage());
+                        }
                     }
                 });
             }
@@ -1914,6 +2021,18 @@ public class MainActivity extends Activity {
         super.onTrimMemory(level);
         if (level >= TRIM_MEMORY_RUNNING_LOW) {
             ImageLoader.trimMemory();
+            if (TvFocusHelper.isTv(this)) {
+                new Thread(() -> {
+                    try {
+                        Class<?> pyClass = Class.forName("com.chaquo.python.Python");
+                        if ((Boolean) pyClass.getMethod("isStarted").invoke(null)) {
+                            Object pyInstance = pyClass.getMethod("getInstance").invoke(null);
+                            Object launcherMod = pyClass.getMethod("getModule", String.class).invoke(pyInstance, "server_launcher");
+                            launcherMod.getClass().getMethod("callAttr", String.class, Object[].class).invoke(launcherMod, "trim_memory", new Object[]{});
+                        }
+                    } catch (Throwable ignored) {}
+                }).start();
+            }
         }
     }
 }

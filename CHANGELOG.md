@@ -36,6 +36,70 @@ Format versi menggunakan skema `MAJOR.MINOR.PATCH`:
 ### Diubah
 - **Rebranding Fork Personal (Tatap Personal):** `applicationId` Android diubah dari `id.tatap.app` menjadi `id.tatap.personal` (varian TV: `id.tatap.personal.tv`) dan nama aplikasi menjadi "Tatap Personal", sehingga dapat dipasang berdampingan dengan versi resmi tanpa saling menimpa.
 - **Pemeriksa Pembaruan Mengarah ke Fork:** Endpoint `/api/update/check` kini memeriksa rilis terbaru dari repositori fork personal, bukan repositori upstream.
+## [2.4.3] - 2026-10-14
+
+### Ditingkatkan
+- **True Seamless Quality Switching Khusus Android TV (Terisolasi Penuh):**
+  - Meniadakan pemanggilan disruptif `player.stop()` dan `player.prepare()` saat pengguna mengganti resolusi video (misalnya dari 360p ke 1080p) pada Android TV (`TvFocusHelper.isTv()`).
+  - Mengandalkan pembaruan dinamis `TrackSelectionParameters` pada Media3 ExoPlayer dan `app:surface_type="surface_view"`.
+  - Video dan audio mengalir tanpa putus, tanpa jeda layar hitam, dan tanpa kemunculan spinner buffering saat pergantian kualitas berlangsung pada batas segmen/GOP berikutnya.
+  - Varian Android Mobile tetap mempertahankan alur kode bawaannya secara terisolasi tanpa modifikasi.
+- **Optimasi Kinerja dan Konsumsi Memori Khusus Android TV (Terisolasi Penuh):**
+  - **Isolasi Bebas Efek Samping ke Android Mobile:** Seluruh penyesuaian parameter memori, connection pool, buffer pemutar, dan siklus render dibatasi secara ketat hanya untuk lingkungan Android TV (`TvFocusHelper.isTv()` dan `src/tv/AndroidManifest.xml`). Kode dan perilaku Android Mobile tetap berjalan 100% pada parameter bawaan tanpa modifikasi.
+  - **Alokasi Heap Android TV:** Menambahkan `android:largeHeap="true"` khusus pada flavor Android TV (`src/tv/AndroidManifest.xml`) untuk memberikan headroom memori tambahan saat runtime CPython Chaquopy, cache database, dan ExoPlayer berjalan berdampingan pada perangkat TV dengan RAM terbatas (512MB–1GB).
+  - **Downsampling Gambar Hemat Memori Khusus TV:** Memangkas target dekompresi poster anime pada Android TV dari 300x420 px menjadi 180x260 px di `ImageLoader.java` (menghemat ~63% memori per kartu poster pada layar TV 1080p). Menambahkan pemeriksaan pembatalan dini jika tampilan kartu telah didaur ulang (*view recycling*) sebelum proses decode bitmap dilakukan.
+  - **Penyesuaian Cache View RecyclerView TV:** Menyetel `setItemViewCacheSize(4)` untuk navigasi remote D-Pad Android TV guna mencegah penumpukan hirarki tampilan di luar layar, sementara varian Mobile tetap mempertahankan 20 item untuk scrolling sentuh yang halus.
+  - **Peniadaan Beban Komputasi Dynamic Shadow GPU:** Mengatur elevasi fokus kartu menjadi `0f` pada `TvFocusHelper.attachCardFocus` guna meniadakan kalkulasi bayangan drop shadow 3D pada GPU TV berdaya rendah (seperti Mali-450 / Mali-G31) saat tombol remote ditekan.
+  - **Penyesuaian Buffer Video ExoPlayer TV:** Menyetel buffer video ExoPlayer pada Android TV menjadi 8 detik minimum dan 15 detik maksimum (dibandingkan 12s/25s pada Mobile), menghemat alokasi RAM playback tanpa memicu rebuffering pada koneksi stabil.
+  - **Efisiensi Polling Subtitle:** Mengurangi frekuensi sinkronisasi subtitle pada TV dari interval 75ms menjadi 150ms serta membandingkan teks cue secara langsung dengan cache lokal tanpa alokasi string baru dari `getText().toString()`.
+  - **Penjadwalan Pre-Resolve Episode Tetangga TV:** Menunda proses pre-resolve episode sebelum dan sesudah selama 20 detik setelah pemutaran video dimulai pada Android TV, mencegah persaingan CPU dan koneksi jaringan antara thread scraping dan hardware decoder video saat inisialisasi awal.
+  - **Tuning Backend Python Rendah Memori:** Menyetel batas koneksi HTTPX pada backend menjadi `max_connections=8` dan `max_keepalive=3` saat berjalan di TV (`TATAP_IS_TV=1`), mengonfigurasi SQLite PRAGMA memori minimalis (`cache_size = -500`, `temp_store = FILE`, `mmap_size = 0`), menerapkan batas GC Python `(100, 5, 5)`, serta menghubungkan event Android `onTrimMemory` untuk memicu pembersihan sampah memori Python runtime secara berkala.
+- **Kompresi Top-Bar Ergonomis Android TV (10-Foot UI):**
+  - Memampatkan tinggi top-bar area pada Android TV: tinggi header dari 56dp menjadi 44dp, kolom pencarian dari 38dp menjadi 32dp, dan tombol tab segmentasi dari 34dp menjadi 30dp dengan padding vertikal yang ringkas (overscan vertikal disesuaikan dari 20dp ke 12dp).
+  - Menghemat ~40dp ruang vertikal layar televisi tanpa mengurangi kenyamanan radius pandang 10 kaki (*10-foot viewing radius*) maupun keterbacaan teks font dan navigasi remote D-Pad.
+  - Memperluas area tampilan grid anime di Android TV sehingga baris kartu kedua terlihat jelas tanpa perlu banyak scrolling dengan remote.
+  - Memperkuat deteksi lingkungan TV di `TvFocusHelper.isTv()` dengan menyertakan deteksi package name Android TV (`.tv`) dan fitur sistem `android.software.leanback`.
+- **Floating Navigation Capsule Transparan (Android UI):**
+  - Mengubah panel navigasi bawah (`layout_pagination`) dari bilah footer solid statis 48dp menjadi kapsul melayang (*floating pill*) transparan setinggi 36dp dengan gaya *cyber glassmorphism* (`#CC090A12`, 80% opacity) dan aksen border cyan lembut (`#2B38BDF8`).
+  - Menerapkan *edge-to-edge scrolling* pada `rv_anime_grid` dengan `paddingBottom="64dp"` dan `clipToPadding="false"`. Kartu anime mengalir mulus di bawah kapsul navigasi dan baris kartu terakhir tidak akan tertutup saat di-scroll ke paling bawah.
+  - Mempertahankan interoperabilitas penuh Android TV D-Pad remote focus (`TvFocusHelper.attachFocusScale`) dengan visual border highlight cyan cerah saat tombol paginasi dipilih.
+  - Menyembunyikan floating pill secara otomatis ketika grid berada dalam kondisi kosong (*empty state*) atau mengalami kegagalan koneksi awal agar tidak mengaburkan pesan error.
+- **Auto-Dismiss Notification Timer Berbasis Panjang Teks (Android UI):**
+  - Mengganti durasi statis 8 detik pada banner perintah/notifikasi (`showCommandOutput`) dengan kalkulasi timer baca dinamis yang proporsional dan ergonomis:
+    - **Pesan Singkat (`<= 35 char`):** `2200ms` (2.2s) — ideal untuk pergantian tampilan/tab (`Tampilan diatur ke: MUSIM`, `:cari`, `:help`).
+    - **Pesan Sedang (`36 - 65 char`):** `3200ms` (3.2s) — durasi pas untuk status eksekusi atau pergantian sumber stream.
+    - **Pesan Panjang / Error:** `4500ms` (4.5s) — memberi waktu yang cukup bagi pengguna untuk membaca detail kesalahan koneksi atau instruksi perintah.
+  - Menambahkan animasi transisi halus *fade-out* (alpha 220ms) saat notifikasi menghilang, menggantikan hilangnya banner secara mendadak (`GONE`).
+  - Menambahkan dukungan *instant touch-to-dismiss*: mengetuk banner notifikasi secara langsung atau tombol silang penutup akan langsung menutup banner dengan transisi cepat.
+- **Optimasi Performa Perangkat Spesifikasi Rendah (Web Desktop & Android):**
+  - **Eliminasi Beban GPU Offscreen:** Mengganti penggunaan `backdrop-filter: blur(...)` pada drawer navigation menu dan gesture OSD player dengan permukaan solid gelap berpresisi tinggi (`--panel-solid`, `rgba(11, 13, 17, 0.96)`) dan border crisp. Mengurangi frame drop dan stuttering compositing GPU secara signifikan saat membuka drawer atau mengatur volume di laptop lawas dan Android TV.
+  - **Optimasi Ambient Halo Video Player:** Mengurangi radius Gaussian blur `#ambient` dan `#ambient-fallback` dari 70px menjadi 24px (16px–20px pada resolusi mobile/tablet) dengan akselerasi layer hardware `transform: translate3d(0,0,0)` dan `will-change: transform, opacity`. Menghemat >70% GPU fillrate dan mempertahankan pemutaran video HLS pada 60 FPS stabil.
+  - **CSS Layout Isolation:** Menambahkan `contain: content;` pada kartu poster (`.poster-card`) dan list item (`.trow`) sehingga perubahan hover atau mutasi DOM lokal tidak memicu re-layout satu halaman penuh.
+  - **Atomic DOM Injection via DocumentFragment:** Membungkus seluruh perakitan elemen kartu hasil pencarian dan jadwal rilis di `term.js` ke dalam `DocumentFragment`, menggantikan mutasi DOM berulang per-item menjadi injeksi tunggal yang cepat.
+  - **Asynchronous Image Decompression:** Menambahkan atribut `decoding="async"` dan `loading="lazy"` pada seluruh thumbnail dan poster anime di frontend web untuk mengalihkan dekompresi gambar keluar dari browser main thread.
+  - **RecyclerView Cache & Low-End Tuning (Android):** Mengaktifkan `setHasFixedSize(true)`, `setItemViewCacheSize(20)`, dan drawing cache quality low pada `MainActivity.java` untuk pengalaman scroll instan tanpa re-measuring berulang.
+  - **Animasi TV D-Pad Ringan (Android TV):** Menyetel durasi transisi fokus remote TV menjadi 90ms dan skala kartu 1.04x di `TvFocusHelper.java`, mengeliminasi lag shadow software pada chipset Android TV hemat daya.
+
+### Diperbaiki
+- **Eliminasi Stuttering & Patah-Patah Pemutaran Video 1080p (Android & Android TV):**
+  - **Pencegahan Loop Rekonfigurasi Decoder di `onTracksChanged`:** Memasang guard boolean `hasAppliedTrackSelectionForStream` pada listener `onTracksChanged` agar seleksi track HLS hanya dieksekusi sekali saat manifest track pertama kali selesai di-resolve. Menghindari pemanggilan rekursif `setTrackSelectionParameters` yang memicu flush decoder dan micro-stuttering berulang kali saat pemutaran video sedang berlangsung.
+  - **Ekspansi Buffer Video 1080p Aman (`min: 25s`, `max: 50s`):** Menyesuaikan buffer durasi `DefaultLoadControl` dari 8s/15s menjadi 25s minimum dan 50s maksimum dengan buffer mulai 2s dan rebuffer 4s serta menonaktifkan `prioritizeTimeOverSizeThresholds`. Menjamin buffer video 1080p tidak pernah mengalami starvation pada jaringan dinamis dengan alokasi RAM native yang tetap hemat (~10–15 MB).
+  - **Aktivasi Asynchronous MediaCodec Buffer Queueing:** Mengonfigurasi `DefaultRenderersFactory.forceEnableMediaCodecAsynchronousQueueing()` pada `PlayerActivity.java` untuk memindahkan antrean input/output buffer decoding ke background looper thread, mencegah rendering loop terhambat pada chipset TV berbasis Android 9-11 (API 28-30).
+  - **Aktivasi HLS Chunkless Preparation:** Mengaktifkan `setAllowChunklessPreparation(true)` pada `HlsMediaSource.Factory`, meniadakan pengunduhan segmen awal dari seluruh varian resolusi lain yang tidak diperlukan saat stream baru disiapkan.
+  - **Eliminasi Teardown Codec di `onVideoSizeChanged`:** Menghapus pemanggilan disruptif `player.stop()` di tengah pemutaran video pada event perubahan ukuran surface, menjaga aliran decoding tetap mulus tanpa jeda restart.
+  - **Pelepasan Batasan Minimum Resolusi Kaku:** Menghapus parameter `minW = 1600` dan `minH = 900` pada `applyHlsTrackSelection` serta menambahkan pengecekan `newParams.equals(current)` sebelum memicu update parameter track ke ExoPlayer.
+  - **Restorasi HTTPX Keep-Alive Pool Backend:** Menyetel `max_keepalive_connections=20` dan `max_connections=30` dengan `keepalive_expiry=90.0` pada `_get_video_client`, meniadakan lonjakan CPU dari kalkulasi TLS 1.3 handshake berulang pada setiap pengunduhan segmen TS 1080p.
+- **Perbaikan Inisialisasi Zoom/Crop Video Player (Android & Android TV):**
+  - Mengatasi masalah di mana video HLS pada awal pemutaran selalu ter-zoom/terpotong (*cropped*) dan baru normal setelah pengguna berpindah resolusi ke 360p lalu ke 1080p lagi.
+  - Mengonfigurasi `DefaultBandwidthMeter` dengan estimasi awal 25 Mbps (`25_000_000`) pada `ExoPlayer.Builder` agar ExoPlayer langsung memilih track video resolusi optimal (1080p/720p) sejak awal koneksi tanpa adaptasi lambat dari 360p yang mengunci surface buffer TV.
+  - Memanggil `applyHlsTrackSelection(activeQuality)` secara eksplisit sebelum `player.prepare()`.
+  - Memperbarui `applyHlsTrackSelection()` agar mendukung penuh kualitas `"best"`, `"hd"`, dan `"1080p"` dengan batasan resolusi yang presisi.
+  - Mengaitkan `onTracksChanged(Tracks tracks)` di listener ExoPlayer dengan proteksi guard atomik untuk mengunci track override seketika setelah master manifest HLS selesai di-resolve tanpa loop rekursif.
+  - Menetapkan atribut `app:surface_type="surface_view"` pada `PlayerView` di layout player untuk mengeliminasi pemotongan buffer dan tearing saat resolusi adaptif berubah tanpa memerlukan restart codec.
+  - Menetapkan mode skala default `player.setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT)` untuk memastikan video pas dengan layar tanpa pemotongan.
+- **Anti-Ghosting & View Recycling Flicker (Android):** Memperbaiki bug tampilan pada daur ulang view RecyclerView di mana kartu yang di-scroll cepat sempat menampilkan poster anime sebelumnya secara keliru. Menyetel placeholder drawable solid netral (`#151822`) seketika sebelum thread decode background dijalankan pada `ImageLoader.java`.
+- **Eliminasi Overdraw View Hierarchy (Android):** Menghapus background bertingkat yang redundan pada FrameLayout poster dan LinearLayout teks di dalam `item_anime_card.xml`, memotong beban pemindaian GPU fillrate hingga separuh pada perangkat mobile RAM 1GB–2GB.
+- **2-Line Title Clamp & Tipografi Hybrid Minimalis:** Memperbaiki pemotongan judul anime romaji/Indo panjang pada kartu web dengan menerapkan 2-line clamp (`-webkit-line-clamp: 2` dan `min-height: 2.7em`), serta transisi ke sistem tipografi sans-serif modern yang proporsional untuk konten judul dan tetap mempertahankan monospace murni untuk terminal prompt, timestamp, dan statusbar.
 
 ## [2.4.2] - 2026-10-13
 

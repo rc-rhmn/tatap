@@ -11,6 +11,7 @@ Penggunaan:
     python3 tools/bump_version.py major       # Naikkan MAJOR (misal 2.3.0 -> 3.0.0, minor & patch reset ke 0)
     python3 tools/bump_version.py 2.4.0       # Tetapkan versi spesifik
     python3 tools/bump_version.py --check     # Periksa konsistensi seluruh berkas (CI Audit)
+    python3 tools/bump_version.py --sync-readme [VERSION] # Sinkronkan tautan download README ke versi rilis publik
 """
 
 import sys
@@ -24,6 +25,7 @@ ANDROID_VER_FILE = os.path.join(ROOT_DIR, "android", "app", "src", "main", "pyth
 WINRES_FILE = os.path.join(ROOT_DIR, "launcher", "winres", "winres.json")
 MANIFEST_FILE = os.path.join(ROOT_DIR, "launcher", "winres", "tatap.manifest")
 FRONTEND_HTML = os.path.join(ROOT_DIR, "frontend", "index.html")
+README_FILE = os.path.join(ROOT_DIR, "README.md")
 
 SEMVER_REGEX = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
@@ -86,7 +88,21 @@ def update_file(path: str, transform_fn):
     return False
 
 
-def apply_version(new_version: str):
+def sync_readme_version(version: str) -> bool:
+    parse_semver(version)
+    def repl_readme(content: str) -> str:
+        content = re.sub(r'tatap-release-v[0-9.]+\.apk', f'tatap-release-v{version}.apk', content)
+        content = re.sub(r'tatap-tv-release-v[0-9.]+\.apk', f'tatap-tv-release-v{version}.apk', content)
+        return content
+    updated = update_file(README_FILE, repl_readme)
+    if updated:
+        print(f" ✓ {os.path.relpath(README_FILE, ROOT_DIR)} -> v{version}")
+    else:
+        print(f"   {os.path.relpath(README_FILE, ROOT_DIR)} sudah memuat v{version}")
+    return updated
+
+
+def apply_version(new_version: str, sync_readme: bool = False):
     parse_semver(new_version) # validasi
     win_version = f"{new_version}.0"
 
@@ -130,6 +146,13 @@ def apply_version(new_version: str):
         return content
     update_file(FRONTEND_HTML, repl_html)
     print(f" ✓ {os.path.relpath(FRONTEND_HTML, ROOT_DIR)} -> v{new_version}")
+
+    # 6. README.md (Download links)
+    if sync_readme:
+        sync_readme_version(new_version)
+    else:
+        print(f" ℹ {os.path.relpath(README_FILE, ROOT_DIR)}: tautan unduhan tetap mengarah ke latest public release.")
+        print(f"   (Jalankan 'python3 tools/bump_version.py --sync-readme' setelah rilis resmi dipublikasikan).")
 
     print("------------------------------------------------------------")
     print("✅ Berhasil menstandarkan versi di seluruh modul!")
@@ -188,6 +211,28 @@ def check_consistency():
             else:
                 print(f" ✓ frontend/index.html: 'v{curr}'")
 
+    # README.md (Harus mengarah ke versi SemVer valid yang <= curr, merefleksikan latest public release)
+    if os.path.exists(README_FILE):
+        with open(README_FILE, "r", encoding="utf-8") as f:
+            c = f.read()
+            m1 = re.search(r'tatap-release-v([0-9.]+)\.apk', c)
+            m2 = re.search(r'tatap-tv-release-v([0-9.]+)\.apk', c)
+            if not m1 or not m2 or m1.group(1) != m2.group(1):
+                errors.append(f"README.md download links tidak konsisten ({m1.group(1) if m1 else 'N/A'} vs {m2.group(1) if m2 else 'N/A'})")
+            else:
+                readme_ver = m1.group(1)
+                try:
+                    parse_semver(readme_ver)
+                    curr_code = calculate_version_code(curr)
+                    readme_code = calculate_version_code(readme_ver)
+                    if readme_code > curr_code:
+                        errors.append(f"README.md memuat versi v{readme_ver} yang lebih tinggi dari VERSION v{curr}!")
+                    else:
+                        status_tag = "Latest Public" if readme_code < curr_code else "Synchronized"
+                        print(f" ✓ README.md: download links 'v{readme_ver}' ({status_tag})")
+                except Exception as e:
+                    errors.append(f"README.md download links memuat versi tidak valid: {e}")
+
     if errors:
         print("\n❌ Terdeteksi ketidakkonsistenan versi:")
         for err in errors:
@@ -207,9 +252,15 @@ def main():
         check_consistency()
         sys.exit(0)
 
+    if arg == "--sync-readme":
+        target_v = sys.argv[2].strip() if len(sys.argv) > 2 else get_current_version()
+        sync_readme_version(target_v)
+        sys.exit(0)
+
+    sync_readme = "--sync-readme" in sys.argv[2:]
     curr = get_current_version()
     new_v = bump(arg, curr)
-    apply_version(new_v)
+    apply_version(new_v, sync_readme=sync_readme)
 
 
 if __name__ == "__main__":

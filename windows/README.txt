@@ -35,3 +35,9 @@ SUBTITLE INDONESIA (AI FANSUB — BYOK):
 - Perintah terminal:
   - Cek status: :apikey | Hapus key: :apikey clear | Ganti model: :model gpt-oss:20b
 - Tanpa API Key? Google GTX (Zero-Key) otomatis aktif sebagai fallback gratis.
+
+KEAMANAN & INTEGRITAS (OPEN-SOURCE):
+- Tatap adalah aplikasi open-source mandiri (self-hosted di localhost 127.0.0.1).
+- Tatap bebas dari telemetri, iklan, miner, maupun malware apa pun.
+- Seluruh kode sumber dapat diaudit secara terbuka di: https://github.com/asfaraguest/tatap
+- Beberapa antivirus pihak ketiga (seperti Avast/AVG/Avira) mungkin memunculkan peringatan heuristik generic (Evo-gen) karena Tatap.exe dikompilasi dengan Go dan belum membeli sertifikat komersial Authenticode tahunan. Peringatan ini merupakan false positive dan berkas aman ditambahkan ke daftar pengecualian (whitelist).

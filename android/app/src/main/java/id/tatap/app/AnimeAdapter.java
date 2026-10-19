@@ -17,7 +17,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-public class AnimeAdapter extends RecyclerView.Adapter<AnimeAdapter.AnimeViewHolder> {
+public class AnimeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+    public static final int VIEW_TYPE_ANIME = 0;
+    public static final int VIEW_TYPE_HEADER = 1;
+
     private final Context context;
     private final List<JSONObject> items = new ArrayList<>();
 
@@ -33,24 +36,82 @@ public class AnimeAdapter extends RecyclerView.Adapter<AnimeAdapter.AnimeViewHol
         notifyDataSetChanged();
     }
 
-    @NonNull
-    @Override
-    public AnimeViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        View view = LayoutInflater.from(context).inflate(R.layout.item_anime_card, parent, false);
-        return new AnimeViewHolder(view);
+    public boolean isHeader(int position) {
+        if (position >= 0 && position < items.size()) {
+            JSONObject item = items.get(position);
+            return item != null && item.optBoolean("is_header", false);
+        }
+        return false;
     }
 
     @Override
-    public void onBindViewHolder(@NonNull AnimeViewHolder holder, int position) {
+    public int getItemViewType(int position) {
+        return isHeader(position) ? VIEW_TYPE_HEADER : VIEW_TYPE_ANIME;
+    }
+
+    @NonNull
+    @Override
+    public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        if (viewType == VIEW_TYPE_HEADER) {
+            View view = LayoutInflater.from(context).inflate(R.layout.item_lane_header, parent, false);
+            return new HeaderViewHolder(view);
+        } else {
+            View view = LayoutInflater.from(context).inflate(R.layout.item_anime_card, parent, false);
+            return new AnimeViewHolder(view);
+        }
+    }
+
+    @Override
+    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder rawHolder, int position) {
         JSONObject item = items.get(position);
+        if (rawHolder instanceof HeaderViewHolder) {
+            HeaderViewHolder holder = (HeaderViewHolder) rawHolder;
+            String headerTitle = item.optString("header_title", item.optString("title", "SEKSI ANIME"));
+            String lane = item.optString("lane", "");
+            holder.tvTitle.setText(headerTitle);
+
+            if ("seasonal".equalsIgnoreCase(lane)) {
+                holder.tvSubtitle.setText("[SEASONAL]");
+                holder.tvTitle.setTextColor(0xFF38BDF8); // Cyan
+                holder.viewIndicator.setBackgroundColor(0xFF38BDF8);
+            } else if ("long_running".equalsIgnoreCase(lane)) {
+                holder.tvSubtitle.setText("[CONTINUOUS]");
+                holder.tvTitle.setTextColor(0xFFF59E0B); // Amber
+                holder.viewIndicator.setBackgroundColor(0xFFF59E0B);
+            } else {
+                holder.tvSubtitle.setText("[LANE]");
+                holder.tvTitle.setTextColor(0xFF38BDF8);
+                holder.viewIndicator.setBackgroundColor(0xFF38BDF8);
+            }
+            return;
+        }
+
+        AnimeViewHolder holder = (AnimeViewHolder) rawHolder;
         String title = item.optString("title", "Tanpa Judul");
         String poster = item.optString("poster", "");
         String sub = item.optString("sub", "");
         String type = item.optString("type", "");
         String eps = item.optString("eps", "");
+        String epsCounter = item.optString("eps_counter", "");
         String slug = item.optString("id", item.optString("slug", ""));
         double score = item.optDouble("score", 0.0);
         String duration = item.optString("duration", "");
+        String badge = item.optString("badge", "");
+        boolean isFinished = item.optBoolean("is_finished", false);
+        boolean isLongRunning = item.optBoolean("is_long_running", false);
+
+        if (!isFinished && !epsCounter.isEmpty()) {
+            String[] parts = epsCounter.split("/");
+            if (parts.length == 2 && !parts[1].equals("?")) {
+                try {
+                    int cur = Integer.parseInt(parts[0].trim());
+                    int tot = Integer.parseInt(parts[1].trim());
+                    if (tot > 0 && cur >= tot) {
+                        isFinished = true;
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
 
         holder.tvTitle.setText(title);
 
@@ -76,12 +137,40 @@ public class AnimeAdapter extends RecyclerView.Adapter<AnimeAdapter.AnimeViewHol
         // Format Subtitle / Status / History Badge
         if (episode > 0) {
             holder.tvBadgeEp.setText("EP " + episode);
+            holder.tvBadgeEp.setBackgroundResource(R.drawable.bg_badge_sub);
+            holder.tvBadgeEp.setTextColor(0xFFF1F5F9);
+        } else if ("TAMAT".equalsIgnoreCase(badge) || isFinished) {
+            holder.tvBadgeEp.setText("TAMAT");
+            holder.tvBadgeEp.setBackgroundResource(R.drawable.bg_badge_tamat);
+            holder.tvBadgeEp.setTextColor(0xFFECFDF5);
+        } else if ("SERIAL PANJANG".equalsIgnoreCase(badge) || isLongRunning) {
+            if (!epsCounter.isEmpty()) {
+                holder.tvBadgeEp.setText("EP " + epsCounter);
+            } else if (!eps.isEmpty() && !eps.equals("0")) {
+                holder.tvBadgeEp.setText("EP " + eps);
+            } else if (!sub.isEmpty()) {
+                holder.tvBadgeEp.setText("SUB " + sub.toUpperCase());
+            } else {
+                holder.tvBadgeEp.setText("SERIAL");
+            }
+            holder.tvBadgeEp.setBackgroundResource(R.drawable.bg_badge_long);
+            holder.tvBadgeEp.setTextColor(0xFFFFFBEB);
+        } else if (!epsCounter.isEmpty()) {
+            holder.tvBadgeEp.setText("EP " + epsCounter);
+            holder.tvBadgeEp.setBackgroundResource(R.drawable.bg_badge_sub);
+            holder.tvBadgeEp.setTextColor(0xFFF1F5F9);
         } else if (!sub.isEmpty()) {
             holder.tvBadgeEp.setText("SUB " + sub.toUpperCase());
+            holder.tvBadgeEp.setBackgroundResource(R.drawable.bg_badge_sub);
+            holder.tvBadgeEp.setTextColor(0xFFF1F5F9);
         } else if (!eps.isEmpty() && !eps.equals("0")) {
             holder.tvBadgeEp.setText("EP " + eps);
+            holder.tvBadgeEp.setBackgroundResource(R.drawable.bg_badge_sub);
+            holder.tvBadgeEp.setTextColor(0xFFF1F5F9);
         } else {
             holder.tvBadgeEp.setText("ANIME");
+            holder.tvBadgeEp.setBackgroundResource(R.drawable.bg_badge_sub);
+            holder.tvBadgeEp.setTextColor(0xFFF1F5F9);
         }
 
         // Format Meta Info
@@ -95,7 +184,9 @@ public class AnimeAdapter extends RecyclerView.Adapter<AnimeAdapter.AnimeViewHol
                 metaStr.append(" · ").append(type);
             }
         } else {
-            if (!eps.isEmpty() && !eps.equals("0")) {
+            if (!epsCounter.isEmpty()) {
+                metaStr.append(epsCounter).append(" Ep");
+            } else if (!eps.isEmpty() && !eps.equals("0")) {
                 metaStr.append(eps).append(" Ep");
             }
             if (!duration.isEmpty()) {
@@ -110,7 +201,17 @@ public class AnimeAdapter extends RecyclerView.Adapter<AnimeAdapter.AnimeViewHol
 
         ImageLoader.load(poster, holder.ivPoster);
 
+        String synopsis = item.optString("synopsis", "");
+        String studio = item.optString("studio", "");
+        String season = item.optString("season", "");
+        String rawStatus = item.optString("status", isFinished ? "finished" : (badge.equalsIgnoreCase("ONGOING") ? "releasing" : ""));
+        final String status = (isFinished && (rawStatus.isEmpty() || rawStatus.equalsIgnoreCase("releasing"))) ? "finished" : rawStatus;
+        String source = item.optString("source", "");
+        org.json.JSONArray genresArr = item.optJSONArray("genres");
+        String genresStr = genresArr != null ? genresArr.toString() : "";
+
         holder.itemView.setOnClickListener(v -> {
+            HapticHelper.performClick(v);
             Intent intent = new Intent(context, DetailActivity.class);
             intent.putExtra("slug", slug);
             intent.putExtra("title", title);
@@ -118,6 +219,14 @@ public class AnimeAdapter extends RecyclerView.Adapter<AnimeAdapter.AnimeViewHol
             intent.putExtra("type", type);
             intent.putExtra("eps", eps);
             intent.putExtra("sub", sub);
+            intent.putExtra("eps_counter", epsCounter);
+            intent.putExtra("synopsis", synopsis);
+            intent.putExtra("score", score);
+            intent.putExtra("studio", studio);
+            intent.putExtra("season", season);
+            intent.putExtra("status", status);
+            intent.putExtra("source", source);
+            intent.putExtra("genres", genresStr);
             context.startActivity(intent);
         });
     }
@@ -125,6 +234,19 @@ public class AnimeAdapter extends RecyclerView.Adapter<AnimeAdapter.AnimeViewHol
     @Override
     public int getItemCount() {
         return items.size();
+    }
+
+    public static class HeaderViewHolder extends RecyclerView.ViewHolder {
+        View viewIndicator;
+        TextView tvTitle, tvSubtitle;
+
+        public HeaderViewHolder(@NonNull View itemView) {
+            super(itemView);
+            viewIndicator = itemView.findViewById(R.id.view_lane_indicator);
+            tvTitle = itemView.findViewById(R.id.tv_lane_title);
+            tvSubtitle = itemView.findViewById(R.id.tv_lane_subtitle);
+            itemView.setFocusable(false);
+        }
     }
 
     public static class AnimeViewHolder extends RecyclerView.ViewHolder {

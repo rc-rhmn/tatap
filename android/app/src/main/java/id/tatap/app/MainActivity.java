@@ -16,22 +16,33 @@ import android.text.TextWatcher;
 import android.transition.AutoTransition;
 import android.transition.TransitionManager;
 import android.util.Log;
+import android.view.HapticFeedbackConstants;
+import android.content.SharedPreferences;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.inputmethod.EditorInfo;
+import android.graphics.PorterDuff;
+import android.graphics.drawable.Drawable;
+import android.text.Spannable;
+import android.text.SpannableString;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.core.content.ContextCompat;
+import androidx.core.graphics.drawable.DrawableCompat;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
@@ -53,28 +64,50 @@ public class MainActivity extends Activity {
     private EditText etSearch;
     private TextView btnClearSearch;
     private ProgressBar pbLoading;
-    private TextView tvSectionTitle, tvItemCount, tvStatusBadge, tvPageIndicator;
+    private View layoutLoadingState;
+    private TextView tvLoadingLabel;
+    private TextView tvSectionTitle, tvItemCount, tvPageIndicator;
+    private ImageView btnStatusPower;
     private RecyclerView rvGrid;
     private AnimeAdapter adapter;
     private SwipeRefreshLayout swipeRefreshLayout;
 
-    // Header & Dynamic Folded Menu
+    // Header & Unified Fluid Search Bar
     private ViewGroup layoutHeaderRoot;
     private View layoutSearchBox;
-    private HorizontalScrollView layoutFoldedMenu;
     private TextView btnToggleMenu;
-    private boolean isFoldedMenuOpen = false;
 
-    // Header Quick Actions
-    private TextView btnHeaderAi, btnHeaderGenre, btnHeaderHelp, btnHeaderHistory, btnHeaderFavorites;
+    // In-memory tab cache untuk peralihan instan (<1ms) & race condition tokenization
+    private static class TabCacheEntry {
+        final List<JSONObject> items;
+        final int count;
+        final long timestamp;
 
-    // Segmented Tabs & Pagination
+        TabCacheEntry(List<JSONObject> items, int count) {
+            this.items = items;
+            this.count = count;
+            this.timestamp = System.currentTimeMillis();
+        }
+
+        boolean isExpired() {
+            return (System.currentTimeMillis() - timestamp) > 180000L; // TTL 3 menit
+        }
+    }
+
+    private final java.util.Map<String, TabCacheEntry> tabDataCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicInteger currentFetchToken = new java.util.concurrent.atomic.AtomicInteger(0);
+
+    // Header Quick Actions (Retained for backward safety)
+    private TextView btnHeaderAi, btnHeaderGenre, btnHeaderHelp, btnHeaderHistory;
+
+    // Scrollable Category Pills & Pagination
     private View layoutTabsSegmented;
-    private TextView btnTabMusim, btnTabAiring, btnTabKatalog;
-    private TextView btnTabJadwal;
+    private LinearLayout layoutTabsContainer;
+    private TextView btnTabMusim, btnTabAiring, btnTabJadwal, btnTabRiwayat, btnTabFavorit, btnTabKatalog, btnTabGenre;
     private View layoutScheduleDays;
-    private TextView btnDayYesterday, btnDayToday, btnDayTomorrow;
-    private String currentScheduleDay = "today"; // "yesterday" | "today" | "tomorrow"
+    private TextView btnDaySenin, btnDaySelasa, btnDayRabu, btnDayKamis, btnDayJumat, btnDaySabtu, btnDayMinggu;
+    private String currentScheduleDay = "today"; // "monday".."sunday" | "today" | "yesterday" | "tomorrow"
+    private String currentScheduleActualDay = ""; // actual weekday key dari backend (misal "thursday")
     private TextView btnPrevPage, btnNextPage;
     private View layoutPagination;
 
@@ -90,15 +123,7 @@ public class MainActivity extends Activity {
     private TextView tvActiveFilterLabel;
     private Button btnClearFilter;
     private TextView btnClearHistoryAll;
-
-    // Katalog Filter (Sort Populer/Terbaru + Tahun Rilis)
-    private View layoutKatalogFilter;
-    private TextView btnSortPopular, btnSortNewest;
-    private LinearLayout layoutYearChips;
-    private String catalogSort = "popularity";
-    private int catalogYear = 0;
-    private final List<TextView> yearChipViews = new ArrayList<>();
-    private final List<Integer> yearChipValues = new ArrayList<>();
+    private TextView btnFilterCatalog;
 
     private final Handler bannerHandler = new Handler(Looper.getMainLooper());
     private final Runnable hideBannerRunnable = () -> hideCommandBanner(true);
@@ -112,6 +137,14 @@ public class MainActivity extends Activity {
     private int currentPage = 1;
     private int totalPages = 1;
 
+    // State Cross Filter Katalog (Urutan + Tahun + Musim + Bulan + Tipe + Status)
+    private String filterCatalogSort = "popularity";
+    private String filterCatalogYear = "";
+    private String filterCatalogSeason = "";
+    private String filterCatalogMonth = "";
+    private String filterCatalogType = "";
+    private String filterCatalogStatus = "";
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -119,41 +152,66 @@ public class MainActivity extends Activity {
 
         layoutHeaderRoot = findViewById(R.id.layout_header_root);
         layoutSearchBox = findViewById(R.id.layout_search_box);
-        layoutFoldedMenu = findViewById(R.id.layout_folded_menu);
         btnToggleMenu = findViewById(R.id.btn_toggle_menu);
 
         etSearch = findViewById(R.id.et_search);
         btnClearSearch = findViewById(R.id.btn_clear_search);
-        pbLoading = findViewById(R.id.pb_loading);
+        pbLoading = findViewById(R.id.pb_central_loading);
+        layoutLoadingState = findViewById(R.id.layout_loading_state);
         tvSectionTitle = findViewById(R.id.tv_section_title);
         tvItemCount = findViewById(R.id.tv_item_count);
-        tvStatusBadge = findViewById(R.id.tv_status_badge);
+        btnStatusPower = findViewById(R.id.btn_status_power);
+        tvLoadingLabel = findViewById(R.id.tv_loading_label);
         tvPageIndicator = findViewById(R.id.tv_page_indicator);
         rvGrid = findViewById(R.id.rv_anime_grid);
         swipeRefreshLayout = findViewById(R.id.swipe_refresh_layout);
 
-        btnHeaderAi = findViewById(R.id.btn_header_ai);
-        btnHeaderGenre = findViewById(R.id.btn_header_genre);
-        btnHeaderHelp = findViewById(R.id.btn_header_help);
-        btnHeaderHistory = findViewById(R.id.btn_header_history);
-        btnHeaderFavorites = findViewById(R.id.btn_header_favorites);
+        updateBackendStatusUI(0);
+        showLoadingState("Memulai backend Tatap...");
 
         layoutTabsSegmented = findViewById(R.id.layout_tabs_segmented);
+        layoutTabsContainer = findViewById(R.id.layout_tabs_container);
         btnTabMusim = findViewById(R.id.btn_tab_musim);
         btnTabAiring = findViewById(R.id.btn_tab_airing);
-        btnTabKatalog = findViewById(R.id.btn_tab_katalog);
         btnTabJadwal = findViewById(R.id.btn_tab_jadwal);
+        btnTabRiwayat = findViewById(R.id.btn_tab_riwayat);
+        btnTabFavorit = findViewById(R.id.btn_tab_favorit);
+        btnTabKatalog = findViewById(R.id.btn_tab_katalog);
+        btnTabGenre = findViewById(R.id.btn_tab_genre);
         layoutScheduleDays = findViewById(R.id.layout_schedule_days);
-        btnDayYesterday = findViewById(R.id.btn_day_yesterday);
-        btnDayToday = findViewById(R.id.btn_day_today);
-        btnDayTomorrow = findViewById(R.id.btn_day_tomorrow);
+        btnDaySenin = findViewById(R.id.btn_day_senin);
+        btnDaySelasa = findViewById(R.id.btn_day_selasa);
+        btnDayRabu = findViewById(R.id.btn_day_rabu);
+        btnDayKamis = findViewById(R.id.btn_day_kamis);
+        btnDayJumat = findViewById(R.id.btn_day_jumat);
+        btnDaySabtu = findViewById(R.id.btn_day_sabtu);
+        btnDayMinggu = findViewById(R.id.btn_day_minggu);
 
-        // Tab Jadwal HANYA untuk APK Mobile (!TvFocusHelper.isTv)
-        if (!TvFocusHelper.isTv(this)) {
-            if (btnTabJadwal != null) btnTabJadwal.setVisibility(View.VISIBLE);
-        } else {
-            if (btnTabJadwal != null) btnTabJadwal.setVisibility(View.GONE);
-            if (layoutScheduleDays != null) layoutScheduleDays.setVisibility(View.GONE);
+        // Tab Jadwal & Riwayat aktif untuk APK Mobile dan Android TV
+        if (btnTabJadwal != null) {
+            btnTabJadwal.setVisibility(View.VISIBLE);
+            if (TvFocusHelper.isTv(this)) {
+                TvFocusHelper.attachFocusScale(btnTabJadwal, 1.05f, 4f);
+            }
+        }
+        if (btnTabRiwayat != null) {
+            btnTabRiwayat.setVisibility(View.VISIBLE);
+            if (TvFocusHelper.isTv(this)) {
+                TvFocusHelper.attachFocusScale(btnTabRiwayat, 1.05f, 4f);
+            }
+        }
+        if (TvFocusHelper.isTv(this)) {
+            TextView[] scheduleChips = {btnDaySenin, btnDaySelasa, btnDayRabu, btnDayKamis, btnDayJumat, btnDaySabtu, btnDayMinggu};
+            for (int i = 0; i < scheduleChips.length; i++) {
+                TextView chip = scheduleChips[i];
+                if (chip != null) {
+                    TvFocusHelper.attachFocusScale(chip, 1.06f, 4f);
+                    chip.setNextFocusUpId(R.id.btn_tab_jadwal);
+                    chip.setNextFocusDownId(R.id.rv_anime_grid);
+                    if (i > 0 && scheduleChips[i - 1] != null) chip.setNextFocusLeftId(scheduleChips[i - 1].getId());
+                    if (i < scheduleChips.length - 1 && scheduleChips[i + 1] != null) chip.setNextFocusRightId(scheduleChips[i + 1].getId());
+                }
+            }
         }
 
         btnPrevPage = findViewById(R.id.btn_prev_page);
@@ -173,16 +231,31 @@ public class MainActivity extends Activity {
         tvActiveFilterLabel = findViewById(R.id.tv_active_filter_label);
         btnClearFilter = findViewById(R.id.btn_clear_filter);
         btnClearHistoryAll = findViewById(R.id.btn_clear_history_all);
-
-        layoutKatalogFilter = findViewById(R.id.layout_katalog_filter);
-        btnSortPopular = findViewById(R.id.btn_sort_popular);
-        btnSortNewest = findViewById(R.id.btn_sort_newest);
-        layoutYearChips = findViewById(R.id.layout_year_chips);
-        buildYearChips();
+        btnFilterCatalog = findViewById(R.id.btn_filter_catalog);
+        if (btnFilterCatalog != null) {
+            btnFilterCatalog.setOnClickListener(v -> showCatalogFilterDialog());
+            TvFocusHelper.attachFocusScale(btnFilterCatalog, 1.08f, 4f);
+        }
+        if (tvActiveFilterLabel != null) {
+            tvActiveFilterLabel.setOnClickListener(v -> {
+                if ("katalog".equals(currentView)) {
+                    showCatalogFilterDialog();
+                } else if ("genre".equals(currentView)) {
+                    showGenreSelectorDialog();
+                }
+            });
+        }
 
         int spanCount = getResources().getInteger(R.integer.anime_grid_columns);
-        rvGrid.setLayoutManager(new GridLayoutManager(this, spanCount));
+        GridLayoutManager glm = new GridLayoutManager(this, spanCount);
         adapter = new AnimeAdapter(this);
+        glm.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
+            @Override
+            public int getSpanSize(int position) {
+                return (adapter != null && adapter.isHeader(position)) ? glm.getSpanCount() : 1;
+            }
+        });
+        rvGrid.setLayoutManager(glm);
         rvGrid.setAdapter(adapter);
         // Performance tuning: bedakan antara Android TV (ramah low-RAM STB) dan Mobile
         rvGrid.setHasFixedSize(true);
@@ -206,9 +279,29 @@ public class MainActivity extends Activity {
 
         // 2. Tunggu backend siap lalu muat konten pertama
         waitForServerAndLoadCatalog(0);
+
+        handleIncomingIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIncomingIntent(intent);
+    }
+
+    private void handleIncomingIntent(Intent intent) {
+        if (intent != null && intent.hasExtra("genre")) {
+            String targetGenre = intent.getStringExtra("genre");
+            if (targetGenre != null && !targetGenre.trim().isEmpty()) {
+                setGenreFilter(targetGenre.trim());
+            }
+        }
     }
 
     private void applyTvTopBarCompression() {
+        if (!TvFocusHelper.isTv(this)) return;
+
         if (layoutHeaderRoot != null) {
             ViewGroup.LayoutParams lp = layoutHeaderRoot.getLayoutParams();
             if (lp != null) {
@@ -219,61 +312,165 @@ public class MainActivity extends Activity {
         if (layoutSearchBox != null) {
             ViewGroup.LayoutParams lp = layoutSearchBox.getLayoutParams();
             if (lp != null) {
-                lp.height = dpToPx(32);
+                lp.height = dpToPx(34);
                 layoutSearchBox.setLayoutParams(lp);
             }
         }
         if (btnToggleMenu != null) {
             ViewGroup.LayoutParams lp = btnToggleMenu.getLayoutParams();
             if (lp != null) {
-                lp.height = dpToPx(32);
+                lp.height = dpToPx(34);
                 btnToggleMenu.setLayoutParams(lp);
             }
         }
         if (layoutTabsSegmented != null) {
             ViewGroup.MarginLayoutParams mlp = (ViewGroup.MarginLayoutParams) layoutTabsSegmented.getLayoutParams();
             if (mlp != null) {
-                mlp.topMargin = dpToPx(1);
-                mlp.bottomMargin = dpToPx(3);
+                mlp.topMargin = dpToPx(2);
+                mlp.bottomMargin = dpToPx(4);
                 layoutTabsSegmented.setLayoutParams(mlp);
             }
-            layoutTabsSegmented.setPadding(dpToPx(2), dpToPx(2), dpToPx(2), dpToPx(2));
+            layoutTabsSegmented.setPadding(0, 0, 0, 0);
         }
-        View[] tabs = new View[]{btnTabMusim, btnTabAiring, btnTabKatalog, btnTabJadwal};
-        for (View tab : tabs) {
-            if (tab != null) {
-                ViewGroup.LayoutParams lp = tab.getLayoutParams();
-                if (lp != null) {
-                    lp.height = dpToPx(30);
-                    tab.setLayoutParams(lp);
-                }
+        if (layoutTabsContainer != null) {
+            ViewGroup.LayoutParams clp = layoutTabsContainer.getLayoutParams();
+            if (clp != null) {
+                clp.width = ViewGroup.LayoutParams.MATCH_PARENT;
+                clp.height = dpToPx(42);
+                layoutTabsContainer.setLayoutParams(clp);
             }
         }
+        // Pada Android TV, seluruh 7 tab (Musim Ini, Masih Tayang, Jadwal, Riwayat, Favorit, Katalog, Genre)
+        // dibagikan rata (weight=1.0f) membentang penuh 100% menyesuaikan lebar layar TV (10-Foot UI)
+        TextView[] tvTabs = new TextView[]{btnTabMusim, btnTabAiring, btnTabJadwal, btnTabRiwayat, btnTabFavorit, btnTabKatalog, btnTabGenre};
+        for (int i = 0; i < tvTabs.length; i++) {
+            TextView tab = tvTabs[i];
+            if (tab != null) {
+                LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, dpToPx(38), 1.0f);
+                tlp.setMarginEnd(i < tvTabs.length - 1 ? dpToPx(6) : 0);
+                tab.setLayoutParams(tlp);
+                tab.setGravity(Gravity.CENTER);
+                tab.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+                tab.setPadding(dpToPx(6), 0, dpToPx(6), 0);
+                // Kosongkan compound drawable XML agar tidak terpisah ke tepi kiri,
+                // di TV digantikan oleh CenteredImageSpan inline di updateTvTabSpannable()
+                tab.setCompoundDrawablesWithIntrinsicBounds(null, null, null, null);
+            }
+        }
+
+        // Hubungkan D-Pad spasial horizontal header TV:
+        if (layoutSearchBox != null) {
+            layoutSearchBox.setNextFocusRightId(R.id.btn_status_power);
+            layoutSearchBox.setNextFocusDownId(R.id.btn_tab_musim);
+        }
+        if (btnStatusPower != null) {
+            btnStatusPower.setNextFocusLeftId(R.id.layout_search_box);
+            btnStatusPower.setNextFocusRightId(R.id.btn_toggle_menu);
+            btnStatusPower.setNextFocusDownId(R.id.btn_tab_riwayat);
+        }
+        if (btnToggleMenu != null) {
+            btnToggleMenu.setNextFocusLeftId(R.id.btn_status_power);
+            btnToggleMenu.setNextFocusDownId(R.id.btn_tab_genre);
+        }
+
+        // Hubungkan panah ATAS dari tab ke elemen header yang tepat:
+        if (btnTabMusim != null) btnTabMusim.setNextFocusUpId(R.id.layout_search_box);
+        if (btnTabAiring != null) btnTabAiring.setNextFocusUpId(R.id.layout_search_box);
+        if (btnTabJadwal != null) btnTabJadwal.setNextFocusUpId(R.id.layout_search_box);
+        if (btnTabRiwayat != null) btnTabRiwayat.setNextFocusUpId(R.id.btn_status_power);
+        if (btnTabFavorit != null) btnTabFavorit.setNextFocusUpId(R.id.btn_status_power);
+        if (btnTabKatalog != null) btnTabKatalog.setNextFocusUpId(R.id.btn_toggle_menu);
+        if (btnTabGenre != null) btnTabGenre.setNextFocusUpId(R.id.btn_toggle_menu);
+
+        // Sambungkan rantai D-Pad horizontal penuh 7 tab tanpa ada yang ter-skip:
+        if (btnTabMusim != null) {
+            btnTabMusim.setNextFocusLeftId(R.id.btn_tab_musim);
+            btnTabMusim.setNextFocusRightId(R.id.btn_tab_airing);
+        }
+        if (btnTabAiring != null) {
+            btnTabAiring.setNextFocusLeftId(R.id.btn_tab_musim);
+            btnTabAiring.setNextFocusRightId(R.id.btn_tab_jadwal);
+        }
+        if (btnTabJadwal != null) {
+            btnTabJadwal.setNextFocusLeftId(R.id.btn_tab_airing);
+            btnTabJadwal.setNextFocusRightId(R.id.btn_tab_riwayat);
+        }
+        if (btnTabRiwayat != null) {
+            btnTabRiwayat.setNextFocusLeftId(R.id.btn_tab_jadwal);
+            btnTabRiwayat.setNextFocusRightId(R.id.btn_tab_favorit);
+        }
+        if (btnTabFavorit != null) {
+            btnTabFavorit.setNextFocusLeftId(R.id.btn_tab_riwayat);
+            btnTabFavorit.setNextFocusRightId(R.id.btn_tab_katalog);
+        }
+        if (btnTabKatalog != null) {
+            btnTabKatalog.setNextFocusLeftId(R.id.btn_tab_favorit);
+            btnTabKatalog.setNextFocusRightId(R.id.btn_tab_genre);
+        }
+        if (btnTabGenre != null) {
+            btnTabGenre.setNextFocusLeftId(R.id.btn_tab_katalog);
+            btnTabGenre.setNextFocusRightId(R.id.btn_tab_genre);
+        }
+
+        updateTabButtons();
+    }
+
+    private void setupDialogWindowBounds(Dialog dialog) {
+        if (dialog == null || dialog.getWindow() == null) return;
+        dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        int width = TvFocusHelper.isTv(this)
+                ? Math.min(dpToPx(700), (int) (getResources().getDisplayMetrics().widthPixels * 0.80f))
+                : ViewGroup.LayoutParams.MATCH_PARENT;
+        dialog.getWindow().setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT);
     }
 
     private int dpToPx(int dp) {
         return (int) (dp * getResources().getDisplayMetrics().density + 0.5f);
     }
 
+    /**
+     * Mengupdate warna dan background indikator icon server backend.
+     * @param state 1 = Online (Hijau), 0 = Checking / Booting (Kuning), 2 = Offline / Error (Merah)
+     */
+    private void updateBackendStatusUI(int state) {
+        if (btnStatusPower == null) return;
+        if (state == 1) { // Online
+            btnStatusPower.setColorFilter(0xFF10B981, PorterDuff.Mode.SRC_IN);
+            btnStatusPower.setBackgroundResource(R.drawable.bg_status_pill);
+        } else if (state == 0) { // Checking / Booting
+            btnStatusPower.setColorFilter(0xFFF59E0B, PorterDuff.Mode.SRC_IN);
+            btnStatusPower.setBackgroundResource(R.drawable.bg_status_pill_warn);
+        } else { // Offline / Error
+            btnStatusPower.setColorFilter(0xFFEF4444, PorterDuff.Mode.SRC_IN);
+            btnStatusPower.setBackgroundResource(R.drawable.bg_status_pill_err);
+        }
+    }
+
+    private void showLoadingState(String message) {
+        if (layoutLoadingState != null) {
+            if (tvLoadingLabel != null && message != null) {
+                tvLoadingLabel.setText(message);
+            }
+            layoutLoadingState.setVisibility(View.VISIBLE);
+        }
+        if (rvGrid != null) {
+            rvGrid.setAlpha(0.25f);
+        }
+        if (layoutEmptyState != null) {
+            layoutEmptyState.setVisibility(View.GONE);
+        }
+    }
+
     private void setupTabsAndListeners() {
         if (btnToggleMenu != null) {
-            btnToggleMenu.setOnClickListener(v -> toggleFoldedMenu());
+            btnToggleMenu.setOnClickListener(v -> showCommandHelpDialog());
         }
-
-        etSearch.setOnFocusChangeListener((v, hasFocus) -> {
-            if (hasFocus && isFoldedMenuOpen) {
-                setFoldedMenuOpen(false);
-            }
-        });
 
         etSearch.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_SEARCH ||
                     (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER && event.getAction() == KeyEvent.ACTION_DOWN)) {
                 hideKeyboard();
                 etSearch.clearFocus();
-                if (isFoldedMenuOpen) {
-                    setFoldedMenuOpen(false);
-                }
                 String raw = etSearch.getText().toString().trim();
                 if (!raw.isEmpty()) {
                     if (raw.startsWith(":") || raw.startsWith("/")) {
@@ -293,50 +490,96 @@ public class MainActivity extends Activity {
             return false;
         });
 
+        if (layoutSearchBox != null) {
+            layoutSearchBox.setOnClickListener(v -> activateSearchInput());
+            layoutSearchBox.setOnKeyListener((v, keyCode, event) -> {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                        activateSearchInput();
+                        return true;
+                    }
+                }
+                return false;
+            });
+        }
+
+        if (etSearch != null) {
+            etSearch.setOnClickListener(v -> activateSearchInput());
+            etSearch.setOnFocusChangeListener((v, hasFocus) -> {
+                if (hasFocus && TvFocusHelper.isTv(this)) {
+                    showKeyboard();
+                }
+            });
+        }
+
         btnTabMusim.setOnClickListener(v -> {
+            HapticHelper.performClick(v);
             resetFiltersToTab("musim");
         });
 
         btnTabAiring.setOnClickListener(v -> {
+            HapticHelper.performClick(v);
             resetFiltersToTab("airing");
         });
 
-        btnTabKatalog.setOnClickListener(v -> {
-            resetFiltersToTab("katalog");
-        });
-
-        if (btnSortPopular != null) {
-            btnSortPopular.setOnClickListener(v -> setCatalogSort("popularity"));
-        }
-        if (btnSortNewest != null) {
-            btnSortNewest.setOnClickListener(v -> setCatalogSort("latest"));
-        }
-
         if (btnTabJadwal != null) {
             btnTabJadwal.setOnClickListener(v -> {
+                HapticHelper.performClick(v);
                 resetFiltersToTab("jadwal");
             });
         }
 
-        if (btnDayYesterday != null) {
-            btnDayYesterday.setOnClickListener(v -> switchScheduleDay("yesterday"));
+        if (btnTabRiwayat != null) {
+            btnTabRiwayat.setOnClickListener(v -> {
+                HapticHelper.performClick(v);
+                resetFiltersToTab("riwayat");
+            });
         }
-        if (btnDayToday != null) {
-            btnDayToday.setOnClickListener(v -> switchScheduleDay("today"));
+
+        if (btnTabFavorit != null) {
+            btnTabFavorit.setOnClickListener(v -> {
+                HapticHelper.performClick(v);
+                resetFiltersToTab("favorit");
+            });
         }
-        if (btnDayTomorrow != null) {
-            btnDayTomorrow.setOnClickListener(v -> switchScheduleDay("tomorrow"));
+
+        btnTabKatalog.setOnClickListener(v -> {
+            HapticHelper.performClick(v);
+            if ("katalog".equals(currentView)) {
+                showCatalogFilterDialog();
+            } else {
+                resetFiltersToTab("katalog");
+            }
+        });
+
+        if (btnTabGenre != null) {
+            btnTabGenre.setOnClickListener(v -> {
+                HapticHelper.performClick(v);
+                showGenreSelectorDialog();
+            });
         }
+
+        if (btnDaySenin != null) btnDaySenin.setOnClickListener(v -> { HapticHelper.performTick(v); switchScheduleDay("monday"); });
+        if (btnDaySelasa != null) btnDaySelasa.setOnClickListener(v -> { HapticHelper.performTick(v); switchScheduleDay("tuesday"); });
+        if (btnDayRabu != null) btnDayRabu.setOnClickListener(v -> { HapticHelper.performTick(v); switchScheduleDay("wednesday"); });
+        if (btnDayKamis != null) btnDayKamis.setOnClickListener(v -> { HapticHelper.performTick(v); switchScheduleDay("thursday"); });
+        if (btnDayJumat != null) btnDayJumat.setOnClickListener(v -> { HapticHelper.performTick(v); switchScheduleDay("friday"); });
+        if (btnDaySabtu != null) btnDaySabtu.setOnClickListener(v -> { HapticHelper.performTick(v); switchScheduleDay("saturday"); });
+        if (btnDayMinggu != null) btnDayMinggu.setOnClickListener(v -> { HapticHelper.performTick(v); switchScheduleDay("sunday"); });
 
         btnPrevPage.setOnClickListener(v -> {
             if (currentPage > 1) {
+                HapticHelper.performClick(v);
                 currentPage--;
+                showLoadingState("Memuat halaman " + currentPage + "...");
                 fetchData();
             }
         });
 
         btnNextPage.setOnClickListener(v -> {
+            HapticHelper.performClick(v);
             currentPage++;
+            showLoadingState("Memuat halaman " + currentPage + "...");
             fetchData();
         });
 
@@ -349,41 +592,38 @@ public class MainActivity extends Activity {
         }
 
         if (btnClearFilter != null) {
-            btnClearFilter.setOnClickListener(v -> resetFiltersToTab("musim"));
+            btnClearFilter.setOnClickListener(v -> {
+                if ("katalog".equals(currentView)) {
+                    resetCatalogFilterState();
+                    updateActiveFilterBar();
+                    fetchData();
+                } else {
+                    resetFiltersToTab("musim");
+                }
+            });
         }
 
         if (btnHeaderAi != null) {
             btnHeaderAi.setOnClickListener(v -> {
-                setFoldedMenuOpen(false);
                 showAiSettingsDialog();
             });
         }
 
         if (btnHeaderGenre != null) {
             btnHeaderGenre.setOnClickListener(v -> {
-                setFoldedMenuOpen(false);
                 showGenreSelectorDialog();
             });
         }
 
         if (btnHeaderHelp != null) {
             btnHeaderHelp.setOnClickListener(v -> {
-                setFoldedMenuOpen(false);
                 showCommandHelpDialog();
             });
         }
 
         if (btnHeaderHistory != null) {
             btnHeaderHistory.setOnClickListener(v -> {
-                setFoldedMenuOpen(false);
-                switchView("riwayat");
-            });
-        }
-
-        if (btnHeaderFavorites != null) {
-            btnHeaderFavorites.setOnClickListener(v -> {
-                setFoldedMenuOpen(false);
-                switchView("favorit");
+                resetFiltersToTab("riwayat");
             });
         }
 
@@ -393,6 +633,7 @@ public class MainActivity extends Activity {
 
         if (btnClearSearch != null) {
             btnClearSearch.setOnClickListener(v -> {
+                HapticHelper.performTick(v);
                 etSearch.setText("");
                 if ("cari".equals(currentView)) {
                     resetFiltersToTab("musim");
@@ -409,9 +650,6 @@ public class MainActivity extends Activity {
                 if (btnClearSearch != null) {
                     btnClearSearch.setVisibility(s != null && s.length() > 0 ? View.VISIBLE : View.GONE);
                 }
-                if (s != null && s.length() > 0 && isFoldedMenuOpen) {
-                    setFoldedMenuOpen(false);
-                }
             }
 
             @Override
@@ -421,60 +659,61 @@ public class MainActivity extends Activity {
         if (swipeRefreshLayout != null) {
             swipeRefreshLayout.setColorSchemeColors(0xFF00DBEB, 0xFF0E7490);
             swipeRefreshLayout.setProgressBackgroundColorSchemeColor(0xFF0E121C);
-            swipeRefreshLayout.setOnRefreshListener(this::fetchData);
-        }
-
-        if (btnEmptyRetry != null) {
-            btnEmptyRetry.setOnClickListener(v -> fetchData());
-        }
-
-        if (tvStatusBadge != null) {
-            tvStatusBadge.setOnClickListener(v -> {
-                setFoldedMenuOpen(false);
-                checkBackendStatus();
+            swipeRefreshLayout.setOnRefreshListener(() -> {
+                HapticHelper.performTick(swipeRefreshLayout);
+                tabDataCache.clear();
+                fetchData();
             });
         }
 
+        if (btnEmptyRetry != null) {
+            btnEmptyRetry.setOnClickListener(v -> {
+                HapticHelper.performClick(v);
+                tabDataCache.clear();
+                fetchData();
+            });
+        }
+
+        if (btnStatusPower != null) {
+            btnStatusPower.setOnClickListener(v -> checkBackendStatus());
+        }
+
         // Pasang respon fokus D-Pad TV pada seluruh elemen interaktif
-        TvFocusHelper.attachFocusScale(btnToggleMenu, 1.15f, 6f);
-        TvFocusHelper.attachFocusScale(btnHeaderAi, 1.1f, 6f);
-        TvFocusHelper.attachFocusScale(btnHeaderGenre, 1.1f, 6f);
-        TvFocusHelper.attachFocusScale(btnHeaderHelp, 1.1f, 6f);
-        TvFocusHelper.attachFocusScale(btnHeaderHistory, 1.1f, 6f);
-        TvFocusHelper.attachFocusScale(btnHeaderFavorites, 1.1f, 6f);
-        TvFocusHelper.attachFocusScale(btnTabMusim, 1.08f, 6f);
-        TvFocusHelper.attachFocusScale(btnTabAiring, 1.08f, 6f);
-        TvFocusHelper.attachFocusScale(btnTabKatalog, 1.08f, 6f);
-        TvFocusHelper.attachFocusScale(btnSortPopular, 1.1f, 6f);
-        TvFocusHelper.attachFocusScale(btnSortNewest, 1.1f, 6f);
+        TvFocusHelper.attachFocusScale(btnToggleMenu, 1.1f, 6f);
+        if (btnStatusPower != null) TvFocusHelper.attachFocusScale(btnStatusPower, 1.15f, 6f);
+        if (layoutSearchBox != null) TvFocusHelper.attachFocusScale(layoutSearchBox, 1.03f, 4f);
+        TvFocusHelper.attachFocusScale(btnTabMusim, 1.06f, 6f);
+        TvFocusHelper.attachFocusScale(btnTabAiring, 1.06f, 6f);
+        if (btnTabJadwal != null) TvFocusHelper.attachFocusScale(btnTabJadwal, 1.06f, 6f);
+        if (btnTabRiwayat != null) TvFocusHelper.attachFocusScale(btnTabRiwayat, 1.06f, 6f);
+        if (btnTabFavorit != null) TvFocusHelper.attachFocusScale(btnTabFavorit, 1.06f, 6f);
+        TvFocusHelper.attachFocusScale(btnTabKatalog, 1.06f, 6f);
+        if (btnTabGenre != null) TvFocusHelper.attachFocusScale(btnTabGenre, 1.06f, 6f);
         TvFocusHelper.attachFocusScale(btnPrevPage, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnNextPage, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnEmptyRetry, 1.08f, 6f);
         TvFocusHelper.attachFocusScale(btnClearFilter, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnClearHistoryAll, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnCloseCommandBanner, 1.1f, 6f);
-    }
 
-    private void toggleFoldedMenu() {
-        setFoldedMenuOpen(!isFoldedMenuOpen);
+        TextView[] dayButtons = {btnDaySenin, btnDaySelasa, btnDayRabu, btnDayKamis, btnDayJumat, btnDaySabtu, btnDayMinggu};
+        for (TextView dBtn : dayButtons) {
+            if (dBtn != null) {
+                TvFocusHelper.attachFocusScale(dBtn, 1.08f, 6f);
+                if (TvFocusHelper.isTv(this)) {
+                    dBtn.setNextFocusUpId(R.id.btn_tab_jadwal);
+                    dBtn.setNextFocusDownId(R.id.rv_anime_grid);
+                }
+            }
+        }
     }
 
     private void setFoldedMenuOpen(boolean open) {
-        if (isFoldedMenuOpen == open) return;
-        isFoldedMenuOpen = open;
-        if (layoutHeaderRoot != null) {
-            TransitionManager.beginDelayedTransition(layoutHeaderRoot, new AutoTransition().setDuration(200));
-        }
-        if (layoutFoldedMenu != null) {
-            layoutFoldedMenu.setVisibility(isFoldedMenuOpen ? View.VISIBLE : View.GONE);
-        }
-        if (btnToggleMenu != null) {
-            btnToggleMenu.setText(isFoldedMenuOpen ? "Tutup" : "Menu");
-            btnToggleMenu.setTextColor(isFoldedMenuOpen ? 0xFF38BDF8 : 0xFFCBD5E1);
-        }
-        if (etSearch != null) {
-            etSearch.setHint(isFoldedMenuOpen ? "Cari judul..." : "Cari judul anime atau ketik :command...");
-        }
+        // No-op backward safety
+    }
+
+    private void toggleFoldedMenu() {
+        showCommandHelpDialog();
     }
 
     @Override
@@ -482,12 +721,10 @@ public class MainActivity extends Activity {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             int keyCode = event.getKeyCode();
             if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_SETTINGS) {
-                toggleFoldedMenu();
+                showCommandHelpDialog();
                 return true;
             } else if (keyCode == KeyEvent.KEYCODE_SEARCH) {
-                if (etSearch != null) {
-                    etSearch.requestFocus();
-                }
+                activateSearchInput();
                 return true;
             }
         }
@@ -496,8 +733,9 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (isFoldedMenuOpen) {
-            setFoldedMenuOpen(false);
+        if (etSearch != null && etSearch.hasFocus()) {
+            etSearch.clearFocus();
+            hideKeyboard();
             return;
         }
         if (!"musim".equals(currentView)) {
@@ -506,6 +744,7 @@ public class MainActivity extends Activity {
         }
         super.onBackPressed();
     }
+
 
     private void hideCommandBanner(boolean animated) {
         if (layoutCommandBanner == null || layoutCommandBanner.getVisibility() != View.VISIBLE) return;
@@ -552,10 +791,75 @@ public class MainActivity extends Activity {
         bannerHandler.postDelayed(hideBannerRunnable, delayMs);
     }
 
+    private boolean isCatalogFilterActive() {
+        return !"popularity".equals(filterCatalogSort) ||
+                !filterCatalogYear.isEmpty() ||
+                !filterCatalogSeason.isEmpty() ||
+                !filterCatalogMonth.isEmpty() ||
+                !filterCatalogType.isEmpty() ||
+                !filterCatalogStatus.isEmpty();
+    }
+
+    private String getCatalogFilterSummary() {
+        List<String> parts = new ArrayList<>();
+        if ("score".equals(filterCatalogSort)) parts.add("SKOR TERTINGGI");
+        else if ("latest".equals(filterCatalogSort)) parts.add("TERBARU");
+        else if ("trending".equals(filterCatalogSort)) parts.add("TRENDING");
+        else if ("az".equals(filterCatalogSort)) parts.add("A-Z");
+        else if ("most_favorite".equals(filterCatalogSort)) parts.add("FAVORIT");
+
+        if (!filterCatalogYear.isEmpty()) parts.add(filterCatalogYear.toUpperCase());
+        if (!filterCatalogSeason.isEmpty()) {
+            if ("spring".equals(filterCatalogSeason)) parts.add("SEMI (SPRING)");
+            else if ("summer".equals(filterCatalogSeason)) parts.add("PANAS (SUMMER)");
+            else if ("fall".equals(filterCatalogSeason)) parts.add("GUGUR (FALL)");
+            else if ("winter".equals(filterCatalogSeason)) parts.add("DINGIN (WINTER)");
+            else parts.add(filterCatalogSeason.toUpperCase());
+        }
+        if (!filterCatalogMonth.isEmpty()) {
+            String[] mNames = {"", "JAN", "FEB", "MAR", "APR", "MEI", "JUN", "JUL", "AGU", "SEP", "OKT", "NOV", "DES"};
+            try {
+                int mi = Integer.parseInt(filterCatalogMonth);
+                if (mi >= 1 && mi <= 12) parts.add(mNames[mi]);
+                else parts.add("BLN " + filterCatalogMonth);
+            } catch (Exception e) {
+                parts.add("BLN " + filterCatalogMonth);
+            }
+        }
+        if (!filterCatalogType.isEmpty()) parts.add(filterCatalogType.toUpperCase());
+        if (!filterCatalogStatus.isEmpty()) {
+            parts.add("releasing".equals(filterCatalogStatus) ? "AIRING" : "TAMAT");
+        }
+        if (parts.isEmpty()) return "KATALOG TERFILTER";
+        StringBuilder sb = new StringBuilder("KATALOG: ");
+        for (int i = 0; i < parts.size(); i++) {
+            if (i > 0) sb.append(" · ");
+            sb.append(parts.get(i));
+        }
+        return sb.toString();
+    }
+
+    private void resetCatalogFilterState() {
+        filterCatalogSort = "popularity";
+        filterCatalogYear = "";
+        filterCatalogSeason = "";
+        filterCatalogMonth = "";
+        filterCatalogType = "";
+        filterCatalogStatus = "";
+        currentPage = 1;
+    }
+
     private void updateActiveFilterBar() {
+        if (btnFilterCatalog != null) {
+            btnFilterCatalog.setVisibility("katalog".equals(currentView) ? View.VISIBLE : View.GONE);
+        }
         if (layoutActiveFilter == null || tvActiveFilterLabel == null) return;
 
-        if ("genre".equals(currentView)) {
+        if ("katalog".equals(currentView) && isCatalogFilterActive()) {
+            layoutActiveFilter.setVisibility(View.VISIBLE);
+            tvActiveFilterLabel.setText(getCatalogFilterSummary());
+            if (btnClearHistoryAll != null) btnClearHistoryAll.setVisibility(View.GONE);
+        } else if ("genre".equals(currentView)) {
             layoutActiveFilter.setVisibility(View.VISIBLE);
             tvActiveFilterLabel.setText("GENRE: " + currentGenre.toUpperCase().replace("-", " "));
             if (btnClearHistoryAll != null) btnClearHistoryAll.setVisibility(View.GONE);
@@ -573,7 +877,7 @@ public class MainActivity extends Activity {
             if (btnClearHistoryAll != null) btnClearHistoryAll.setVisibility(View.VISIBLE);
         } else if ("favorit".equals(currentView)) {
             layoutActiveFilter.setVisibility(View.VISIBLE);
-            tvActiveFilterLabel.setText("FAVORIT SAYA");
+            tvActiveFilterLabel.setText("ANIME FAVORIT");
             if (btnClearHistoryAll != null) btnClearHistoryAll.setVisibility(View.GONE);
         } else {
             layoutActiveFilter.setVisibility(View.GONE);
@@ -587,6 +891,9 @@ public class MainActivity extends Activity {
         currentSeasonYear = 0;
         currentSearchQuery = "";
         etSearch.setText("");
+        if (!"katalog".equals(targetTab)) {
+            resetCatalogFilterState();
+        }
         switchView(targetTab);
         updateActiveFilterBar();
         showCommandOutput("> tatap$ Tampilan diatur ke: " + targetTab.toUpperCase(), false);
@@ -629,39 +936,15 @@ public class MainActivity extends Activity {
                 resetFiltersToTab("katalog");
                 break;
 
-            case "tahun":
-            case "year":
-                try {
-                    int y = Integer.parseInt(args.trim());
-                    if (y >= 1950 && y <= 2100) {
-                        catalogYear = y;
-                        currentPage = 1;
-                        switchView("katalog");
-                        showCommandOutput("> tatap$ :tahun " + y + " [Filter Tahun Diterapkan]", false);
-                    } else {
-                        showCommandOutput("> tatap$ :tahun [Gagal: tahun di luar rentang wajar]", true);
-                    }
-                } catch (Exception e) {
-                    showCommandOutput("> tatap$ Format: :tahun <YYYY> (contoh: :tahun 2024)", true);
-                }
-                break;
-
             case "jadwal":
             case "schedule":
-                if (!TvFocusHelper.isTv(this)) {
-                    if (!args.isEmpty()) {
-                        if (args.equalsIgnoreCase("kemarin") || args.equalsIgnoreCase("yesterday")) {
-                            currentScheduleDay = "yesterday";
-                        } else if (args.equalsIgnoreCase("besok") || args.equalsIgnoreCase("tomorrow")) {
-                            currentScheduleDay = "tomorrow";
-                        } else {
-                            currentScheduleDay = "today";
-                        }
-                    }
-                    resetFiltersToTab("jadwal");
+                if (!args.isEmpty()) {
+                    String d = parseScheduleDayArg(args);
+                    if (d != null) currentScheduleDay = d;
                 } else {
-                    showCommandOutput("> tatap$ Fitur Jadwal hanya tersedia di versi Mobile.", true);
+                    currentScheduleDay = "today";
                 }
+                resetFiltersToTab("jadwal");
                 break;
 
             case "genre":
@@ -670,6 +953,11 @@ public class MainActivity extends Activity {
                 } else {
                     setGenreFilter(args);
                 }
+                break;
+
+            case "filter":
+                showCommandOutput("> tatap$ :filter [Membuka Filter Katalog]", false);
+                showCatalogFilterDialog();
                 break;
 
             case "cari":
@@ -738,15 +1026,15 @@ public class MainActivity extends Activity {
                 if (args.equalsIgnoreCase("clear") || args.equalsIgnoreCase("hapus") || args.equalsIgnoreCase("reset")) {
                     clearWatchHistory();
                 } else {
-                    switchView("riwayat");
-                    showCommandOutput("> tatap$ :riwayat [Menampilkan Riwayat Tontonan]", false);
+                    resetFiltersToTab("riwayat");
                 }
                 break;
 
             case "favorit":
-            case "fav":
+            case "bookmark":
+            case "bookmarks":
                 switchView("favorit");
-                showCommandOutput("> tatap$ :favorit [Menampilkan Daftar Favorit]", false);
+                showCommandOutput("> tatap$ :favorit [Menampilkan Anime Favorit]", false);
                 break;
 
             case "logs":
@@ -759,10 +1047,65 @@ public class MainActivity extends Activity {
                 checkForUpdates(true);
                 break;
 
+            case "haptic":
+            case "getar":
+                handleHapticCommand(args);
+                break;
+
             default:
                 showCommandOutput("> tatap$ Perintah tidak dikenal: :" + cmd + " (Ketik :help)", true);
                 break;
         }
+    }
+
+    private void handleHapticCommand(String args) {
+        SharedPreferences sp = getSharedPreferences("tatap_player_prefs", MODE_PRIVATE);
+        String trimmed = (args != null) ? args.trim().toLowerCase() : "";
+
+        if (trimmed.startsWith("scene") || trimmed.startsWith("adegan")) {
+            String sceneSub = trimmed.replaceFirst("^(scene|adegan)\\s*", "");
+            boolean currentScene = sp.getBoolean("pref_scene_haptic", false);
+            boolean targetScene;
+            if ("on".equals(sceneSub) || "aktif".equals(sceneSub) || "1".equals(sceneSub)) {
+                targetScene = true;
+            } else if ("off".equals(sceneSub) || "mati".equals(sceneSub) || "0".equals(sceneSub)) {
+                targetScene = false;
+            } else {
+                targetScene = !currentScene;
+            }
+            sp.edit().putBoolean("pref_scene_haptic", targetScene).apply();
+            if (targetScene && btnToggleMenu != null) {
+                HapticHelper.performHeavyClick(btnToggleMenu);
+            }
+            String stScene = targetScene ? "AKTIF" : "MATI";
+            showCommandOutput("> tatap$ :haptic scene " + (targetScene ? "on" : "off") + " [Getaran Adegan Audio: " + stScene + "]", false);
+            Toast.makeText(this, "Getaran Adegan Audio: " + (targetScene ? "Aktif" : "Mati"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if ("status".equals(trimmed)) {
+            boolean uiHaptic = sp.getBoolean("pref_general_haptic", sp.getBoolean("pref_haptic", true));
+            boolean sceneHaptic = sp.getBoolean("pref_scene_haptic", false);
+            showCommandOutput("> tatap$ [STATUS HAPTIK] UI: " + (uiHaptic ? "AKTIF" : "MATI") + " | Adegan Audio: " + (sceneHaptic ? "AKTIF" : "MATI"), false);
+            return;
+        }
+
+        boolean current = sp.getBoolean("pref_general_haptic", sp.getBoolean("pref_haptic", true));
+        boolean target;
+        if ("on".equalsIgnoreCase(trimmed) || "aktif".equalsIgnoreCase(trimmed) || "1".equals(trimmed)) {
+            target = true;
+        } else if ("off".equalsIgnoreCase(trimmed) || "mati".equalsIgnoreCase(trimmed) || "0".equals(trimmed)) {
+            target = false;
+        } else {
+            target = !current;
+        }
+        sp.edit().putBoolean("pref_general_haptic", target).putBoolean("pref_haptic", target).apply();
+        if (target && btnToggleMenu != null) {
+            HapticHelper.performHeavyClick(btnToggleMenu);
+        }
+        String statusStr = target ? "AKTIF" : "MATI";
+        showCommandOutput("> tatap$ :haptic " + (target ? "on" : "off") + " [Getaran Sentuh UI: " + statusStr + "]", false);
+        Toast.makeText(this, "Getaran Sentuh UI: " + (target ? "Aktif" : "Mati"), Toast.LENGTH_SHORT).show();
     }
 
     private void handleSeasonFilterCommand(String[] parts) {
@@ -807,10 +1150,7 @@ public class MainActivity extends Activity {
         Dialog dialog = new Dialog(this);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         dialog.setContentView(R.layout.dialog_genre_selector);
-        if (dialog.getWindow() != null) {
-            dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            dialog.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
+        setupDialogWindowBounds(dialog);
 
         EditText etFilter = dialog.findViewById(R.id.et_filter_genre);
         ProgressBar pbGenre = dialog.findViewById(R.id.pb_genre_loading);
@@ -893,22 +1233,160 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    private void showCatalogFilterDialog() {
+        Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dialog.setContentView(R.layout.dialog_catalog_filter);
+        setupDialogWindowBounds(dialog);
+
+        final String[] tempSort = new String[]{filterCatalogSort};
+        final String[] tempYear = new String[]{filterCatalogYear};
+        final String[] tempSeason = new String[]{filterCatalogSeason};
+        final String[] tempMonth = new String[]{filterCatalogMonth};
+        final String[] tempType = new String[]{filterCatalogType};
+        final String[] tempStatus = new String[]{filterCatalogStatus};
+
+        interface ChipSelectAction {
+            void onSelect(String val);
+        }
+
+        class ChipGroupHelper {
+            void bind(int[] ids, String[] values, String current, ChipSelectAction action) {
+                for (int i = 0; i < ids.length; i++) {
+                    final int idx = i;
+                    TextView chip = dialog.findViewById(ids[i]);
+                    if (chip == null) continue;
+                    boolean selected = values[i].equals(current);
+                    chip.setBackgroundResource(selected ? R.drawable.bg_chip_selected : R.drawable.bg_tab_inactive);
+                    chip.setTextColor(selected ? 0xFFFFFFFF : 0xFF8892B0);
+                    if (chip.getCompoundDrawables()[0] != null) {
+                        chip.setCompoundDrawableTintList(android.content.res.ColorStateList.valueOf(selected ? 0xFFFFFFFF : 0xFF8892B0));
+                    }
+                    chip.setOnClickListener(v -> {
+                        for (int j = 0; j < ids.length; j++) {
+                            TextView c = dialog.findViewById(ids[j]);
+                            if (c != null) {
+                                boolean nowSel = (j == idx);
+                                c.setBackgroundResource(nowSel ? R.drawable.bg_chip_selected : R.drawable.bg_tab_inactive);
+                                c.setTextColor(nowSel ? 0xFFFFFFFF : 0xFF8892B0);
+                                if (c.getCompoundDrawables()[0] != null) {
+                                    c.setCompoundDrawableTintList(android.content.res.ColorStateList.valueOf(nowSel ? 0xFFFFFFFF : 0xFF8892B0));
+                                }
+                            }
+                        }
+                        action.onSelect(values[idx]);
+                    });
+                    TvFocusHelper.attachFocusScale(chip, 1.05f, 3f);
+                }
+            }
+        }
+        ChipGroupHelper helper = new ChipGroupHelper();
+
+        // 1. Sort
+        int[] sortIds = new int[]{
+            R.id.chip_sort_pop, R.id.chip_sort_score, R.id.chip_sort_latest,
+            R.id.chip_sort_trending, R.id.chip_sort_az, R.id.chip_sort_fav
+        };
+        String[] sortVals = new String[]{"popularity", "score", "latest", "trending", "az", "most_favorite"};
+        helper.bind(sortIds, sortVals, tempSort[0], val -> tempSort[0] = val);
+
+        // 2. Year
+        int[] yearIds = new int[]{
+            R.id.chip_year_all, R.id.chip_year_2026, R.id.chip_year_2025, R.id.chip_year_2024,
+            R.id.chip_year_2023, R.id.chip_year_2022, R.id.chip_year_2021, R.id.chip_year_2020,
+            R.id.chip_year_2015_2019, R.id.chip_year_2010_2014, R.id.chip_year_2000_2009, R.id.chip_year_classic
+        };
+        String[] yearVals = new String[]{
+            "", "2026", "2025", "2024", "2023", "2022", "2021", "2020",
+            "2015-2019", "2010-2014", "2000-2009", "<2000"
+        };
+        helper.bind(yearIds, yearVals, tempYear[0], val -> tempYear[0] = val);
+
+        // 3. Season
+        int[] seasonIds = new int[]{
+            R.id.chip_season_all, R.id.chip_season_spring, R.id.chip_season_summer,
+            R.id.chip_season_fall, R.id.chip_season_winter
+        };
+        String[] seasonVals = new String[]{"", "spring", "summer", "fall", "winter"};
+        helper.bind(seasonIds, seasonVals, tempSeason[0], val -> tempSeason[0] = val);
+
+        // 4. Month
+        int[] monthIds = new int[]{
+            R.id.chip_month_all, R.id.chip_month_1, R.id.chip_month_2, R.id.chip_month_3,
+            R.id.chip_month_4, R.id.chip_month_5, R.id.chip_month_6, R.id.chip_month_7,
+            R.id.chip_month_8, R.id.chip_month_9, R.id.chip_month_10, R.id.chip_month_11, R.id.chip_month_12
+        };
+        String[] monthVals = new String[]{"", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"};
+        helper.bind(monthIds, monthVals, tempMonth[0], val -> tempMonth[0] = val);
+
+        // 5. Type
+        int[] typeIds = new int[]{
+            R.id.chip_type_all, R.id.chip_type_tv, R.id.chip_type_movie,
+            R.id.chip_type_ova, R.id.chip_type_ona, R.id.chip_type_special
+        };
+        String[] typeVals = new String[]{"", "tv", "movie", "ova", "ona", "special"};
+        helper.bind(typeIds, typeVals, tempType[0], val -> tempType[0] = val);
+
+        // 6. Status
+        int[] statusIds = new int[]{
+            R.id.chip_status_all, R.id.chip_status_airing, R.id.chip_status_completed
+        };
+        String[] statusVals = new String[]{"", "releasing", "completed"};
+        helper.bind(statusIds, statusVals, tempStatus[0], val -> tempStatus[0] = val);
+
+        // Action Buttons
+        View btnClose = dialog.findViewById(R.id.btn_close_catalog_dialog);
+        View btnReset = dialog.findViewById(R.id.btn_reset_catalog_filter);
+        View btnApply = dialog.findViewById(R.id.btn_apply_catalog_filter);
+
+        if (btnClose != null) {
+            btnClose.setOnClickListener(v -> dialog.dismiss());
+            TvFocusHelper.attachFocusScale(btnClose, 1.1f, 4f);
+        }
+
+        if (btnReset != null) {
+            btnReset.setOnClickListener(v -> {
+                dialog.dismiss();
+                resetCatalogFilterState();
+                currentView = "katalog";
+                updateTabButtons();
+                updateActiveFilterBar();
+                showCommandOutput("> tatap$ Filter katalog direset ke Terpopuler", false);
+                fetchData();
+            });
+            TvFocusHelper.attachFocusScale(btnReset, 1.05f, 4f);
+        }
+
+        if (btnApply != null) {
+            btnApply.setOnClickListener(v -> {
+                dialog.dismiss();
+                filterCatalogSort = tempSort[0];
+                filterCatalogYear = tempYear[0];
+                filterCatalogSeason = tempSeason[0];
+                filterCatalogMonth = tempMonth[0];
+                filterCatalogType = tempType[0];
+                filterCatalogStatus = tempStatus[0];
+                currentPage = 1;
+                currentView = "katalog";
+                updateTabButtons();
+                updateActiveFilterBar();
+                showCommandOutput("> tatap$ " + getCatalogFilterSummary() + " [Diterapkan]", false);
+                fetchData();
+            });
+            TvFocusHelper.attachFocusScale(btnApply, 1.05f, 4f);
+        }
+
+        dialog.show();
+    }
+
     private void showCommandHelpDialog() {
         Dialog dialog = new Dialog(this);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         dialog.setContentView(R.layout.dialog_command_help);
-        if (dialog.getWindow() != null) {
-            dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            dialog.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
+        setupDialogWindowBounds(dialog);
 
         Button btnClose = dialog.findViewById(R.id.btn_close_help_dialog);
         btnClose.setOnClickListener(v -> dialog.dismiss());
-
-        dialog.findViewById(R.id.cmd_item_musim).setOnClickListener(v -> {
-            dialog.dismiss();
-            resetFiltersToTab("musim");
-        });
 
         dialog.findViewById(R.id.cmd_item_season).setOnClickListener(v -> {
             dialog.dismiss();
@@ -916,21 +1394,6 @@ public class MainActivity extends Activity {
             etSearch.setSelection(etSearch.getText().length());
             etSearch.requestFocus();
             showCommandOutput("> tatap$ Silakan tentukan musim & tahun lalu tekan Enter", false);
-        });
-
-        dialog.findViewById(R.id.cmd_item_genre).setOnClickListener(v -> {
-            dialog.dismiss();
-            showGenreSelectorDialog();
-        });
-
-        dialog.findViewById(R.id.cmd_item_airing).setOnClickListener(v -> {
-            dialog.dismiss();
-            resetFiltersToTab("airing");
-        });
-
-        dialog.findViewById(R.id.cmd_item_katalog).setOnClickListener(v -> {
-            dialog.dismiss();
-            resetFiltersToTab("katalog");
         });
 
         dialog.findViewById(R.id.cmd_item_source).setOnClickListener(v -> {
@@ -987,30 +1450,33 @@ public class MainActivity extends Activity {
             showTranslateLogsDialog();
         });
 
-        View itemRiwayat = dialog.findViewById(R.id.cmd_item_riwayat);
-        if (itemRiwayat != null) {
-            itemRiwayat.setOnClickListener(v -> {
-                dialog.dismiss();
-                switchView("riwayat");
-            });
-        }
+        View itemHaptic = dialog.findViewById(R.id.cmd_item_haptic);
+        if (itemHaptic != null) {
+            TextView tvBadge = dialog.findViewById(R.id.tv_haptic_badge);
+            TextView tvDesc = dialog.findViewById(R.id.tv_haptic_desc);
+            SharedPreferences sp = getSharedPreferences("tatap_player_prefs", MODE_PRIVATE);
+            Runnable updateHapticUI = () -> {
+                boolean isEnabled = sp.getBoolean("pref_general_haptic", sp.getBoolean("pref_haptic", true));
+                if (tvBadge != null) {
+                    tvBadge.setText(isEnabled ? "AKTIF" : "MATI");
+                    tvBadge.setTextColor(isEnabled ? 0xFF38BDF8 : 0xFFEF4444);
+                }
+                if (tvDesc != null) {
+                    tvDesc.setText("Umpan balik getaran sentuh UI (" + (isEnabled ? "AKTIF" : "MATI") + " - ketuk untuk beralih). Adegan audio: :haptic scene");
+                }
+            };
+            updateHapticUI.run();
 
-        View itemFavorit = dialog.findViewById(R.id.cmd_item_favorit);
-        if (itemFavorit != null) {
-            itemFavorit.setOnClickListener(v -> {
-                dialog.dismiss();
-                switchView("favorit");
-            });
-        }
-
-        View itemTahun = dialog.findViewById(R.id.cmd_item_tahun);
-        if (itemTahun != null) {
-            itemTahun.setOnClickListener(v -> {
-                dialog.dismiss();
-                etSearch.setText(":tahun ");
-                etSearch.setSelection(8);
-                etSearch.requestFocus();
-                showCommandOutput("> tatap$ Masukkan tahun rilis (contoh: 2024) lalu tekan Enter", false);
+            itemHaptic.setOnClickListener(v -> {
+                boolean current = sp.getBoolean("pref_general_haptic", sp.getBoolean("pref_haptic", true));
+                boolean newHaptic = !current;
+                sp.edit().putBoolean("pref_general_haptic", newHaptic).putBoolean("pref_haptic", newHaptic).apply();
+                updateHapticUI.run();
+                if (newHaptic) {
+                    HapticHelper.performHeavyClick(v);
+                }
+                showCommandOutput("> tatap$ :haptic " + (newHaptic ? "on" : "off") + " [Getaran Sentuh UI: " + (newHaptic ? "AKTIF" : "MATI") + "]", false);
+                Toast.makeText(this, "Getaran Sentuh UI: " + (newHaptic ? "Aktif" : "Mati"), Toast.LENGTH_SHORT).show();
             });
         }
 
@@ -1022,14 +1488,21 @@ public class MainActivity extends Activity {
             });
         }
 
+        View itemClear = dialog.findViewById(R.id.cmd_item_clear);
+        if (itemClear != null) {
+            itemClear.setOnClickListener(v -> {
+                dialog.dismiss();
+                resetFiltersToTab("musim");
+            });
+        }
+
         int[] cmdItemIds = new int[]{
             R.id.btn_close_help_dialog,
-            R.id.cmd_item_musim, R.id.cmd_item_season, R.id.cmd_item_genre,
-            R.id.cmd_item_airing, R.id.cmd_item_katalog, R.id.cmd_item_source,
+            R.id.cmd_item_season, R.id.cmd_item_source,
             R.id.cmd_item_ping, R.id.cmd_item_ai, R.id.cmd_item_apikey,
             R.id.cmd_item_gemini, R.id.cmd_item_groq, R.id.cmd_item_ollama,
-            R.id.cmd_item_model, R.id.cmd_item_logs, R.id.cmd_item_riwayat,
-            R.id.cmd_item_favorit, R.id.cmd_item_tahun, R.id.cmd_item_update, R.id.cmd_item_clear
+            R.id.cmd_item_model, R.id.cmd_item_logs,
+            R.id.cmd_item_haptic, R.id.cmd_item_update, R.id.cmd_item_clear
         };
         for (int id : cmdItemIds) {
             View item = dialog.findViewById(id);
@@ -1042,83 +1515,17 @@ public class MainActivity extends Activity {
     }
 
     private void checkForUpdates(boolean manualTrigger) {
-        if (manualTrigger) {
-            showCommandOutput("> tatap$ Memeriksa pembaruan rilis Tatap...", false);
-            Toast.makeText(this, "Memeriksa pembaruan rilis...", Toast.LENGTH_SHORT).show();
+        AppUpdateManager.getInstance().checkUpdate(this, (msg, isError) -> {
+            showCommandOutput(msg, isError);
+        });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == AppUpdateManager.REQUEST_CODE_INSTALL_PERMISSION) {
+            AppUpdateManager.getInstance().onInstallPermissionResult(this);
         }
-
-        new Thread(() -> {
-            try {
-                HttpURLConnection conn = (HttpURLConnection) new URL("http://127.0.0.1:8767/api/update/check").openConnection();
-                conn.setConnectTimeout(8000);
-                conn.setReadTimeout(10000);
-                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) sb.append(line);
-                reader.close();
-
-                JSONObject res = new JSONObject(sb.toString());
-                if (res.optBoolean("success")) {
-                    JSONObject data = res.getJSONObject("data");
-                    boolean hasUpdate = data.optBoolean("has_update", false);
-                    String currentVer = data.optString("current_version", "2.2.2");
-                    String latestVer = data.optString("latest_version", currentVer);
-                    String notes = data.optString("notes", "");
-                    String releaseUrl = data.optString("release_url", "https://github.com/asfaraguest/tatap/releases");
-                    JSONObject assets = data.optJSONObject("assets");
-                    String apkDownloadUrl = "";
-                    if (assets != null) {
-                        if (TvFocusHelper.isTv(MainActivity.this)) {
-                            apkDownloadUrl = assets.optString("android_tv", "");
-                        }
-                        if (apkDownloadUrl.isEmpty()) {
-                            apkDownloadUrl = assets.optString("android", "");
-                        }
-                    }
-                    final String targetDownloadUrl = (!apkDownloadUrl.isEmpty()) ? apkDownloadUrl : releaseUrl;
-
-                    runOnUiThread(() -> {
-                        if (hasUpdate) {
-                            showCommandOutput("> tatap$ Pembaruan rilis v" + latestVer + " tersedia!", false);
-                            new AlertDialog.Builder(MainActivity.this)
-                                    .setTitle("Pembaruan Tersedia (v" + latestVer + ")")
-                                    .setMessage("Versi saat ini: v" + currentVer + "\nVersi terbaru: v" + latestVer + "\n\nCatatan Rilis:\n" + (notes.isEmpty() ? "-" : notes))
-                                    .setPositiveButton("Unduh APK", (d, which) -> {
-                                        try {
-                                            Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(targetDownloadUrl));
-                                            startActivity(browserIntent);
-                                        } catch (Exception e) {
-                                            Toast.makeText(MainActivity.this, "Gagal membuka tautan: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-                                        }
-                                    })
-                                    .setNegativeButton("Nanti", null)
-                                    .show();
-                        } else {
-                            if (manualTrigger) {
-                                showCommandOutput("> tatap$ Tatap v" + currentVer + " adalah versi terbaru.", false);
-                                Toast.makeText(MainActivity.this, "Tatap v" + currentVer + " sudah versi terbaru!", Toast.LENGTH_SHORT).show();
-                            }
-                        }
-                    });
-                } else {
-                    String msg = res.optString("message", "Gagal memeriksa pembaruan");
-                    runOnUiThread(() -> {
-                        if (manualTrigger) {
-                            showCommandOutput("> tatap$ Gagal memeriksa pembaruan: " + msg, true);
-                            Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show();
-                        }
-                    });
-                }
-            } catch (Exception e) {
-                runOnUiThread(() -> {
-                    if (manualTrigger) {
-                        showCommandOutput("> tatap$ Gagal memeriksa pembaruan: " + e.getMessage(), true);
-                        Toast.makeText(MainActivity.this, "Koneksi pembaruan gagal: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-                    }
-                });
-            }
-        }).start();
     }
 
     private String maskKey(String key) {
@@ -1242,10 +1649,7 @@ public class MainActivity extends Activity {
         Dialog dialog = new Dialog(this);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         dialog.setContentView(R.layout.dialog_translate_logs);
-        if (dialog.getWindow() != null) {
-            dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            dialog.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
+        setupDialogWindowBounds(dialog);
 
         TextView tvLogs = dialog.findViewById(R.id.tv_translate_logs_content);
         Button btnClose = dialog.findViewById(R.id.btn_close_logs_dialog);
@@ -1296,10 +1700,7 @@ public class MainActivity extends Activity {
         Dialog dialog = new Dialog(this);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         dialog.setContentView(R.layout.dialog_ai_settings);
-        if (dialog.getWindow() != null) {
-            dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            dialog.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
+        setupDialogWindowBounds(dialog);
 
         TextView tvKey = dialog.findViewById(R.id.tv_ai_status_key);
         TextView tvModel = dialog.findViewById(R.id.tv_ai_status_model);
@@ -1475,6 +1876,7 @@ public class MainActivity extends Activity {
 
     private void checkBackendStatus() {
         showCommandOutput("> tatap$ :ping [Memeriksa 127.0.0.1:8767...]", false);
+        updateBackendStatusUI(0);
         new Thread(() -> {
             try {
                 long start = System.currentTimeMillis();
@@ -1485,22 +1887,16 @@ public class MainActivity extends Activity {
                 conn.disconnect();
                 runOnUiThread(() -> {
                     if (code == 200) {
-                        tvStatusBadge.setText("● ONLINE");
-                        tvStatusBadge.setTextColor(0xFF10B981);
-                        tvStatusBadge.setBackgroundResource(R.drawable.bg_status_pill);
+                        updateBackendStatusUI(1);
                         showCommandOutput("> tatap$ [PONG] Backend ONLINE (127.0.0.1:8767 OK, " + elapsed + "ms)", false);
                     } else {
-                        tvStatusBadge.setText("● OFFLINE");
-                        tvStatusBadge.setTextColor(0xFFEF4444);
-                        tvStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_err);
+                        updateBackendStatusUI(2);
                         showCommandOutput("> tatap$ [WARN] Backend responded HTTP " + code, true);
                     }
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {
-                    tvStatusBadge.setText("● OFFLINE");
-                    tvStatusBadge.setTextColor(0xFFEF4444);
-                    tvStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_err);
+                    updateBackendStatusUI(2);
                     showCommandOutput("> tatap$ [OFFLINE] Backend tidak terhubung: " + e.getMessage(), true);
                 });
             }
@@ -1515,48 +1911,98 @@ public class MainActivity extends Activity {
         fetchData();
     }
 
+    private void setTabAppearance(TextView tab, boolean active) {
+        if (tab == null) return;
+        tab.setBackgroundResource(active ? R.drawable.bg_tab_active : R.drawable.bg_tab_inactive);
+        int color = active ? 0xFFFFFFFF : 0xFF8892B0;
+        tab.setTextColor(color);
+        if (TvFocusHelper.isTv(this)) {
+            updateTvTabSpannable(tab, active);
+        } else {
+            tab.setCompoundDrawableTintList(android.content.res.ColorStateList.valueOf(color));
+        }
+    }
+
+    private int getTabIconRes(TextView tab) {
+        if (tab == null) return 0;
+        int id = tab.getId();
+        if (id == R.id.btn_tab_musim) return R.drawable.ic_tab_season;
+        if (id == R.id.btn_tab_airing) return R.drawable.ic_tab_airing;
+        if (id == R.id.btn_tab_jadwal) return R.drawable.ic_tab_schedule;
+        if (id == R.id.btn_tab_riwayat) return R.drawable.ic_tab_history;
+        if (id == R.id.btn_tab_favorit) return R.drawable.ic_tab_favorite;
+        if (id == R.id.btn_tab_katalog) return R.drawable.ic_tab_catalog;
+        if (id == R.id.btn_tab_genre) return R.drawable.ic_tab_genre;
+        return 0;
+    }
+
+    private String getTabTitleString(TextView tab) {
+        if (tab == null) return "";
+        int id = tab.getId();
+        if (id == R.id.btn_tab_musim) return "Musim Ini";
+        if (id == R.id.btn_tab_airing) return "Masih Tayang";
+        if (id == R.id.btn_tab_jadwal) return "Jadwal";
+        if (id == R.id.btn_tab_riwayat) return "Riwayat";
+        if (id == R.id.btn_tab_favorit) return "Favorit";
+        if (id == R.id.btn_tab_katalog) return "Katalog";
+        if (id == R.id.btn_tab_genre) return "Genre";
+        CharSequence txt = tab.getText();
+        return txt != null ? txt.toString().trim() : "";
+    }
+
+    private void updateTvTabSpannable(TextView tab, boolean active) {
+        if (tab == null) return;
+        int iconRes = getTabIconRes(tab);
+        String title = getTabTitleString(tab);
+        if (iconRes == 0 || title.isEmpty()) return;
+
+        Drawable icon = ContextCompat.getDrawable(this, iconRes);
+        if (icon == null) return;
+
+        icon = DrawableCompat.wrap(icon.mutate());
+        int tint = active ? 0xFFFFFFFF : 0xFF8892B0;
+        DrawableCompat.setTint(icon, tint);
+
+        int iconSize = dpToPx(16);
+        icon.setBounds(0, 0, iconSize, iconSize);
+
+        String fullText = "   " + title;
+        SpannableString ss = new SpannableString(fullText);
+        ss.setSpan(new TvFocusHelper.CenteredImageSpan(icon), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+
+        tab.setText(ss);
+    }
+
     private void updateTabButtons() {
         boolean isMusim = "musim".equals(currentView);
         boolean isAiring = "airing".equals(currentView);
-        boolean isKatalog = "katalog".equals(currentView);
         boolean isJadwal = "jadwal".equals(currentView);
         boolean isRiwayat = "riwayat".equals(currentView);
         boolean isFavorit = "favorit".equals(currentView);
+        boolean isKatalog = "katalog".equals(currentView);
+        boolean isGenre = "genre".equals(currentView);
 
-        btnTabMusim.setBackgroundResource(isMusim ? R.drawable.bg_tab_active : R.drawable.bg_tab_inactive);
-        btnTabMusim.setTextColor(isMusim ? 0xFFFFFFFF : 0xFF8892B0);
+        setTabAppearance(btnTabMusim, isMusim);
+        setTabAppearance(btnTabAiring, isAiring);
+        setTabAppearance(btnTabJadwal, isJadwal);
+        setTabAppearance(btnTabRiwayat, isRiwayat);
+        setTabAppearance(btnTabFavorit, isFavorit);
+        setTabAppearance(btnTabKatalog, isKatalog);
+        setTabAppearance(btnTabGenre, isGenre);
 
-        btnTabAiring.setBackgroundResource(isAiring ? R.drawable.bg_tab_active : R.drawable.bg_tab_inactive);
-        btnTabAiring.setTextColor(isAiring ? 0xFFFFFFFF : 0xFF8892B0);
-
-        btnTabKatalog.setBackgroundResource(isKatalog ? R.drawable.bg_tab_active : R.drawable.bg_tab_inactive);
-        btnTabKatalog.setTextColor(isKatalog ? 0xFFFFFFFF : 0xFF8892B0);
-
-        if (btnTabJadwal != null && !TvFocusHelper.isTv(this)) {
-            btnTabJadwal.setBackgroundResource(isJadwal ? R.drawable.bg_tab_active : R.drawable.bg_tab_inactive);
-            btnTabJadwal.setTextColor(isJadwal ? 0xFFFFFFFF : 0xFF8892B0);
+        if (btnTabJadwal != null && TvFocusHelper.isTv(this)) {
+            btnTabJadwal.setNextFocusDownId(isJadwal ? R.id.btn_day_senin : R.id.rv_anime_grid);
         }
 
         if (layoutScheduleDays != null) {
-            layoutScheduleDays.setVisibility(isJadwal && !TvFocusHelper.isTv(this) ? View.VISIBLE : View.GONE);
+            layoutScheduleDays.setVisibility(isJadwal ? View.VISIBLE : View.GONE);
             if (isJadwal) {
                 updateScheduleDayButtons();
             }
         }
 
-        if (layoutKatalogFilter != null) {
-            layoutKatalogFilter.setVisibility(isKatalog ? View.VISIBLE : View.GONE);
-            if (isKatalog) {
-                updateKatalogFilterUi();
-            }
-        }
-
         if (btnHeaderHistory != null) {
             btnHeaderHistory.setTextColor(isRiwayat ? 0xFF38BDF8 : 0xFF94A3B8);
-        }
-
-        if (btnHeaderFavorites != null) {
-            btnHeaderFavorites.setTextColor(isFavorit ? 0xFFFACC15 : 0xFF94A3B8);
         }
     }
 
@@ -1567,92 +2013,83 @@ public class MainActivity extends Activity {
     }
 
     private void updateScheduleDayButtons() {
-        if (btnDayYesterday == null || btnDayToday == null || btnDayTomorrow == null) return;
-        boolean isYesterday = "yesterday".equals(currentScheduleDay);
-        boolean isToday = "today".equals(currentScheduleDay);
-        boolean isTomorrow = "tomorrow".equals(currentScheduleDay);
-
-        btnDayYesterday.setBackgroundResource(isYesterday ? R.drawable.bg_tab_active : R.drawable.bg_header_button);
-        btnDayYesterday.setTextColor(isYesterday ? 0xFFFFFFFF : 0xFF8892B0);
-
-        btnDayToday.setBackgroundResource(isToday ? R.drawable.bg_tab_active : R.drawable.bg_header_button);
-        btnDayToday.setTextColor(isToday ? 0xFFFFFFFF : 0xFF8892B0);
-
-        btnDayTomorrow.setBackgroundResource(isTomorrow ? R.drawable.bg_tab_active : R.drawable.bg_header_button);
-        btnDayTomorrow.setTextColor(isTomorrow ? 0xFFFFFFFF : 0xFF8892B0);
-    }
-
-    private void buildYearChips() {
-        if (layoutYearChips == null) return;
-        layoutYearChips.removeAllViews();
-        yearChipViews.clear();
-        yearChipValues.clear();
-        int currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR);
-        addYearChip(0, "Semua");
-        for (int y = currentYear; y >= 1990; y--) {
-            addYearChip(y, String.valueOf(y));
+        TextView[] chips = {btnDaySenin, btnDaySelasa, btnDayRabu, btnDayKamis, btnDayJumat, btnDaySabtu, btnDayMinggu};
+        String[] keys = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"};
+        String activeKey = currentScheduleDay;
+        if ("today".equals(activeKey) && !currentScheduleActualDay.isEmpty()) {
+            activeKey = currentScheduleActualDay;
         }
-        updateKatalogFilterUi();
-    }
 
-    private void addYearChip(int year, String label) {
-        TextView chip = new TextView(this);
-        chip.setText(label);
-        chip.setTextSize(11f);
-        chip.setTypeface(chip.getTypeface(), android.graphics.Typeface.BOLD);
-        chip.setTextColor(0xFF8892B0);
-        chip.setBackgroundResource(R.drawable.bg_header_button);
-        chip.setGravity(android.view.Gravity.CENTER);
-        float density = getResources().getDisplayMetrics().density;
-        int padH = (int) (12 * density);
-        chip.setPadding(padH, 0, padH, 0);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, (int) (30 * density));
-        lp.setMarginEnd((int) (4 * density));
-        chip.setLayoutParams(lp);
-        chip.setClickable(true);
-        chip.setFocusable(true);
-        chip.setOnClickListener(v -> setCatalogYear(year));
-        TvFocusHelper.attachFocusScale(chip, 1.1f, 6f);
-        yearChipViews.add(chip);
-        yearChipValues.add(year);
-        layoutYearChips.addView(chip);
-    }
-
-    private void setCatalogSort(String sort) {
-        catalogSort = sort;
-        currentPage = 1;
-        updateKatalogFilterUi();
-        fetchData();
-    }
-
-    private void setCatalogYear(int year) {
-        catalogYear = year;
-        currentPage = 1;
-        updateKatalogFilterUi();
-        fetchData();
-    }
-
-    private void updateKatalogFilterUi() {
-        if (btnSortPopular != null) {
-            boolean pop = "popularity".equals(catalogSort);
-            btnSortPopular.setBackgroundResource(pop ? R.drawable.bg_tab_active : R.drawable.bg_header_button);
-            btnSortPopular.setTextColor(pop ? 0xFFFFFFFF : 0xFF8892B0);
+        TextView activeChip = null;
+        for (int i = 0; i < chips.length; i++) {
+            TextView chip = chips[i];
+            if (chip == null) continue;
+            boolean isActive = keys[i].equalsIgnoreCase(activeKey);
+            chip.setBackgroundResource(isActive ? R.drawable.bg_tab_active : R.drawable.bg_header_button);
+            chip.setTextColor(isActive ? 0xFFFFFFFF : 0xFF8892B0);
+            if (isActive) activeChip = chip;
         }
-        if (btnSortNewest != null) {
-            boolean newest = "latest".equals(catalogSort);
-            btnSortNewest.setBackgroundResource(newest ? R.drawable.bg_tab_active : R.drawable.bg_header_button);
-            btnSortNewest.setTextColor(newest ? 0xFFFFFFFF : 0xFF8892B0);
+
+        if (activeChip != null && layoutScheduleDays instanceof HorizontalScrollView) {
+            final TextView target = activeChip;
+            layoutScheduleDays.post(() -> {
+                int scrollX = target.getLeft() - dpToPx(20);
+                ((HorizontalScrollView) layoutScheduleDays).smoothScrollTo(Math.max(0, scrollX), 0);
+            });
         }
-        for (int i = 0; i < yearChipViews.size(); i++) {
-            TextView chip = yearChipViews.get(i);
-            boolean active = yearChipValues.get(i) == catalogYear;
-            chip.setBackgroundResource(active ? R.drawable.bg_tab_active : R.drawable.bg_header_button);
-            chip.setTextColor(active ? 0xFFFFFFFF : 0xFF8892B0);
+    }
+
+    private String getScheduleDayLabel(String key) {
+        if (key == null) return "Hari Ini";
+        switch (key.toLowerCase()) {
+            case "monday": case "senin": return "Senin";
+            case "tuesday": case "selasa": return "Selasa";
+            case "wednesday": case "rabu": return "Rabu";
+            case "thursday": case "kamis": return "Kamis";
+            case "friday": case "jumat": return "Jumat";
+            case "saturday": case "sabtu": return "Sabtu";
+            case "sunday": case "minggu": return "Minggu";
+            case "yesterday": case "kemarin": return "Kemarin";
+            case "tomorrow": case "besok": return "Besok";
+            default: return "Hari Ini";
         }
+    }
+
+    private String parseScheduleDayArg(String arg) {
+        if (arg == null) return "today";
+        String a = arg.trim().toLowerCase();
+        switch (a) {
+            case "senin": case "mon": case "monday": return "monday";
+            case "selasa": case "tue": case "tuesday": return "tuesday";
+            case "rabu": case "wed": case "wednesday": return "wednesday";
+            case "kamis": case "thu": case "thursday": return "thursday";
+            case "jumat": case "fri": case "friday": return "friday";
+            case "sabtu": case "sat": case "saturday": return "saturday";
+            case "minggu": case "sun": case "sunday": return "sunday";
+            case "kemarin": case "yesterday": return "yesterday";
+            case "besok": case "tomorrow": return "tomorrow";
+            case "hari ini": case "today": default: return "today";
+        }
+    }
+
+    private void activateSearchInput() {
+        if (etSearch == null) return;
+        etSearch.requestFocus();
+        showKeyboard();
+    }
+
+    private void showKeyboard() {
+        if (etSearch == null) return;
+        etSearch.post(() -> {
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.showSoftInput(etSearch, InputMethodManager.SHOW_FORCED);
+            }
+        });
     }
 
     private void hideKeyboard() {
+        if (etSearch == null) return;
         InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
         if (imm != null) {
             imm.hideSoftInputFromWindow(etSearch.getWindowToken(), 0);
@@ -1699,34 +2136,28 @@ public class MainActivity extends Activity {
             final boolean isReady = ready;
             if (isReady) {
                 runOnUiThread(() -> {
-                    tvStatusBadge.setText("● ONLINE");
-                    tvStatusBadge.setTextColor(0xFF10B981);
-                    tvStatusBadge.setBackgroundResource(R.drawable.bg_status_pill);
+                    updateBackendStatusUI(1);
                     fetchData();
                 });
             } else if (attempt < 45) { // Coba sampai ~22 detik
                 runOnUiThread(() -> {
                     if (attempt % 5 == 0 && attempt > 0) {
-                        tvStatusBadge.setText("● INIT " + (attempt * 2) + "%");
-                        tvStatusBadge.setTextColor(0xFFF59E0B);
-                        tvStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_warn);
+                        updateBackendStatusUI(0);
                     }
                 });
                 try { Thread.sleep(500); } catch (Exception ignored) {}
                 waitForServerAndLoadCatalog(attempt + 1);
             } else {
                 runOnUiThread(() -> {
-                    tvStatusBadge.setText("● OFFLINE");
-                    tvStatusBadge.setTextColor(0xFFEF4444);
-                    tvStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_err);
+                    updateBackendStatusUI(2);
                     showCommandOutput("> tatap$ Server butuh inisialisasi lebih lama. Ketuk badge status untuk mencoba ulang.", true);
-                    tvStatusBadge.setOnClickListener(v -> {
-                        tvStatusBadge.setText("● RETRYING...");
-                        tvStatusBadge.setTextColor(0xFFF59E0B);
-                        tvStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_warn);
-                        startEmbeddedBackend();
-                        waitForServerAndLoadCatalog(0);
-                    });
+                    if (btnStatusPower != null) {
+                        btnStatusPower.setOnClickListener(v -> {
+                            updateBackendStatusUI(0);
+                            startEmbeddedBackend();
+                            waitForServerAndLoadCatalog(0);
+                        });
+                    }
                     fetchData();
                 });
             }
@@ -1749,18 +2180,22 @@ public class MainActivity extends Activity {
             title = "Masih Tayang (Hal " + currentPage + ")";
             endpoint = "/api/seasonal?which=airing&page=" + currentPage;
         } else if ("katalog".equals(currentView)) {
-            String modeLabel = "latest".equals(catalogSort) ? "Terbaru" : "Populer";
-            if (catalogYear > 0) {
-                title = "Katalog " + modeLabel + " · " + catalogYear + " (Hal " + currentPage + ")";
-                endpoint = "/api/browse?sort=" + catalogSort + "&sy=" + catalogYear + "&ey=" + catalogYear + "&page=" + currentPage;
+            if (isCatalogFilterActive()) {
+                StringBuilder ep = new StringBuilder("/api/browse?sort=").append(URLEncoder.encode(filterCatalogSort));
+                if (!filterCatalogYear.isEmpty()) ep.append("&year=").append(URLEncoder.encode(filterCatalogYear));
+                if (!filterCatalogSeason.isEmpty()) ep.append("&season=").append(URLEncoder.encode(filterCatalogSeason));
+                if (!filterCatalogMonth.isEmpty()) ep.append("&month=").append(URLEncoder.encode(filterCatalogMonth));
+                if (!filterCatalogType.isEmpty()) ep.append("&type=").append(URLEncoder.encode(filterCatalogType));
+                if (!filterCatalogStatus.isEmpty()) ep.append("&status=").append(URLEncoder.encode(filterCatalogStatus));
+                ep.append("&page=").append(currentPage);
+                endpoint = ep.toString();
+                title = "Katalog Filter (Hal " + currentPage + ")";
             } else {
-                title = "Katalog " + modeLabel + " (Hal " + currentPage + ")";
-                endpoint = "/api/browse?sort=" + catalogSort + "&page=" + currentPage;
+                title = "Katalog Populer (Hal " + currentPage + ")";
+                endpoint = "/api/catalog?page=" + currentPage;
             }
         } else if ("jadwal".equals(currentView)) {
-            String dayLabel = "Hari Ini";
-            if ("yesterday".equals(currentScheduleDay)) dayLabel = "Kemarin";
-            else if ("tomorrow".equals(currentScheduleDay)) dayLabel = "Besok";
+            String dayLabel = getScheduleDayLabel(currentScheduleDay);
             title = "Jadwal Rilis (" + dayLabel + ")";
             endpoint = "/api/schedule?day=" + currentScheduleDay;
         } else if ("genre".equals(currentView)) {
@@ -1769,12 +2204,12 @@ public class MainActivity extends Activity {
         } else if ("season_filter".equals(currentView)) {
             title = "Musim: " + currentSeasonName.toUpperCase() + " " + currentSeasonYear + " (Hal " + currentPage + ")";
             endpoint = "/api/seasonal?season=" + URLEncoder.encode(currentSeasonName) + "&year=" + currentSeasonYear + "&page=" + currentPage;
-        } else if ("favorit".equals(currentView)) {
-            title = "Favorit Saya";
-            endpoint = "/api/favorites";
         } else if ("riwayat".equals(currentView)) {
             title = "Riwayat Tontonan";
             endpoint = "/api/history";
+        } else if ("favorit".equals(currentView)) {
+            title = "Anime Favorit";
+            endpoint = "/api/bookmarks";
         } else {
             title = "Hasil Pencarian: " + currentSearchQuery;
             endpoint = "/api/search?q=" + URLEncoder.encode(currentSearchQuery) + "&limit=24";
@@ -1784,6 +2219,23 @@ public class MainActivity extends Activity {
         if (layoutPagination != null) {
             layoutPagination.setVisibility("riwayat".equals(currentView) || "jadwal".equals(currentView) || "favorit".equals(currentView) ? View.GONE : View.VISIBLE);
         }
+
+        final String cacheKey = currentView + ":" + currentPage + ":" + currentGenre + ":" + currentSeasonName + ":" + currentSeasonYear + ":" + currentScheduleDay + ":" + filterCatalogSort + ":" + filterCatalogYear + ":" + filterCatalogSeason + ":" + filterCatalogMonth + ":" + filterCatalogType + ":" + filterCatalogStatus;
+        final boolean canCache = !"cari".equals(currentView) && !"riwayat".equals(currentView) && !"favorit".equals(currentView);
+
+        // 1. Cek In-Memory Cache untuk peralihan instan (<1ms)
+        if (canCache && (swipeRefreshLayout == null || !swipeRefreshLayout.isRefreshing())) {
+            TabCacheEntry cached = tabDataCache.get(cacheKey);
+            if (cached != null && !cached.isExpired()) {
+                renderAnimeData(cached.items, cached.count);
+                return;
+            }
+        }
+
+        // 2. Aktifkan animasi pemuatan data
+        showLoadingState("Memuat " + title + "...");
+
+        final int fetchToken = currentFetchToken.incrementAndGet();
 
         new Thread(() -> {
             try {
@@ -1796,6 +2248,11 @@ public class MainActivity extends Activity {
                 String line;
                 while ((line = reader.readLine()) != null) sb.append(line);
                 reader.close();
+
+                // Abaikan jika token sudah tidak mutakhir (mencegah race condition antar-tab)
+                if (fetchToken != currentFetchToken.get()) {
+                    return;
+                }
 
                 JSONObject res = new JSONObject(sb.toString());
                 if (res.optBoolean("success")) {
@@ -1815,64 +2272,38 @@ public class MainActivity extends Activity {
                     }
 
                     final int count = list.size();
-                    runOnUiThread(() -> {
-                        if (pbLoading != null) pbLoading.setVisibility(View.GONE);
-                        if (swipeRefreshLayout != null) swipeRefreshLayout.setRefreshing(false);
-                        tvItemCount.setText(count + " judul");
-                        adapter.setData(list);
-                        btnNextPage.setEnabled(count >= 10);
-                        btnNextPage.setAlpha(count >= 10 ? 1.0f : 0.4f);
-
-                        if (count == 0) {
-                            if (layoutPagination != null && currentPage == 1) {
-                                layoutPagination.setVisibility(View.GONE);
-                            }
-                            if (layoutEmptyState != null) {
-                                layoutEmptyState.setVisibility(View.VISIBLE);
-                                if ("riwayat".equals(currentView)) {
-                                    tvEmptyTitle.setText("Belum Ada Riwayat Tontonan");
-                                    tvEmptyDesc.setText("Anime yang Anda tonton akan otomatis tercatat di sini.");
-                                } else if ("jadwal".equals(currentView)) {
-                                    String dayLabel = "hari ini";
-                                    if ("yesterday".equals(currentScheduleDay)) dayLabel = "kemarin";
-                                    else if ("tomorrow".equals(currentScheduleDay)) dayLabel = "besok";
-                                    tvEmptyTitle.setText("Tidak Ada Jadwal Rilis");
-                                    tvEmptyDesc.setText("Tidak ada rilis anime untuk " + dayLabel + " yang tersedia di aplikasi.");
-                                } else if ("favorit".equals(currentView)) {
-                                    tvEmptyTitle.setText("Belum Ada Favorit");
-                                    tvEmptyDesc.setText("Tandai anime dengan tombol ★ di halaman detail untuk menyimpannya di sini.");
-                                } else {
-                                    tvEmptyTitle.setText("Tidak Ada Anime Ditemukan");
-                                    tvEmptyDesc.setText("Tidak ada judul anime yang cocok dengan filter atau pencarian ini.");
+                    if ("jadwal".equals(currentView)) {
+                        JSONObject dataObj = res.optJSONObject("data");
+                        if (dataObj != null) {
+                            String curDay = dataObj.optString("current_day", "");
+                            String dayName = dataObj.optString("day_name", "");
+                            boolean isToday = dataObj.optBoolean("is_today", false);
+                            if (!curDay.isEmpty()) currentScheduleActualDay = curDay;
+                            runOnUiThread(() -> {
+                                if (!dayName.isEmpty()) {
+                                    tvSectionTitle.setText("Jadwal Rilis (" + dayName + (isToday ? " · Hari Ini" : "") + ")");
                                 }
-                            }
-                            if (rvGrid != null) rvGrid.setVisibility(View.GONE);
-                        } else {
-                            if (layoutPagination != null && !"riwayat".equals(currentView) && !"jadwal".equals(currentView)) {
-                                layoutPagination.setVisibility(View.VISIBLE);
-                            }
-                            if (layoutEmptyState != null) layoutEmptyState.setVisibility(View.GONE);
-                            if (rvGrid != null) {
-                                rvGrid.setVisibility(View.VISIBLE);
-                                rvGrid.scrollToPosition(0);
-                                if (TvFocusHelper.isTv(MainActivity.this)) {
-                                    rvGrid.post(() -> {
-                                        RecyclerView.ViewHolder vh = rvGrid.findViewHolderForAdapterPosition(0);
-                                        if (vh != null && vh.itemView != null) {
-                                            vh.itemView.requestFocus();
-                                        } else {
-                                            rvGrid.requestFocus();
-                                        }
-                                    });
-                                }
-                            }
+                                updateScheduleDayButtons();
+                            });
                         }
+                    }
+
+                    if (canCache) {
+                        tabDataCache.put(cacheKey, new TabCacheEntry(list, count));
+                    }
+
+                    runOnUiThread(() -> {
+                        if (fetchToken != currentFetchToken.get()) return;
+                        renderAnimeData(list, count);
                     });
                 } else {
                     final String err = res.optString("error", "gagal memuat data");
                     runOnUiThread(() -> {
+                        if (fetchToken != currentFetchToken.get()) return;
+                        if (layoutLoadingState != null) layoutLoadingState.setVisibility(View.GONE);
                         if (pbLoading != null) pbLoading.setVisibility(View.GONE);
                         if (swipeRefreshLayout != null) swipeRefreshLayout.setRefreshing(false);
+                        if (rvGrid != null) rvGrid.setAlpha(1.0f);
                         showCommandOutput("> tatap$ [ERROR] " + err, true);
                         if (adapter.getItemCount() == 0) {
                             if (layoutPagination != null) layoutPagination.setVisibility(View.GONE);
@@ -1887,8 +2318,11 @@ public class MainActivity extends Activity {
                 }
             } catch (Exception e) {
                 runOnUiThread(() -> {
+                    if (fetchToken != currentFetchToken.get()) return;
+                    if (layoutLoadingState != null) layoutLoadingState.setVisibility(View.GONE);
                     if (pbLoading != null) pbLoading.setVisibility(View.GONE);
                     if (swipeRefreshLayout != null) swipeRefreshLayout.setRefreshing(false);
+                    if (rvGrid != null) rvGrid.setAlpha(1.0f);
                     showCommandOutput("> tatap$ [ERROR] Gagal terhubung: " + e.getMessage(), true);
                     if (adapter.getItemCount() == 0) {
                         if (layoutPagination != null) layoutPagination.setVisibility(View.GONE);
@@ -1902,6 +2336,61 @@ public class MainActivity extends Activity {
                 });
             }
         }).start();
+    }
+
+    private void renderAnimeData(List<JSONObject> list, int count) {
+        if (layoutLoadingState != null) layoutLoadingState.setVisibility(View.GONE);
+        if (pbLoading != null) pbLoading.setVisibility(View.GONE);
+        if (swipeRefreshLayout != null) swipeRefreshLayout.setRefreshing(false);
+        if (rvGrid != null) rvGrid.setAlpha(1.0f);
+        tvItemCount.setText(count + " judul");
+        adapter.setData(list);
+        btnNextPage.setEnabled(count >= 10);
+        btnNextPage.setAlpha(count >= 10 ? 1.0f : 0.4f);
+
+        if (count == 0) {
+            if (layoutPagination != null && currentPage == 1) {
+                layoutPagination.setVisibility(View.GONE);
+            }
+            if (layoutEmptyState != null) {
+                layoutEmptyState.setVisibility(View.VISIBLE);
+                if ("riwayat".equals(currentView)) {
+                    tvEmptyTitle.setText("Belum Ada Riwayat Tontonan");
+                    tvEmptyDesc.setText("Anime yang Anda tonton akan otomatis tercatat di sini.");
+                } else if ("favorit".equals(currentView)) {
+                    tvEmptyTitle.setText("Belum Ada Anime Favorit");
+                    tvEmptyDesc.setText("Tandai anime favorit Anda dengan menekan tombol + Favorit pada halaman detail.");
+                } else if ("jadwal".equals(currentView)) {
+                    String dayLabel = getScheduleDayLabel(currentScheduleDay);
+                    tvEmptyTitle.setText("Tidak Ada Jadwal Rilis");
+                    tvEmptyDesc.setText("Tidak ada rilis anime untuk hari " + dayLabel + " yang tersedia di aplikasi.");
+                } else {
+                    tvEmptyTitle.setText("Tidak Ada Anime Ditemukan");
+                    tvEmptyDesc.setText("Tidak ada judul anime yang cocok dengan filter atau pencarian ini.");
+                }
+            }
+            if (rvGrid != null) rvGrid.setVisibility(View.GONE);
+        } else {
+            if (layoutPagination != null && !"riwayat".equals(currentView) && !"jadwal".equals(currentView) && !"favorit".equals(currentView)) {
+                layoutPagination.setVisibility(View.VISIBLE);
+            }
+            if (layoutEmptyState != null) layoutEmptyState.setVisibility(View.GONE);
+            if (rvGrid != null) {
+                rvGrid.setVisibility(View.VISIBLE);
+                rvGrid.scheduleLayoutAnimation();
+                rvGrid.scrollToPosition(0);
+                if (TvFocusHelper.isTv(MainActivity.this)) {
+                    rvGrid.post(() -> {
+                        RecyclerView.ViewHolder vh = rvGrid.findViewHolderForAdapterPosition(0);
+                        if (vh != null && vh.itemView != null) {
+                            vh.itemView.requestFocus();
+                        } else {
+                            rvGrid.requestFocus();
+                        }
+                    });
+                }
+            }
+        }
     }
 
     private void confirmAndClearHistory() {

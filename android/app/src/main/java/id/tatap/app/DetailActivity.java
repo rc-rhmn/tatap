@@ -12,9 +12,12 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.ImageButton;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import java.util.Locale;
 
 import androidx.annotation.NonNull;
 import androidx.cardview.widget.CardView;
@@ -43,11 +46,24 @@ public class DetailActivity extends Activity {
     private String type;
     private String eps;
     private String sub;
+    private String epsCounter;
+    private String synopsis;
+    private String studio;
+    private String season;
+    private String status;
+    private String source;
+    private String genresStr;
+    private double score = 0.0;
 
-    private TextView tvTitle, tvTitleFull, tvSlug, tvTypeBadge, btnStarFavorite;
-    private boolean isFavorite = false;
+    private TextView tvTitle, tvTitleFull, tvSlug, tvTypeBadge;
+    private TextView tvScore, tvStatus, tvInfoLine;
+    private View layoutSynopsis, hsvGenres;
+    private LinearLayout llGenres;
+    private TextView tvSynopsis, btnToggleSynopsis;
+    private boolean isSynopsisExpanded = false;
     private ImageView ivPoster;
-    private Button btnQuickPlay, btnSortOrder;
+    private Button btnQuickPlay, btnBookmark, btnSortOrder;
+    private boolean isBookmarked = false;
     private ProgressBar pbLoading;
     private RecyclerView rvEpisodes;
     private EpisodeAdapter adapter;
@@ -89,6 +105,14 @@ public class DetailActivity extends Activity {
         type = getIntent().getStringExtra("type");
         eps = getIntent().getStringExtra("eps");
         sub = getIntent().getStringExtra("sub");
+        epsCounter = getIntent().getStringExtra("eps_counter");
+        synopsis = getIntent().getStringExtra("synopsis");
+        score = getIntent().getDoubleExtra("score", 0.0);
+        studio = getIntent().getStringExtra("studio");
+        season = getIntent().getStringExtra("season");
+        status = getIntent().getStringExtra("status");
+        source = getIntent().getStringExtra("source");
+        genresStr = getIntent().getStringExtra("genres");
 
         prefs = getSharedPreferences("tatap_history", Context.MODE_PRIVATE);
 
@@ -96,12 +120,19 @@ public class DetailActivity extends Activity {
         tvTitleFull = findViewById(R.id.tv_detail_title_full);
         tvSlug = findViewById(R.id.tv_detail_slug);
         tvTypeBadge = findViewById(R.id.tv_detail_type_badge);
+        tvScore = findViewById(R.id.tv_detail_score);
+        tvStatus = findViewById(R.id.tv_detail_status);
+        tvInfoLine = findViewById(R.id.tv_detail_info_line);
+        hsvGenres = findViewById(R.id.hsv_detail_genres);
+        llGenres = findViewById(R.id.ll_detail_genres);
+        layoutSynopsis = findViewById(R.id.layout_detail_synopsis);
+        tvSynopsis = findViewById(R.id.tv_detail_synopsis);
+        btnToggleSynopsis = findViewById(R.id.btn_toggle_synopsis);
         ivPoster = findViewById(R.id.iv_detail_poster);
         btnQuickPlay = findViewById(R.id.btn_quick_play);
         btnSortOrder = findViewById(R.id.btn_sort_order);
         pbLoading = findViewById(R.id.pb_detail_loading);
         ImageButton btnBack = findViewById(R.id.btn_back);
-        btnStarFavorite = findViewById(R.id.btn_star_favorite);
         rvEpisodes = findViewById(R.id.rv_episodes);
         layoutSeasons = findViewById(R.id.layout_detail_seasons);
         rvSeasons = findViewById(R.id.rv_detail_seasons);
@@ -109,9 +140,11 @@ public class DetailActivity extends Activity {
 
         tvTitle.setText(title != null ? title : "Detail Anime");
         tvTitleFull.setText(title != null ? title : "Anime");
+        setupSynopsis(synopsis);
+        setupMetadata(score, status, studio, season, source, genresStr);
 
         String badgeText = (type != null && !type.isEmpty() ? type : "ANIME")
-                + (eps != null && !eps.isEmpty() ? " · " + eps + " EP" : "")
+                + (epsCounter != null && !epsCounter.isEmpty() ? " · " + epsCounter + " EP" : (eps != null && !eps.isEmpty() ? " · " + eps + " EP" : ""))
                 + (sub != null && !sub.isEmpty() ? " · " + sub : "");
         tvTypeBadge.setText(badgeText);
         tvSlug.setText("Memuat episode...");
@@ -120,19 +153,30 @@ public class DetailActivity extends Activity {
             ImageLoader.load(poster, ivPoster);
         }
 
-        btnBack.setOnClickListener(v -> finish());
+        btnBack.setOnClickListener(v -> {
+            HapticHelper.performTick(v);
+            finish();
+        });
         TvFocusHelper.attachFocusScale(btnBack, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnQuickPlay, 1.05f, 6f);
-        TvFocusHelper.attachFocusScale(btnSortOrder, 1.05f, 6f);
-        if (btnStarFavorite != null) {
-            btnStarFavorite.setOnClickListener(v -> toggleFavorite());
-            TvFocusHelper.attachFocusScale(btnStarFavorite, 1.15f, 6f);
+        btnBookmark = findViewById(R.id.btn_detail_bookmark);
+        if (btnBookmark != null) {
+            TvFocusHelper.attachFocusScale(btnBookmark, 1.05f, 6f);
+            btnBookmark.setOnClickListener(v -> {
+                HapticHelper.performHeavyClick(v);
+                toggleBookmark();
+            });
+            checkBookmarkStatus();
         }
+        TvFocusHelper.attachFocusScale(btnSortOrder, 1.05f, 6f);
 
         int epSpan = getResources().getInteger(R.integer.episode_grid_columns);
         rvEpisodes.setLayoutManager(new GridLayoutManager(this, epSpan));
         adapter = new EpisodeAdapter();
         rvEpisodes.setAdapter(adapter);
+        if (TvFocusHelper.isTv(this)) {
+            rvEpisodes.setItemViewCacheSize(8);
+        }
 
         if (rvEpisodeRanges != null) {
             rvEpisodeRanges.setLayoutManager(new androidx.recyclerview.widget.LinearLayoutManager(this, androidx.recyclerview.widget.LinearLayoutManager.HORIZONTAL, false));
@@ -147,12 +191,14 @@ public class DetailActivity extends Activity {
         }
 
         btnSortOrder.setOnClickListener(v -> {
+            HapticHelper.performTick(v);
             isAscending = !isAscending;
             btnSortOrder.setText(isAscending ? "1 - N" : "N - 1");
             updateEpisodeDisplay();
         });
 
         btnQuickPlay.setOnClickListener(v -> {
+            HapticHelper.performClick(v);
             int targetEp = prefs.getInt("last_ep_" + slug, -1);
             if (targetEp <= 0) {
                 if (!originalEpisodes.isEmpty()) {
@@ -170,7 +216,6 @@ public class DetailActivity extends Activity {
         }
         loadEpisodes();
         loadRelations();
-        loadFavoriteState();
     }
 
     @Override
@@ -184,12 +229,31 @@ public class DetailActivity extends Activity {
 
     private void updateQuickPlayButton() {
         int lastEp = prefs.getInt("last_ep_" + slug, -1);
-        if (lastEp > 0) {
-            btnQuickPlay.setText("Lanjutkan Ep " + lastEp);
-            btnQuickPlay.setBackgroundColor(0xFF1E2433);
+        if (btnQuickPlay instanceof com.google.android.material.button.MaterialButton) {
+            com.google.android.material.button.MaterialButton mb = (com.google.android.material.button.MaterialButton) btnQuickPlay;
+            mb.setAllCaps(false);
+            mb.setIconResource(R.drawable.ic_play);
+            if (lastEp > 0) {
+                mb.setText("Lanjutkan Ep " + lastEp);
+                mb.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF38BDF8));
+                mb.setTextColor(0xFF080C14);
+                mb.setIconTint(android.content.res.ColorStateList.valueOf(0xFF080C14));
+                mb.setStrokeColor(android.content.res.ColorStateList.valueOf(0xFF38BDF8));
+                mb.setStrokeWidth((int) (1 * getResources().getDisplayMetrics().density));
+            } else {
+                mb.setText("Putar Ep 1");
+                mb.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF161C28));
+                mb.setTextColor(0xFF38BDF8);
+                mb.setIconTint(android.content.res.ColorStateList.valueOf(0xFF38BDF8));
+                mb.setStrokeColor(android.content.res.ColorStateList.valueOf(0xFF38BDF8));
+                mb.setStrokeWidth((int) (1 * getResources().getDisplayMetrics().density));
+            }
         } else {
-            btnQuickPlay.setText("Putar Ep 1");
-            btnQuickPlay.setBackgroundColor(0xFF161922);
+            if (lastEp > 0) {
+                btnQuickPlay.setText("Lanjutkan Ep " + lastEp);
+            } else {
+                btnQuickPlay.setText("Putar Ep 1");
+            }
         }
     }
 
@@ -249,17 +313,109 @@ public class DetailActivity extends Activity {
 
                 JSONObject res = new JSONObject(sb.toString());
                 if (res.optBoolean("success")) {
-                    JSONArray epsArr = res.getJSONObject("data").getJSONArray("episodes");
+                    JSONObject dataObj = res.getJSONObject("data");
+                    JSONArray epsArr = dataObj.getJSONArray("episodes");
+                    String apiSynopsis = dataObj.optString("synopsis", "");
                     List<Integer> list = new ArrayList<>();
                     for (int i = 0; i < epsArr.length(); i++) {
                         list.add(epsArr.getJSONObject(i).getInt("ep"));
                     }
                     Collections.sort(list);
+                    JSONObject detailObj = dataObj.optJSONObject("detail");
+                    if (detailObj != null) {
+                        double apiScore = detailObj.optDouble("score", 0.0);
+                        String apiStatus = detailObj.optString("status", "");
+                        String apiStudio = detailObj.optString("studio", "");
+                        String apiSeason = detailObj.optString("season", "");
+                        String apiSource = detailObj.optString("source", "");
+                        JSONArray apiGenres = detailObj.optJSONArray("genres");
+                        String apiGenresStr = apiGenres != null ? apiGenres.toString() : "";
+                        runOnUiThread(() -> {
+                            if (score <= 0 && apiScore > 0) score = apiScore;
+                            String sLowerApi = apiStatus.toLowerCase();
+                            boolean apiFinished = sLowerApi.contains("finish") || sLowerApi.contains("tamat") || sLowerApi.contains("completed");
+                            if (apiFinished || (status == null || status.isEmpty())) {
+                                if (!apiStatus.isEmpty()) status = apiStatus;
+                            }
+                            if ((studio == null || studio.isEmpty()) && !apiStudio.isEmpty()) studio = apiStudio;
+                            if ((season == null || season.isEmpty()) && !apiSeason.isEmpty()) season = apiSeason;
+                            if ((source == null || source.isEmpty()) && !apiSource.isEmpty()) source = apiSource;
+                            if ((genresStr == null || genresStr.isEmpty()) && !apiGenresStr.isEmpty()) genresStr = apiGenresStr;
+                            setupMetadata(score, status, studio, season, source, genresStr);
+                        });
+                    }
+
                     runOnUiThread(() -> {
                         if (pbLoading != null) pbLoading.setVisibility(View.GONE);
                         originalEpisodes.clear();
                         originalEpisodes.addAll(list);
-                        tvSlug.setText(list.size() + " Episode Tersedia");
+                        if ((synopsis == null || synopsis.trim().isEmpty() || apiSynopsis.length() > synopsis.length()) && !apiSynopsis.trim().isEmpty()) {
+                            synopsis = apiSynopsis;
+                            setupSynopsis(apiSynopsis);
+                        }
+
+                        boolean isFinishedAnime = false;
+                        if (status != null && !status.isEmpty()) {
+                            String sLower = status.toLowerCase();
+                            if (sLower.contains("finish") || sLower.contains("tamat") || sLower.contains("completed")) {
+                                isFinishedAnime = true;
+                            }
+                        }
+                        if (epsCounter != null && !epsCounter.isEmpty()) {
+                            String[] parts = epsCounter.split("/");
+                            if (parts.length == 2 && !parts[1].equals("?")) {
+                                try {
+                                    int cur = Integer.parseInt(parts[0].trim());
+                                    int tot = Integer.parseInt(parts[1].trim());
+                                    if (tot > 0 && cur >= tot) {
+                                        isFinishedAnime = true;
+                                    }
+                                } catch (Exception ignored) {}
+                            }
+                        }
+                        if (!isFinishedAnime && !list.isEmpty() && epsCounter != null && !epsCounter.isEmpty()) {
+                            String[] parts = epsCounter.split("/");
+                            if (parts.length == 2 && !parts[1].equals("?")) {
+                                try {
+                                    int tot = Integer.parseInt(parts[1].trim());
+                                    if (tot > 0 && list.size() >= tot) {
+                                        isFinishedAnime = true;
+                                    }
+                                } catch (Exception ignored) {}
+                            }
+                        }
+
+                        if (isFinishedAnime) {
+                            if (status == null || !status.toLowerCase().contains("finish")) {
+                                status = "finished";
+                                setupMetadata(score, status, studio, season, source, genresStr);
+                            }
+                        }
+
+                        String countStr;
+                        if (epsCounter != null && !epsCounter.isEmpty()) {
+                            String[] parts = epsCounter.split("/");
+                            if (parts.length == 2 && !parts[1].equals("?")) {
+                                if (isFinishedAnime) {
+                                    countStr = list.size() + "/" + parts[1] + " Episode (Tamat)";
+                                } else {
+                                    countStr = list.size() + "/" + parts[1] + " Episode Rilis (Sedang Tayang)";
+                                }
+                            } else {
+                                if (isFinishedAnime) {
+                                    countStr = list.size() + " Episode (Tamat)";
+                                } else {
+                                    countStr = list.size() + " Episode Rilis (Sedang Tayang)";
+                                }
+                            }
+                        } else {
+                            if (isFinishedAnime) {
+                                countStr = list.size() + " Episode (Tamat)";
+                            } else {
+                                countStr = list.size() + " Episode Tersedia";
+                            }
+                        }
+                        tvSlug.setText(countStr);
                         setupEpisodeRanges(list);
                         updateEpisodeDisplay();
                         updateQuickPlayButton();
@@ -278,6 +434,161 @@ public class DetailActivity extends Activity {
                 });
             }
         }).start();
+    }
+
+    private void setupMetadata(double scoreVal, String statusVal, String studioVal, String seasonVal, String sourceVal, String genresData) {
+        // Score Badge
+        if (tvScore != null) {
+            if (scoreVal > 0) {
+                tvScore.setText(String.format(Locale.US, "%.1f", scoreVal));
+                tvScore.setVisibility(View.VISIBLE);
+            } else {
+                tvScore.setVisibility(View.GONE);
+            }
+        }
+
+        // Status Badge
+        if (tvStatus != null) {
+            if (statusVal != null && !statusVal.trim().isEmpty()) {
+                String sLower = statusVal.trim().toLowerCase();
+                if (sLower.contains("finish") || sLower.contains("tamat") || sLower.contains("completed")) {
+                    tvStatus.setText("TAMAT");
+                    tvStatus.setBackgroundResource(R.drawable.bg_detail_status_finished);
+                    tvStatus.setTextColor(0xFF10B981);
+                    tvStatus.setVisibility(View.VISIBLE);
+                } else if (sLower.contains("releas") || sLower.contains("airing") || sLower.contains("ongoing")) {
+                    tvStatus.setText("ONGOING");
+                    tvStatus.setBackgroundResource(R.drawable.bg_detail_status_ongoing);
+                    tvStatus.setTextColor(0xFF38BDF8);
+                    tvStatus.setVisibility(View.VISIBLE);
+                } else {
+                    tvStatus.setVisibility(View.GONE);
+                }
+            } else {
+                tvStatus.setVisibility(View.GONE);
+            }
+        }
+
+        // Info Line
+        if (tvInfoLine != null) {
+            List<String> metaParts = new ArrayList<>();
+            if (studioVal != null && !studioVal.trim().isEmpty()) {
+                metaParts.add("Studio: " + studioVal.trim());
+            }
+            if (seasonVal != null && !seasonVal.trim().isEmpty()) {
+                metaParts.add(seasonVal.trim());
+            }
+            if (sourceVal != null && !sourceVal.trim().isEmpty()) {
+                metaParts.add("Sumber: " + sourceVal.trim());
+            }
+            if (!metaParts.isEmpty()) {
+                tvInfoLine.setText(android.text.TextUtils.join(" · ", metaParts));
+                tvInfoLine.setVisibility(View.VISIBLE);
+            } else {
+                tvInfoLine.setVisibility(View.GONE);
+            }
+        }
+
+        // Genre Chips
+        if (llGenres != null && hsvGenres != null) {
+            if (genresData != null && !genresData.trim().isEmpty()) {
+                try {
+                    List<String> genreList = new ArrayList<>();
+                    if (genresData.startsWith("[")) {
+                        JSONArray jArr = new JSONArray(genresData);
+                        for (int i = 0; i < jArr.length(); i++) {
+                            String g = jArr.optString(i, "").trim();
+                            if (!g.isEmpty() && !"hentai".equalsIgnoreCase(g)) {
+                                genreList.add(g);
+                            }
+                        }
+                    } else {
+                        for (String g : genresData.split(",")) {
+                            String trimmed = g.trim();
+                            if (!trimmed.isEmpty() && !"hentai".equalsIgnoreCase(trimmed)) {
+                                genreList.add(trimmed);
+                            }
+                        }
+                    }
+
+                    if (!genreList.isEmpty()) {
+                        llGenres.removeAllViews();
+                        for (String genreName : genreList) {
+                            TextView chip = new TextView(this);
+                            chip.setText(genreName);
+                            chip.setTextColor(0xFFCBD5E1);
+                            chip.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 10.5f);
+                            chip.setBackgroundResource(R.drawable.bg_detail_genre_chip);
+                            int padH = (int) (8 * getResources().getDisplayMetrics().density);
+                            int padV = (int) (4 * getResources().getDisplayMetrics().density);
+                            chip.setPadding(padH, padV, padH, padV);
+                            chip.setFocusable(true);
+                            chip.setClickable(true);
+                            TvFocusHelper.attachFocusScale(chip, 1.08f, 4f);
+                            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT);
+                            lp.setMarginEnd((int) (6 * getResources().getDisplayMetrics().density));
+                            chip.setLayoutParams(lp);
+                            chip.setOnClickListener(v -> {
+                                HapticHelper.performClick(v);
+                                Intent intent = new Intent(DetailActivity.this, MainActivity.class);
+                                intent.putExtra("genre", genreName);
+                                intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                                startActivity(intent);
+                                finish();
+                            });
+                            llGenres.addView(chip);
+                        }
+                        hsvGenres.setVisibility(View.VISIBLE);
+                    } else {
+                        hsvGenres.setVisibility(View.GONE);
+                    }
+                } catch (Exception ignored) {
+                    hsvGenres.setVisibility(View.GONE);
+                }
+            } else {
+                hsvGenres.setVisibility(View.GONE);
+            }
+        }
+    }
+
+    private void setupSynopsis(String synopsisText) {
+        if (layoutSynopsis == null || tvSynopsis == null || btnToggleSynopsis == null) {
+            if (layoutSynopsis != null) layoutSynopsis.setVisibility(View.GONE);
+            return;
+        }
+
+        if (synopsisText == null || synopsisText.trim().isEmpty()) {
+            layoutSynopsis.setVisibility(View.GONE);
+            return;
+        }
+
+        layoutSynopsis.setVisibility(View.VISIBLE);
+        tvSynopsis.setText(synopsisText.trim());
+        isSynopsisExpanded = false;
+        final int defaultLines = TvFocusHelper.isTv(this) ? 3 : 2;
+        tvSynopsis.setMaxLines(defaultLines);
+        btnToggleSynopsis.setText("Selengkapnya ▼");
+
+        if (TvFocusHelper.isTv(this)) {
+            TvFocusHelper.attachFocusScale(btnToggleSynopsis, 1.05f, 4f);
+        }
+
+        View.OnClickListener toggleListener = v -> {
+            HapticHelper.performClick(v);
+            isSynopsisExpanded = !isSynopsisExpanded;
+            if (isSynopsisExpanded) {
+                tvSynopsis.setMaxLines(Integer.MAX_VALUE);
+                btnToggleSynopsis.setText("Lipat ke Judul ▲");
+            } else {
+                tvSynopsis.setMaxLines(defaultLines);
+                btnToggleSynopsis.setText("Selengkapnya ▼");
+            }
+        };
+
+        btnToggleSynopsis.setOnClickListener(toggleListener);
+        tvSynopsis.setOnClickListener(toggleListener);
     }
 
     private void setupEpisodeRanges(List<Integer> list) {
@@ -365,6 +676,7 @@ public class DetailActivity extends Activity {
             if (ep == cachedLastPlayedEp) {
                 // Last played episode
                 holder.card.setCardBackgroundColor(0xFF1C2230);
+                holder.card.setStrokeColor(0xFF38BDF8);
                 holder.tvTitle.setTextColor(0xFF38BDF8);
                 holder.tvBadge.setVisibility(View.VISIBLE);
                 holder.tvBadge.setText("TERAKHIR");
@@ -372,6 +684,7 @@ public class DetailActivity extends Activity {
             } else if (cachedWatchedSet.contains(ep)) {
                 // Watched episode
                 holder.card.setCardBackgroundColor(0xFF0E1017);
+                holder.card.setStrokeColor(0xFF1C202C);
                 holder.tvTitle.setTextColor(0xFF64748B);
                 holder.tvBadge.setVisibility(View.VISIBLE);
                 holder.tvBadge.setText("DITONTON");
@@ -379,11 +692,15 @@ public class DetailActivity extends Activity {
             } else {
                 // Unwatched episode
                 holder.card.setCardBackgroundColor(0xFF11141C);
+                holder.card.setStrokeColor(0xFF1C202C);
                 holder.tvTitle.setTextColor(0xFFF1F5F9);
                 holder.tvBadge.setVisibility(View.GONE);
             }
 
-            holder.itemView.setOnClickListener(v -> playEpisode(ep));
+            holder.itemView.setOnClickListener(v -> {
+                HapticHelper.performClick(v);
+                playEpisode(ep);
+            });
         }
 
         @Override
@@ -392,7 +709,7 @@ public class DetailActivity extends Activity {
         }
 
         class EpisodeViewHolder extends RecyclerView.ViewHolder {
-            CardView card;
+            MaterialCardView card;
             TextView tvTitle;
             TextView tvBadge;
 
@@ -439,6 +756,7 @@ public class DetailActivity extends Activity {
                 holder.tvLabel.setTextColor(0xFF94A3B8);
             }
             holder.itemView.setOnClickListener(v -> {
+                HapticHelper.performTick(v);
                 selectedRange = r;
                 activeRange = r;
                 notifyDataSetChanged();
@@ -507,72 +825,6 @@ public class DetailActivity extends Activity {
         }).start();
     }
 
-    private void loadFavoriteState() {
-        if (slug == null || slug.isEmpty() || btnStarFavorite == null) return;
-        new Thread(() -> {
-            try {
-                String u = "http://127.0.0.1:8767/api/favorites/check?slug=" + URLEncoder.encode(slug, "UTF-8");
-                HttpURLConnection conn = (HttpURLConnection) new URL(u).openConnection();
-                conn.setConnectTimeout(5000);
-                conn.setReadTimeout(5000);
-                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) sb.append(line);
-                reader.close();
-                JSONObject res = new JSONObject(sb.toString());
-                boolean fav = false;
-                if (res.optBoolean("success")) {
-                    JSONObject d = res.optJSONObject("data");
-                    fav = d != null && d.optBoolean("favorite");
-                }
-                final boolean favFinal = fav;
-                runOnUiThread(() -> {
-                    isFavorite = favFinal;
-                    updateStarUi();
-                });
-            } catch (Exception ignored) {}
-        }).start();
-    }
-
-    private void toggleFavorite() {
-        if (slug == null || slug.isEmpty()) return;
-        final boolean target = !isFavorite;
-        isFavorite = target;
-        updateStarUi();
-        Toast.makeText(this, target ? "Ditambahkan ke Favorit" : "Dihapus dari Favorit", Toast.LENGTH_SHORT).show();
-        new Thread(() -> {
-            try {
-                String base = "http://127.0.0.1:8767/api/favorites";
-                String u = target ? base : base + "?slug=" + URLEncoder.encode(slug, "UTF-8");
-                HttpURLConnection conn = (HttpURLConnection) new URL(u).openConnection();
-                conn.setRequestMethod(target ? "POST" : "DELETE");
-                conn.setConnectTimeout(3000);
-                conn.setReadTimeout(3000);
-                if (target) {
-                    JSONObject b = new JSONObject();
-                    b.put("slug", slug);
-                    b.put("title", title != null ? title : slug);
-                    b.put("poster", poster != null ? poster : "");
-                    b.put("type", type != null ? type : "");
-                    conn.setRequestProperty("Content-Type", "application/json");
-                    conn.setDoOutput(true);
-                    java.io.OutputStream os = conn.getOutputStream();
-                    os.write(b.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                    os.close();
-                }
-                conn.getResponseCode();
-                conn.disconnect();
-            } catch (Exception ignored) {}
-        }).start();
-    }
-
-    private void updateStarUi() {
-        if (btnStarFavorite == null) return;
-        btnStarFavorite.setText(isFavorite ? "★" : "☆");
-        btnStarFavorite.setTextColor(isFavorite ? 0xFFFACC15 : 0xFF64748B);
-    }
-
     class SeasonAdapter extends RecyclerView.Adapter<SeasonAdapter.SeasonViewHolder> {
         private final List<JSONObject> relations = new ArrayList<>();
 
@@ -608,11 +860,14 @@ public class DetailActivity extends Activity {
                 holder.tvBadge.setTextColor(0xFFC084FC); // Purple
             } else if ("MOVIE".equalsIgnoreCase(relFormat)) {
                 holder.tvBadge.setTextColor(0xFFFACC15); // Gold/Yellow
+            } else if ("OVA".equalsIgnoreCase(relFormat) || "SPECIAL".equalsIgnoreCase(relFormat) || "ONA".equalsIgnoreCase(relFormat)) {
+                holder.tvBadge.setTextColor(0xFF34D399); // Emerald / Mint
             } else {
                 holder.tvBadge.setTextColor(0xFF94A3B8); // Slate
             }
 
             holder.itemView.setOnClickListener(v -> {
+                HapticHelper.performClick(v);
                 Intent intent = new Intent(DetailActivity.this, DetailActivity.class);
                 intent.putExtra("slug", relSlug);
                 intent.putExtra("title", relTitle);
@@ -641,5 +896,99 @@ public class DetailActivity extends Activity {
                 TvFocusHelper.attachFocusScale(itemView, 1.08f, 6f);
             }
         }
+    }
+
+    private void checkBookmarkStatus() {
+        if (slug == null || slug.isEmpty()) return;
+        new Thread(() -> {
+            try {
+                URL u = new URL("http://127.0.0.1:8767/api/bookmarks/check?slug=" + URLEncoder.encode(slug, "UTF-8"));
+                HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+                conn.setConnectTimeout(3000);
+                conn.setReadTimeout(3000);
+                if (conn.getResponseCode() == 200) {
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) sb.append(line);
+                    reader.close();
+                    JSONObject obj = new JSONObject(sb.toString());
+                    if (obj.optBoolean("success", false)) {
+                        JSONObject data = obj.optJSONObject("data");
+                        boolean b = data != null && data.optBoolean("bookmarked", false);
+                        runOnUiThread(() -> updateBookmarkUI(b));
+                    }
+                }
+            } catch (Exception ignored) {}
+        }).start();
+    }
+
+    private void updateBookmarkUI(boolean bookmarked) {
+        this.isBookmarked = bookmarked;
+        if (btnBookmark == null) return;
+        if (bookmarked) {
+            btnBookmark.setText("Tersimpan");
+            btnBookmark.setTextColor(0xFFFBBF24);
+            btnBookmark.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF2A2210));
+            if (btnBookmark instanceof com.google.android.material.button.MaterialButton) {
+                com.google.android.material.button.MaterialButton mb = (com.google.android.material.button.MaterialButton) btnBookmark;
+                mb.setAllCaps(false);
+                mb.setIconResource(R.drawable.ic_star_filled);
+                mb.setIconTint(android.content.res.ColorStateList.valueOf(0xFFFBBF24));
+            }
+        } else {
+            btnBookmark.setText("+ Favorit");
+            btnBookmark.setTextColor(0xFF94A3B8);
+            btnBookmark.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF1E2433));
+            if (btnBookmark instanceof com.google.android.material.button.MaterialButton) {
+                com.google.android.material.button.MaterialButton mb = (com.google.android.material.button.MaterialButton) btnBookmark;
+                mb.setAllCaps(false);
+                mb.setIconResource(R.drawable.ic_star_outline);
+                mb.setIconTint(android.content.res.ColorStateList.valueOf(0xFF94A3B8));
+            }
+        }
+    }
+
+    private void toggleBookmark() {
+        if (slug == null || slug.isEmpty()) return;
+        boolean nextState = !isBookmarked;
+        updateBookmarkUI(nextState);
+        Toast.makeText(this, nextState ? "Tersimpan ke Favorit" : "Dihapus dari Favorit", Toast.LENGTH_SHORT).show();
+
+        new Thread(() -> {
+            try {
+                if (nextState) {
+                    URL u = new URL("http://127.0.0.1:8767/api/bookmarks");
+                    HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setRequestProperty("Content-Type", "application/json");
+                    conn.setDoOutput(true);
+                    conn.setConnectTimeout(3000);
+                    conn.setReadTimeout(3000);
+                    JSONObject body = new JSONObject();
+                    body.put("slug", slug);
+                    body.put("title", title != null ? title : "");
+                    body.put("poster", poster != null ? poster : "");
+                    body.put("type", type != null ? type : "");
+                    body.put("sub", sub != null ? sub : "");
+                    body.put("eps", eps != null ? eps : "");
+                    body.put("score", 0.0);
+                    java.io.OutputStream out = conn.getOutputStream();
+                    out.write(body.toString().getBytes("UTF-8"));
+                    out.flush();
+                    out.close();
+                    conn.getResponseCode();
+                } else {
+                    URL u = new URL("http://127.0.0.1:8767/api/bookmarks/" + URLEncoder.encode(slug, "UTF-8"));
+                    HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+                    conn.setRequestMethod("DELETE");
+                    conn.setConnectTimeout(3000);
+                    conn.setReadTimeout(3000);
+                    conn.getResponseCode();
+                }
+            } catch (Exception e) {
+                runOnUiThread(() -> checkBookmarkStatus());
+            }
+        }).start();
     }
 }

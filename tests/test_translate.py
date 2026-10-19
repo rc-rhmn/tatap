@@ -253,3 +253,65 @@ def test_call_gtx_translate_modes(monkeypatch):
     assert res_aigtx[0]["text"] == "Ninja Pelarian di Desa Konoha"
 
 
+def test_pre_normalize_en_slang():
+    assert T._pre_normalize_en_slang("I gotta bounce right now.") == "I gotta go now right now."
+    assert T._pre_normalize_en_slang("No cap, she was amazing.") == "seriously, no lie, she was amazing."
+    assert T._pre_normalize_en_slang("I'm down for that mission.") == "I agree to that mission."
+    assert T._pre_normalize_en_slang("Chill out, guys.") == "calm down and relax, guys."
+    assert T._pre_normalize_en_slang("Bro has zero rizz.") == "Bro has zero charisma."
+    assert T._pre_normalize_en_slang("Time to touch grass.") == "Time to face reality."
+    assert T._pre_normalize_en_slang("She got caught in 4k.") == "She got caught red-handed with clear proof."
+    assert T._pre_normalize_en_slang("Time to hit the sack.") == "Time to go to sleep."
+    assert T._pre_normalize_en_slang("Don't sweat it.") == "do not worry about it."
+    assert T._pre_normalize_en_slang("Hold your horses.") == "wait a minute and be patient."
+    assert T._pre_normalize_en_slang("Defeating the boss is a piece of cake.") == "Defeating the boss is a very easy task."
+
+
+def test_smart_scene_military_protection():
+    # Dialog militer / taktikal tidak boleh diubah menjadi bahasa gaul kasual (seperti "nggak", "udah", "cowok")
+    mil1 = "Batalyon 203, bersiaplah untuk serangan udara pada koordinat X-4."
+    assert T._sanitize_gtxplus_id(mil1) == "Batalyon 203, bersiaplah untuk serangan udara pada koordinat X-4."
+
+    mil2 = "Letnan Kolonel Tanya Degurechaff melaporkan situasi di garis depan."
+    assert T._sanitize_gtxplus_id(mil2) == "Letnan Kolonel Tanya Degurechaff melaporkan situasi di garis depan."
+
+    mil3 = "Pos komando telah hancur oleh artileri musuh. Saya tidak dapat menunda evakuasi ini."
+    assert T._sanitize_gtxplus_id(mil3) == "Pos komando telah hancur oleh artileri musuh. Saya tidak dapat menunda evakuasi ini."
+
+
+def test_smart_scene_royal_protection():
+    # Dialog kerajaan / monarki harus menjaga kesopanan takzim baku
+    royal1 = "Yang Mulia, hamba tidak dapat menyetujui keputusan pembubaran dewan kekaisaran."
+    assert T._sanitize_gtxplus_id(royal1) == "Yang Mulia, hamba tidak dapat menyetujui keputusan pembubaran dewan kekaisaran."
+
+    royal2 = "Tuan Putri menolak lamaran dari adipati utara."
+    assert T._sanitize_gtxplus_id(royal2) == "Tuan Putri menolak lamaran dari adipati utara."
+
+
+def test_smart_scene_casual_fansub():
+    # Dialog kasual sekolah / sehari-hari dihaluskan menjadi diksi lisan alami fansub
+    cas1 = "Tidak apa-apa, saya tidak tahu anda ada di sana."
+    assert T._sanitize_gtxplus_id(cas1) == "Nggak apa-apa, aku nggak tahu kamu ada di sana."
+
+    cas2 = "Lelaki itu sangat sombong, sudah kuduga dia penipu."
+    assert T._sanitize_gtxplus_id(cas2) == "Cowok itu sangat sombong, emang udah kuduga dia penipu."
+
+
+def test_slang_and_idioms_calque_sanitizer():
+    # Memastikan calque harfiah dari Google Translate diubah ke bahasa fansub yang wajar
+    assert T._sanitize_gtxplus_id("Aku harus memantul sekarang.") == "Aku harus cabut sekarang."
+    assert T._sanitize_gtxplus_id("Tidak ada topi, itu keren sekali.") == "Beneran, itu keren sekali."
+    assert T._sanitize_gtxplus_id("Kita diselamatkan oleh bel.") == "Kita selamat di saat kritis."
+    assert T._sanitize_gtxplus_id("Cepat keluarkan ludahmu!") == "Cepat cepat katakan!"
+    assert T._sanitize_gtxplus_id("Pegang kudamu sebentar.") == "Sabar dulu sebentar."
+    assert T._sanitize_gtxplus_id("Dia tidak mendapat rimpang sama sekali.") == "Dia tidak punya pesona sama sekali."
+    assert T._sanitize_gtxplus_id("Keluar dan sentuh rumput sana.") == "Keluar dan sadar realita sana."
+    assert T._sanitize_gtxplus_id("Karakter itu punya baju besi plot.") == "Karakter itu punya kebal berkat skenario."
+    assert T._sanitize_gtxplus_id("Dia memancarkan energi karakter utama.") == "Dia memancarkan aura protagonis."
+    assert T._sanitize_gtxplus_id("Dia tertangkap di 4k kemarin.") == "Dia tertangkap basah ada buktinya kemarin."
+    assert T._sanitize_gtxplus_id("Tim kita berhasil mengambil w!") == "Tim kita berhasil meraih kemenangan!"
+    assert T._sanitize_gtxplus_id("Bos penjara bawah tanah telah bangkit.") == "Bos dungeon telah bangkit."
+    assert T._sanitize_gtxplus_id("Tuan serikat memanggil kita ke aula.") == "Ketua guild memanggil kita ke aula."
+
+
+

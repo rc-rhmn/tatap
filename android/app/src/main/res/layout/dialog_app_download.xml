@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/bg_dialog_card"
+    android:padding="20dp">
+
+    <!-- Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ProgressBar
+            android:id="@+id/pb_download_spinner"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:indeterminateTint="#38BDF8" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="12dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tv_download_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Mengunduh Pembaruan Tatap"
+                android:textColor="#F1F5F9"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_download_target_version"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Versi Target: v2.9.2"
+                android:textColor="#94A3B8"
+                android:textSize="11.5sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Progress Bar -->
+    <ProgressBar
+        android:id="@+id/pb_download_horizontal"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="8dp"
+        android:layout_marginTop="16dp"
+        android:max="100"
+        android:progress="0"
+        android:progressTint="#38BDF8"
+        android:progressBackgroundTint="#202636" />
+
+    <!-- Status & Speed Row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/tv_download_status"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Menghubungkan ke server rilis..."
+            android:textColor="#CBD5E1"
+            android:textSize="11.5sp" />
+
+        <TextView
+            android:id="@+id/tv_download_percent"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0%"
+            android:textColor="#38BDF8"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Cancel Button -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="end"
+        android:layout_marginTop="16dp">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_cancel_download"
+            android:layout_width="wrap_content"
+            android:layout_height="38dp"
+            android:text="Batal"
+            android:textColor="#94A3B8"
+            android:textSize="12sp"
+            android:textAllCaps="false"
+            android:backgroundTint="#161C28"
+            app:strokeColor="#2A3347"
+            app:strokeWidth="1dp"
+            app:cornerRadius="8dp"
+            android:paddingHorizontal="16dp"
+            android:focusable="true" />
+    </LinearLayout>
+</LinearLayout>

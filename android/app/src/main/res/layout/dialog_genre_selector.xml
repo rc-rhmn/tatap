@@ -24,24 +24,24 @@
 
         <Button
             android:id="@+id/btn_close_genre_dialog"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:text="✕"
-            android:textColor="#8892B0"
-            android:textSize="14sp" />
+            android:drawableStart="@drawable/ic_close"
+            android:drawableTint="#8892B0"
+            android:padding="8dp" />
     </LinearLayout>
 
     <!-- Search/Filter Input -->
     <EditText
         android:id="@+id/et_filter_genre"
         android:layout_width="match_parent"
-        android:layout_height="40dp"
+        android:layout_height="38dp"
         android:background="@drawable/bg_input_field"
         android:hint="Cari genre (misal: Action, Romance)..."
         android:textColorHint="#5A6578"
         android:textColor="#F1F5F9"
-        android:textSize="13sp"
+        android:textSize="12.5sp"
         android:paddingHorizontal="12dp"
         android:singleLine="true" />
 

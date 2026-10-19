@@ -3,8 +3,8 @@
     <dimen name="tv_overscan_horizontal">32dp</dimen>
     <dimen name="tv_overscan_vertical">12dp</dimen>
     <dimen name="tv_header_height">44dp</dimen>
-    <dimen name="tv_search_height">32dp</dimen>
-    <dimen name="tv_tab_height">30dp</dimen>
+    <dimen name="tv_search_height">34dp</dimen>
+    <dimen name="tv_tab_height">38dp</dimen>
     <dimen name="tv_card_poster_height">160dp</dimen>
     <dimen name="tv_card_margin">5dp</dimen>
     <dimen name="tv_card_corner_radius">10dp</dimen>

@@ -12,6 +12,7 @@
 > 3. **WORKFLOW PATEN SEMVER 2.0.0 & DOKUMENTASI CHANGELOG.md:** Setiap patch/fitur/rilis WAJIB mengikuti SemVer 2.0.0 atomik melalui `python3 tools/bump_version.py <patch|minor|major>` dan lulus seluruh test suite `pytest tests/test_semver.py`. **SETIAP ADA PERUBAHAN** (penambahan fitur, perbaikan bug, maupun refaktor), agent **MUTLAK WAJIB** mencatatkannya ke dalam berkas `CHANGELOG.md` sesuai format *Keep a Changelog* beserta penjelasan alasan kenaikan nomor versinya (`PATCH`, `MINOR`, atau `MAJOR`).
 > 4. **ZERO-TOLERANCE BLACKLIST HENTAI:** Dilarang membypass filter hentai di semua level backend, scraper, maupun UI.
 > 5. **URUTAN BACAAN WAJIB SEBELUM PLANNING/ITERASI (AGENTS.MD LALU PROJECT_MAP.MD):** Sebelum memulai perencanaan (*planning*), investigasi, maupun iterasi perubahan kode/fitur/bugfix apa pun, setiap AI Agent **MUTLAK WAJIB** membaca `AGENTS.md` terlebih dahulu, lalu membaca `PROJECT_MAP.md` untuk memahami topologi berkas, aturan paritas Chaquopy Android, indeks simbol fungsi, dan matriks keputusan teknis (*zero search overhead*).
+> 6. **DOWNLOAD BUTTONS DI README.MD WAJIB SELALU MENGARAH KE LATEST RELEASE YANG SUDAH PUBLIK (BUKAN DRAFT):** Seluruh tautan/tombol download pada `README.md` (Android Mobile, Android TV, Windows Portable, Linux AppImage) **MUTLAK WAJIB DIPASTIKAN** selalu mengarah ke versi rilis publik yang sudah aktif (*published/public latest release*), **BUKAN rilis yang masih berstatus DRAFT**. Selama rilis baru masih berstatus draft atau dalam pengerjaan, tautan unduhan publik di `README.md` wajib tetap mengarah ke rilis publik stabil terakhir yang asetnya dapat diunduh tanpa error 404. Hanya setelah rilis dipublikasikan resmi ke publik (`isDraft: false`), tautan download di `README.md` disinkronkan ke versi baru tersebut via `python3 tools/bump_version.py --sync-readme`. Jika suatu rilis ditarik kembali menjadi draft, tautan di `README.md` wajib segera dikembalikan ke versi publik aktif terakhir.
 
 ---
 
@@ -175,6 +176,8 @@ Setiap rilis publik Android (baik varian Mobile maupun Android TV) **MUTLAK WAJI
    Periksa aset rilis dengan `gh release view v<VERSION>`. Pastikan tidak ada file selain 4 file resmi di atas.
 4. **Perbarui Release Notes:**
    Tulis catatan rilis berbahasa Indonesia yang terstruktur rapi, mencantumkan perbaikan bug, penambahan fitur, dan panduan download untuk seluruh platform.
+5. **Sinkronisasi Tautan Unduhan README.md:**
+   Setelah rilis dipublikasikan resmi ke publik (`--draft=false`), jalankan `python3 tools/bump_version.py --sync-readme` untuk memperbarui tautan download di `README.md` ke versi baru tersebut. Selama rilis masih berstatus DRAFT, tautan di `README.md` dilarang diarahkan ke versi draft agar pengguna publik tidak mengalami error 404.
 
 
 ---
@@ -236,6 +239,7 @@ Saat menangani issue dari pengguna/komunitas di GitHub:
   4. `Tatap-x86_64.AppImage` (Official Linux AppImage)
 - **Zero-Tolerance Konten Dewasa / Hentai:** Blacklist total konten bergenre Hentai pada semua layer (backend scraping, browse, search, stream resolver, TUI console). Jangan izinkan fallback stream maupun metadata untuk judul bergenre hentai.
 - **Pencocokan Stream & Anti-Regresi:** Selalu validasi judul (`_is_title_match`) dan season (`_extract_season_num`) saat fallback ke Otakudesu. Dilarang fallback buta ke `res[0]`.
+- **Tombol Unduhan README.md Selalu Merujuk ke Rilis Publik (Bukan Draft):** Seluruh tombol dan tautan unduhan pada `README.md` wajib selalu merujuk ke rilis resmi yang sudah aktif/publik di GitHub (misal `releases/latest/download/tatap-release-v<LATEST_PUBLIC_VERSION>.apk`), bukan ke versi rilis yang masih berstatus Draft. Endpoint GitHub `/releases/latest/download/` tidak menyajikan aset rilis Draft dan akan melempar 404 jika diakses publik. Tautan baru boleh diarahkan ke nomor versi rilis baru HANYA setelah rilis tersebut dipublikasikan secara resmi ke publik.
 - **Dokumentasi & Integritas Kode:** Jangan pernah menghapus komentar atau docstring yang ada kecuali diminta secara eksplisit atau sudah tidak relevan karena perubahan kode.
 - **Verifikasi Sebelum Klaim Sukses:** Selalu jalankan uji sintaksis (`node --check`, linting, build test) dan verifikasi release (`gh release view`) sebelum mendeklarasikan tugas selesai.
 - **Transparansi Kerja:** Laporkan langkah kerja secara ringkas, jelas, dan sertakan tautan ke file atau artefak terkait.

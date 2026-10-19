@@ -175,3 +175,89 @@ async def test_upcoming_episodes_synced(monkeypatch):
         assert res["success"] is True
         assert len(res["data"]["items"]) == 1
         assert res["data"]["items"][0]["id"] == "anime-synced-slug-99"
+
+
+@pytest.mark.asyncio
+async def test_schedule_7days_full_weekly(monkeypatch):
+    """Pastikan seluruh 7 hari mingguan (Senin-Minggu / Monday-Sunday) terpetakan dengan benar."""
+    import datetime as _dt
+    now_utc = int(time.time())
+    wib_offset = 7 * 3600
+    now_dt = _dt.datetime.fromtimestamp(now_utc, _dt.timezone(_dt.timedelta(hours=7)))
+    cur_weekday = now_dt.weekday()
+
+    today_wib = ((now_utc + wib_offset) // 86400) * 86400
+    mon_wib = today_wib - (cur_weekday * 86400)
+
+    days_en = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    days_id = ["senin", "selasa", "rabu", "kamis", "jumat", "sabtu", "minggu"]
+
+    # Buat 1 anime mock untuk setiap hari dalam pekan (7 anime)
+    fake_items = []
+    mapping = {}
+    for i in range(7):
+        airing_ts = mon_wib + (i * 86400) + 3600  # 01:00 WIB di hari ke-i
+        title = f"Anime Day {days_en[i].capitalize()}"
+        slug = f"anime-day-{days_en[i]}-slug"
+        mapping[title] = slug
+        fake_items.append({
+            "id": 200 + i,
+            "airingAt": airing_ts,
+            "episode": i + 1,
+            "media": {
+                "id": 200 + i,
+                "title": {"romaji": title, "english": title},
+                "format": "TV",
+                "averageScore": 80,
+                "coverImage": {"large": f"https://example.com/cover_{i}.jpg"},
+            },
+        })
+
+    async def fake_batch_7(items):
+        return [(t, mapping.get(t)) for t, _ in items]
+
+    async def fake_get_cache_7(key, ttl=None):
+        return None
+
+    monkeypatch.setattr(al, "anilist_schedules_range", lambda s, e, max_pages=6: fake_items)
+    monkeypatch.setattr(main, "_match_slug_batch", fake_batch_7)
+    monkeypatch.setattr(main, "get_browse_cache", fake_get_cache_7)
+
+    async with AsyncClient(transport=ASGITransport(app=main.app), base_url="http://test") as ac:
+        # 1. Test semua 7 hari via nama Inggris
+        for idx, day_name in enumerate(days_en):
+            r = await ac.get(f"/api/schedule?day={day_name}")
+            assert r.status_code == 200
+            res = r.json()
+            assert res["success"] is True
+            d = res["data"]
+            assert d["day"] == day_name
+            assert len(d["items"]) == 1
+            assert d["items"][0]["title"] == f"Anime Day {day_name.capitalize()}"
+            assert d["items"][0]["id"] == f"anime-day-{day_name}-slug"
+            assert d["counts"][day_name] == 1
+            if idx == cur_weekday:
+                assert d["is_today"] is True
+            else:
+                assert d["is_today"] is False
+
+        # 2. Test semua 7 hari via nama Indonesia
+        for idx, day_id in enumerate(days_id):
+            r = await ac.get(f"/api/schedule?day={day_id}")
+            assert r.status_code == 200
+            res = r.json()
+            assert res["success"] is True
+            d = res["data"]
+            assert d["day"] == days_en[idx]
+            assert len(d["items"]) == 1
+            assert d["items"][0]["title"] == f"Anime Day {days_en[idx].capitalize()}"
+
+        # 3. Test day=all memuat semua 7 hari
+        r_all = await ac.get("/api/schedule?day=all")
+        assert r_all.status_code == 200
+        res_all = r_all.json()
+        assert res_all["success"] is True
+        d_all = res_all["data"]
+        assert d_all["total"] == 7
+        for day_name in days_en:
+            assert len(d_all[day_name]) == 1

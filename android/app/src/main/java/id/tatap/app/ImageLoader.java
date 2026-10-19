@@ -46,11 +46,13 @@ public class ImageLoader {
 
         Bitmap cached = memoryCache.get(urlString);
         if (cached != null) {
+            imageView.setAlpha(1.0f);
             imageView.setImageBitmap(cached);
             return;
         }
 
         imageView.setTag(urlString);
+        imageView.setAlpha(1.0f);
         imageView.setImageDrawable(new android.graphics.drawable.ColorDrawable(0xFF151822));
         final boolean isTv = TvFocusHelper.isTv(imageView.getContext());
         executor.execute(() -> {
@@ -91,7 +93,9 @@ public class ImageLoader {
                         memoryCache.put(urlString, bitmap);
                         mainHandler.post(() -> {
                             if (urlString.equals(imageView.getTag())) {
+                                imageView.setAlpha(0f);
                                 imageView.setImageBitmap(bitmap);
+                                imageView.animate().alpha(1.0f).setDuration(160).start();
                             }
                         });
                     }

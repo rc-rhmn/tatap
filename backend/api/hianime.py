@@ -1,5 +1,5 @@
 """Port alur browse-and-play hianime.at (terinspirasi cara kerja pemain CLI)."""
-import os, sys, re, json, base64, html as htmlmod, threading, time as _time
+import os, sys, re, json, base64, html as htmlmod, threading, time as _time, urllib.parse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import HI_BASE, HI_UA, XOR_KEY
 
@@ -105,7 +105,9 @@ def _probe_master(master_url, referer):
             raise RuntimeError(f"upstream {r.status_code} for {host}")
     except Exception as e:
         err_str = str(e).lower()
-        if any(w in err_str for w in ("reset", "ssl", "recv failure", "connect", "timeout")):
+        is_known_dpi = any(k in host for k in ("dramahot", "zokoanime"))
+        is_rst = any(w in err_str for w in ("reset", "ssl", "recv failure"))
+        if is_known_dpi or is_rst:
             _BLOCKED_DPI_HOSTS.add(host)
             try:
                 from api.desync import tls_desync_request
@@ -186,7 +188,8 @@ def browse(params: dict = None, page: int = 1):
         return {"items": [], "page": clean["page"], "total_pages": 1, "params": clean}
     url = BROWSE_API + "?" + urlencode(clean)
     page_html = _fetch(url)
-    items = _parse_browse_cards(page_html)
+    clean_html = page_html.split('id="sidebar"')[0].split('class="sidebar"')[0].split('id="main-sidebar"')[0]
+    items = _parse_browse_cards(clean_html)
     last = 1
     for m in re.finditer(r"page=(\d+)", page_html):
         try:
@@ -197,9 +200,13 @@ def browse(params: dict = None, page: int = 1):
 
 
 def _parse_browse_cards(html: str):
-    blocks = html.split("flw-item")
+    # Pangkas sidebar agar kartu anime terakhir tidak menyerap metadata widget sidebar
+    clean_html = html.split('id="sidebar"')[0].split('class="sidebar"')[0].split('id="main-sidebar"')[0]
+    blocks = clean_html.split("flw-item")
     out = []
-    for b in blocks[1:]:
+    for raw_b in blocks[1:]:
+        c_end = raw_b.find('<div class="clearfix">')
+        b = raw_b[:c_end] if c_end != -1 else raw_b[:3000]
         m = re.search(r"film-name.*?href=\"[^\"]*/([^\"]+)\"[^>]*title=\"([^\"]*)\"", b, re.S)
         if not m:
             continue
@@ -217,16 +224,117 @@ def _parse_browse_cards(html: str):
         typ = re.search(r"fdi-item\">(TV|Movie|OVA|ONA|Special|Music)<", b)
         dur = re.search(r"fdi-duration\">([^<]*)<", b)
         desc = re.search(r"class=\"description\">(.*?)</div>", b, re.S)
+        sub_cnt = int(sub.group(1)) if sub else 0
+        dub_cnt = int(dub.group(1)) if dub else 0
+        eps_cnt = int(eps.group(1)) if eps else 0
+        rel_cnt = sub_cnt if sub_cnt > 0 else (eps_cnt if eps_cnt > 0 else 0)
+        tot_cnt = eps_cnt if eps_cnt > 0 else 0
+        if tot_cnt > 0:
+            cnt_str = f"{rel_cnt}/{tot_cnt}"
+        elif rel_cnt > 0:
+            cnt_str = f"{rel_cnt}/?"
+        else:
+            cnt_str = ""
+        is_fin = (tot_cnt > 0 and rel_cnt >= tot_cnt)
         out.append({
             "id": slug, "title": title,
             "poster": poster,
-            "sub": int(sub.group(1)) if sub else 0,
-            "dub": int(dub.group(1)) if dub else 0,
-            "eps": int(eps.group(1)) if eps else 0,
+            "sub": sub_cnt,
+            "dub": dub_cnt,
+            "eps": eps_cnt,
+            "eps_released": rel_cnt,
+            "eps_total": tot_cnt,
+            "eps_counter": cnt_str,
             "type": typ.group(1) if typ else "",
             "duration": _clean(dur.group(1)) if dur else "",
             "synopsis": _clean(re.sub(r"<[^>]+>", "", desc.group(1)))[:220] if desc else "",
+            "is_finished": is_fin,
+            "status": "finished" if is_fin else "releasing",
+            "badge": "TAMAT" if is_fin else ("ONGOING" if rel_cnt > 0 else ""),
         })
+    return out
+
+def hianime_synopsis(slug: str) -> str:
+    """Ambil sinopsis anime dari halaman detail HiAnime jika ada."""
+    d = hianime_details(slug)
+    return d.get("synopsis", "")
+
+def hianime_details(slug: str) -> dict:
+    """Ambil metadata detail lengkap (sinopsis, skor, genre, studio, status, durasi, musim) dari halaman film HiAnime."""
+    out = {
+        "synopsis": "",
+        "score": 0.0,
+        "status": "",
+        "season": "",
+        "duration": "",
+        "studio": "",
+        "genres": [],
+        "source": ""
+    }
+    try:
+        if not slug or "hentai" in slug.lower():
+            return out
+        html_txt = _fetch(HI_BASE + "/" + slug)
+        if not html_txt:
+            return out
+        import html as _html
+
+        # Synopsis
+        m = re.search(r'class="film-description[^\"]*"[^>]*>(.*?)</div>', html_txt, re.S)
+        if not m:
+            m = re.search(r'class="description[^\"]*"[^>]*>(.*?)</div>', html_txt, re.S)
+        if m:
+            clean = re.sub(r'<br\s*/?>', '\n', m.group(1), flags=re.I)
+            clean = re.sub(r'<[^>]+>', '', clean).strip()
+            out["synopsis"] = _html.unescape(clean)
+
+        # Score
+        m_score = re.search(r'class="item-head">MAL Score:</span>\s*<span[^>]*class="name"[^>]*>([^<]+)</span>', html_txt)
+        if m_score:
+            try:
+                out["score"] = float(m_score.group(1).strip())
+            except ValueError:
+                pass
+
+        # Status
+        m_stat = re.search(r'class="item-head">Status:</span>\s*<span[^>]*class="name"[^>]*>([^<]+)</span>', html_txt)
+        if m_stat:
+            out["status"] = m_stat.group(1).strip()
+
+        # Premiered / Season
+        m_prem = re.search(r'class="item-head">Premiered:</span>\s*<span[^>]*class="name"[^>]*>([^<]+)</span>', html_txt)
+        if not m_prem:
+            m_prem = re.search(r'class="item-head">Premiered:</span>\s*<a[^>]*>([^<]+)</a>', html_txt)
+        if m_prem:
+            out["season"] = m_prem.group(1).strip()
+
+        # Duration
+        m_dur = re.search(r'class="item-head">Duration:</span>\s*<span[^>]*class="name"[^>]*>([^<]+)</span>', html_txt)
+        if m_dur:
+            out["duration"] = m_dur.group(1).strip()
+
+        # Studios
+        studios = []
+        m_stu = re.search(r'class="item-head">Studios?:</span>\s*(.*?)(?:</div>|<span class="item-head")', html_txt, re.S)
+        if m_stu:
+            for s in re.finditer(r'<a[^>]*class="name"[^>]*>([^<]+)</a>', m_stu.group(1)):
+                studios.append(s.group(1).strip())
+        if studios:
+            out["studio"] = ", ".join(studios)
+
+        # Genres
+        genres = []
+        m_gen = re.search(r'class="item-head">Genres?:</span>\s*(.*?)(?:</div>|<span class="item-head")', html_txt, re.S)
+        if m_gen:
+            for g in re.finditer(r'<a[^>]*href="[^\"]*/genres/[^\"]*"[^>]*>([^<]+)</a>', m_gen.group(1)):
+                gtxt = g.group(1).strip()
+                if gtxt.lower() != 'hentai' and gtxt not in genres:
+                    genres.append(gtxt)
+        if genres:
+            out["genres"] = genres
+
+    except Exception:
+        pass
     return out
 
 def _failover_proxies():
@@ -337,15 +445,25 @@ _SEARCH_ALIASES = {
     "ghost in school": "ghost stories",
     "ghosts at school": "ghost stories",
     "gakkou no kaidan": "ghost stories",
+    "girls und panzer": "girls & panzer",
+    "girls and panzer": "girls & panzer",
+    "garupan": "girls & panzer",
 }
 
 def hianime_search(query: str, limit: int = 15):
     q_str = (query or "").strip()
     if not q_str or q_str.lower() == "hentai" or "hentai" in q_str.lower().split():
         return []
-    canonical = _SEARCH_ALIASES.get(q_str.lower())
-    q = re.sub(r"\s+", "+", canonical or q_str)
-    page = _fetch(SEARCH_API.format(q))
+    q_lower = q_str.lower()
+    canonical = _SEARCH_ALIASES.get(q_lower)
+    if not canonical:
+        if "girls und panzer" in q_lower and "film" not in q_lower and "movie" not in q_lower:
+            canonical = re.sub(r"\bgirls\s+und\s+panzer\b", "girls & panzer", q_str, flags=re.I)
+        elif "girls and panzer" in q_lower and "film" not in q_lower and "movie" not in q_lower:
+            canonical = re.sub(r"\bgirls\s+and\s+panzer\b", "girls & panzer", q_str, flags=re.I)
+    q_val = canonical or q_str
+    q_encoded = urllib.parse.quote_plus(q_val)
+    page = _fetch(SEARCH_API.format(q_encoded))
     if "<title>Just a moment" in page:
         raise RuntimeError("Blocked by cloudflare.")
     page = page.split('id="main-sidebar"')[0]
@@ -508,11 +626,26 @@ def _normalize_subtitles(raw_tracks, referer: str = ""):
             continue
         raw_label = (t.get("label") or t.get("lang") or t.get("language")
                      or f"Subtitle {i + 1}").strip()
-        inferred = (_label_to_lang(raw_label)
-                    or _label_to_lang(t.get("lang") or "")
+        raw_default = bool(t.get("default"))
+
+        # Ekstraksi bahasa: Dahulukan inferensi dari label asli agar dummy 'lang: en'
+        # dari CDN upstream tidak membajak bahasa non-Inggris (seperti Czech/Danish pada ZokoAnime).
+        inferred = _label_to_lang(raw_label)
+        if not inferred:
+            # Hanya infer dari field lang/srclang jika label tidak mengindikasikan bahasa non-Inggris
+            if not any(k in raw_label.lower() for k in _NON_ENGLISH_KEYWORDS):
+                inferred = (
+                    _label_to_lang(t.get("lang") or "")
                     or _label_to_lang(t.get("language") or "")
-                    or _label_to_lang(t.get("srclang") or ""))
-        lang = inferred or (t.get("lang") or t.get("language") or t.get("srclang") or "").strip().lower()
+                    or _label_to_lang(t.get("srclang") or "")
+                )
+
+        # Jika raw_label menyebut bahasa non-Inggris, jangan biarkan lang jatuh ke 'en'
+        upstream_lang = (t.get("lang") or t.get("language") or t.get("srclang") or "").strip().lower()
+        if any(k in raw_label.lower() for k in _NON_ENGLISH_KEYWORDS) and upstream_lang == "en":
+            lang = inferred or ""
+        else:
+            lang = inferred or upstream_lang
 
         # Format label readable
         label = raw_label
@@ -526,6 +659,7 @@ def _normalize_subtitles(raw_tracks, referer: str = ""):
             "lang": lang,
             "url": url,
             "default": False,
+            "raw_default": raw_default,
         })
 
     if not out:
@@ -533,12 +667,23 @@ def _normalize_subtitles(raw_tracks, referer: str = ""):
 
     # Tetapkan tepat 1 track default:
     # Prioritas 1: Indonesian (jika ada native)
-    # Prioritas 2: English (hindari Arabic yang sering di posisi 0 secara alfabetis)
-    # Prioritas 3: Track non-Arabic pertama
-    # Prioritas 4: Track 0 jika semua track adalah Arabic
-    def is_en(o):
-        l = (o.get("lang") or "").lower()
-        lbl = (o.get("label") or "").lower()
+    # Prioritas 2: English track dengan upstream default == True (misal ZokoAnime)
+    # Prioritas 3: Exact "English" label
+    # Prioritas 4: Any English track (misal "English 2", "English [Signs & Songs]")
+    # Prioritas 5: Track non-Arabic pertama
+    # Prioritas 6: Track 0 jika semua track adalah Arabic
+    def is_exact_en(o):
+        lbl = (o.get("label") or "").strip().lower()
+        l = (o.get("lang") or "").strip().lower()
+        if any(k in lbl for k in _NON_ENGLISH_KEYWORDS):
+            return False
+        return lbl in ("english", "english [full]", "english (full)", "eng") or (l == "en" and lbl == "english")
+
+    def is_any_en(o):
+        lbl = (o.get("label") or "").strip().lower()
+        l = (o.get("lang") or "").strip().lower()
+        if any(k in lbl for k in _NON_ENGLISH_KEYWORDS):
+            return False
         return l == "en" or "english" in lbl or lbl.startswith("eng")
 
     def is_id(o):
@@ -553,15 +698,35 @@ def _normalize_subtitles(raw_tracks, referer: str = ""):
 
     def_track = next((o for o in out if is_id(o)), None)
     if not def_track:
-        def_track = next((o for o in out if is_en(o)), None)
+        def_track = next((o for o in out if o.get("raw_default") and is_any_en(o)), None)
+    if not def_track:
+        def_track = next((o for o in out if is_exact_en(o)), None)
+    if not def_track:
+        def_track = next((o for o in out if is_any_en(o)), None)
     if not def_track:
         def_track = next((o for o in out if not is_ar(o)), None)
     if not def_track:
         def_track = out[0]
 
     def_track["default"] = True
+
+    for item in out:
+        item.pop("raw_default", None)
+
     return out
 
+
+# Kata kunci bahasa non-Inggris untuk mencegah dummy 'lang: en' dari CDN upstream
+# salah diidentifikasi sebagai track bahasa Inggris.
+_NON_ENGLISH_KEYWORDS = (
+    "arabic", "arab", "indonesia", "bahasa", "spanish", "espanol", "español",
+    "portuguese", "português", "french", "français", "francais", "german", "deutsch",
+    "italian", "italiano", "korean", "chinese", "russian", "thai", "vietnamese",
+    "turkish", "hindi", "czech", "danish", "dutch", "finnish", "greek",
+    "hungarian", "norwegian", "polish", "romanian", "slovak", "swedish",
+    "malay", "tagalog", "filipino", "ukrainian", "bulgarian", "croatian",
+    "japanese", "japan",
+)
 
 # Peta kode bahasa 2-3 char → nama readable (untuk label dropdown).
 _LANG_NAME = {
@@ -581,6 +746,22 @@ _LANG_NAME = {
     "vi": "Vietnamese", "vie": "Vietnamese",
     "tr": "Turkish", "tur": "Turkish",
     "hi": "Hindi", "hin": "Hindi",
+    "cs": "Czech", "ces": "Czech", "cze": "Czech",
+    "da": "Danish", "dan": "Danish",
+    "nl": "Dutch", "nld": "Dutch", "dut": "Dutch",
+    "fi": "Finnish", "fin": "Finnish",
+    "el": "Greek", "ell": "Greek", "gre": "Greek",
+    "hu": "Hungarian", "hun": "Hungarian",
+    "no": "Norwegian", "nor": "Norwegian", "nob": "Norwegian",
+    "pl": "Polish", "pol": "Polish",
+    "ro": "Romanian", "ron": "Romanian", "rum": "Romanian",
+    "sk": "Slovak", "slk": "Slovak", "slo": "Slovak",
+    "sv": "Swedish", "swe": "Swedish",
+    "ms": "Malay", "msa": "Malay", "may": "Malay",
+    "tl": "Tagalog", "fil": "Filipino",
+    "uk": "Ukrainian", "ukr": "Ukrainian",
+    "bg": "Bulgarian", "bul": "Bulgarian",
+    "hr": "Croatian", "hrv": "Croatian",
 }
 
 
@@ -623,6 +804,38 @@ def _label_to_lang(label):
         return "tr"
     if "hindi" in lab or lab.startswith("hin") or lab == "hi":
         return "hi"
+    if "czech" in lab or lab.startswith("cze") or lab.startswith("ces") or lab == "cs":
+        return "cs"
+    if "danish" in lab or lab.startswith("dan") or lab == "da":
+        return "da"
+    if "dutch" in lab or lab.startswith("nld") or lab.startswith("dut") or lab == "nl":
+        return "nl"
+    if "finnish" in lab or lab.startswith("fin") or lab == "fi":
+        return "fi"
+    if "greek" in lab or lab.startswith("ell") or lab.startswith("gre") or lab == "el":
+        return "el"
+    if "hungarian" in lab or lab.startswith("hun") or lab == "hu":
+        return "hu"
+    if "norwegian" in lab or lab.startswith("nor") or lab.startswith("nob") or lab == "no":
+        return "no"
+    if "polish" in lab or lab.startswith("pol") or lab == "pl":
+        return "pl"
+    if "romanian" in lab or lab.startswith("ron") or lab.startswith("rum") or lab == "ro":
+        return "ro"
+    if "slovak" in lab or lab.startswith("slk") or lab.startswith("slo") or lab == "sk":
+        return "sk"
+    if "swedish" in lab or lab.startswith("swe") or lab == "sv":
+        return "sv"
+    if "malay" in lab or lab.startswith("msa") or lab.startswith("may") or lab == "ms":
+        return "ms"
+    if "tagalog" in lab or "filipino" in lab or lab.startswith("fil") or lab == "tl":
+        return "tl"
+    if "ukrainian" in lab or lab.startswith("ukr") or lab == "uk":
+        return "uk"
+    if "bulgarian" in lab or lab.startswith("bul") or lab == "bg":
+        return "bg"
+    if "croatian" in lab or lab.startswith("hrv") or lab == "hr":
+        return "hr"
     return ""
 
 
@@ -666,8 +879,9 @@ def _try_megaplay(embed: str):
     sub_lang = default_track["label"] if default_track else None
 
     variants = []
+    text = ""
     try:
-        text = _fetch(master, referer=origin + "/")
+        text = _fetch_media(master, referer=origin + "/", timeout=8)
         base = master.rsplit("/", 1)[0] + "/"
         lines = text.splitlines()
         for i, ln in enumerate(lines):
@@ -679,29 +893,25 @@ def _try_megaplay(embed: str):
                     if not url.startswith("http"):
                         url = base + url
                     variants.append({"q": q, "url": url})
-    except Exception:
-        pass
+    except Exception as e:
+        raise RuntimeError(f"megaplay master: {e}")
     variants.sort(key=lambda v: int(re.sub(r"\D", "", v["q"]) or 0), reverse=True)
     if not variants:
         variants = [{"q": "auto", "url": master}]
-    # Probe master — kalau host mati, return None (bukan raise) supaya caller
-    # smart-fallback ke server berikutnya.
-    try:
-        _probe_master(master, referer=origin + "/")
-    except Exception as e:
-        raise RuntimeError(f"megaplay probe: {e}")
-    # Validasi playlist: minimal ada 1 segment/variant URL agar HLS.js tidak hang.
-    try:
-        variants = _validate_master_playlist(master, referer=origin + "/", variants=variants)
-    except Exception as e:
-        raise RuntimeError(f"megaplay playlist: {e}")
+    if "#EXTM3U" not in text:
+        raise RuntimeError("megaplay playlist: not m3u8")
+
+    intro = cfg.get("intro") or {"start": 0, "end": 0}
+    outro = cfg.get("outro") or {"start": 0, "end": 0}
 
     return {"master": master, "variants": variants,
             "sub": sub_url,
             "sub_lang": sub_lang,
             "referer": origin + "/", "mal_id": "",
             "tracks": subs,
-            "subtitles": subtitles}
+            "subtitles": subtitles,
+            "intro": intro,
+            "outro": outro}
 
 def _order_servers(servers):
     def score(s):
@@ -803,34 +1013,36 @@ def _validate_master_playlist(master_url: str, referer: str, variants: list):
 
 
 def _validate_sub_url(sub_url: str, referer: str):
-    """Soft-validasi subtitle URL: HEAD/GET kecil, kalau 4xx/5xx atau body
-    kosong → return None. Kalau 200 → return URL apa adanya.
-    Subtitle yang invalid jangan memblokir playback."""
+    """Soft-validasi subtitle URL:
+    Untuk CDN terpercaya (megaplay, broforgotsave, stellarfrontier, megacloud, dsb),
+    langsung return URL agar tidak menambah latency berlebih saat resolve.
+    Untuk host lainnya, lakukan validasi cepat."""
     if not sub_url or not sub_url.startswith("http"):
         return None
     try:
         host = _host_from(sub_url)
+        if any(k in host for k in ("megaplay", "broforgotsave", "stellarfrontier", "megacloud", "akamaized", "rabbitstream")):
+            return sub_url
         headers = {"User-Agent": HI_UA, **({"Referer": referer} if referer else {})}
         if host in _BLOCKED_DPI_HOSTS:
             from api.desync import tls_desync_request
-            b = tls_desync_request(sub_url, headers=headers, timeout=6.0)
+            b = tls_desync_request(sub_url, headers=headers, timeout=4.0)
             if b and len(b) >= 10:
                 return sub_url
             return None
         try:
             from curl_cffi import requests as creq
-            kw = dict(headers=headers, impersonate="chrome124", timeout=8)
+            kw = dict(headers=headers, impersonate="chrome124", timeout=5)
             r = creq.get(sub_url, **kw)
             if r.status_code == 200 and r.content and len(r.content) >= 10:
                 return sub_url
             return None
         except Exception:
             import httpx
-            with httpx.Client(timeout=8, follow_redirects=True, headers=headers) as c:
+            with httpx.Client(timeout=5, follow_redirects=True, headers=headers) as c:
                 r = c.get(sub_url)
                 if r.status_code == 200 and r.content and len(r.content) >= 10:
                     return sub_url
-                # Fallback khusus host Megaplay / CDN jika referer asal ditolak
                 if any(k in host for k in ("broforgotsave", "stellarfrontier", "megaplay")):
                     headers["Referer"] = "https://megaplay.buzz/"
                     r2 = c.get(sub_url, headers=headers)
@@ -885,11 +1097,67 @@ def _try_embed_legacy(embed: str):
     if mm:
         mal_id = mm.group(1)
 
+    intro = cfg.get("intro") or {"start": 0, "end": 0}
+    outro = cfg.get("outro") or {"start": 0, "end": 0}
+
     return {"master": master, "variants": variants,
             "sub": sub_url,
             "sub_lang": sub_lang,
             "referer": referer, "mal_id": mal_id,
-            "subtitles": subtitles}
+            "subtitles": subtitles,
+            "intro": intro,
+            "outro": outro}
+
+
+def _harvest_subtitles(servers, current_srv_name: str = ""):
+    """Ambil track subtitle dari server alternatif jika server video utama tidak memiliki subtitle."""
+    for srv in servers:
+        if srv.get("name") == current_srv_name:
+            continue
+        host = _host_from(srv.get("embed", ""))
+        if _is_dead_host(host):
+            continue
+        try:
+            embed_low = (srv.get("embed") or "").lower()
+            if "zokoanime.video" in embed_low or "vidtube.site" in embed_low or "vidplay" in srv.get("name", "").lower():
+                alt_got = _try_embed_legacy(srv["embed"])
+            else:
+                alt_got = _try_megaplay(srv["embed"])
+            if alt_got and alt_got.get("subtitles"):
+                return {
+                    "subtitles": alt_got["subtitles"],
+                    "sub": alt_got.get("sub"),
+                    "sub_lang": alt_got.get("sub_lang"),
+                    "referer": alt_got.get("referer"),
+                }
+        except Exception:
+            continue
+    return None
+
+
+def hianime_subtitles_for_episode(slug: str, ep_no: int) -> dict:
+    """Ambil track subtitle softsub untuk episode tertentu tanpa perlu mengunduh master video m3u8.
+    Berguna sebagai fallback untuk Otakudesu atau stream tanpa softsub.
+    """
+    try:
+        maps = hianime_episodes(slug)
+        ep_id = None
+        for e in maps:
+            if int(e.get("ep", -1)) == int(ep_no):
+                ep_id = e.get("ep_id")
+                break
+        if not ep_id:
+            return {"subtitles": [], "sub": None, "sub_lang": None}
+        servers_html = _fetch(SERVERS_API.format(ep_id))
+        sub_servers = _order_servers(_parse_servers(servers_html, "sub"))
+        harvested = _harvest_subtitles(sub_servers)
+        if not harvested:
+            dub_servers = _order_servers(_parse_servers(servers_html, "dub"))
+            harvested = _harvest_subtitles(dub_servers)
+        return harvested or {"subtitles": [], "sub": None, "sub_lang": None}
+    except Exception:
+        return {"subtitles": [], "sub": None, "sub_lang": None}
+
 
 def hianime_m3u8(episode_maps, ep_no: int, mode: str = "sub", slug: str = ""):
     req_mode = "dub" if str(mode).lower() == "dub" else "sub"
@@ -951,6 +1219,26 @@ def hianime_m3u8(episode_maps, ep_no: int, mode: str = "sub", slug: str = ""):
             if got:
                 got["server"] = srv["name"]
                 got["mode"] = actual_mode
+
+                # Fallback Subtitle Tier 1 & 2:
+                # Jika server video yang berhasil memutar video tidak memiliki subtitle (atau kosong):
+                if not got.get("subtitles"):
+                    # 1. Coba server alternatif di mode yang sama (Cross-Server)
+                    alt_subs = _harvest_subtitles(servers_sorted, current_srv_name=srv["name"])
+                    # 2. Jika masih kosong dan sedang mode DUB, pinjam dari mode SUB (Cross-Mode)
+                    if not alt_subs and actual_mode == "dub":
+                        sub_servers = _order_servers(_parse_servers(servers_html, "sub"))
+                        alt_subs = _harvest_subtitles(sub_servers)
+                    # 3. Jika masih kosong dan sedang mode SUB, pinjam dari mode DUB sebagai cadangan
+                    if not alt_subs and actual_mode == "sub":
+                        dub_servers = _order_servers(_parse_servers(servers_html, "dub"))
+                        alt_subs = _harvest_subtitles(dub_servers)
+
+                    if alt_subs:
+                        got["subtitles"] = alt_subs["subtitles"]
+                        got["sub"] = alt_subs.get("sub")
+                        got["sub_lang"] = alt_subs.get("sub_lang")
+
                 return got
             last_err = f"{srv['name']} gave no m3u8"
         except Exception as e:

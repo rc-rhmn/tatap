@@ -69,6 +69,37 @@ def test_version_files_synchronized():
         c = f.read()
     assert f"v{root_v}" in c, f"frontend/index.html tidak memuat tag versi v{root_v}"
 
+    # 5. README.md (Download links must point to valid SemVer release <= root_v, targetting public release)
+    README_FILE = os.path.join(ROOT_DIR, "README.md")
+    with open(README_FILE, "r", encoding="utf-8") as f:
+        c = f.read()
+    m1 = re.search(r'tatap-release-v([0-9.]+)\.apk', c)
+    m2 = re.search(r'tatap-tv-release-v([0-9.]+)\.apk', c)
+    assert m1 is not None, "README.md tidak memuat tautan tatap-release-v*.apk"
+    assert m2 is not None, "README.md tidak memuat tautan tatap-tv-release-v*.apk"
+    assert m1.group(1) == m2.group(1), f"Versi APK mobile ({m1.group(1)}) dan TV ({m2.group(1)}) di README.md tidak sama!"
+    from tools.bump_version import parse_semver, calculate_version_code
+    parse_semver(m1.group(1))
+    assert calculate_version_code(m1.group(1)) <= calculate_version_code(root_v), (
+        f"Versi README.md (v{m1.group(1)}) tidak boleh melebihi VERSION root (v{root_v})"
+    )
+
+
+def test_sync_readme_version_utility(tmp_path, monkeypatch):
+    from tools.bump_version import sync_readme_version
+    import tools.bump_version as bv
+
+    test_readme = tmp_path / "README.md"
+    test_readme.write_text(
+        "Download https://github.com/asfaraguest/tatap/releases/latest/download/tatap-release-v2.8.3.apk\n"
+        "TV https://github.com/asfaraguest/tatap/releases/latest/download/tatap-tv-release-v2.8.3.apk"
+    )
+    monkeypatch.setattr(bv, "README_FILE", str(test_readme))
+    sync_readme_version("2.9.0")
+    content = test_readme.read_text()
+    assert "tatap-release-v2.9.0.apk" in content
+    assert "tatap-tv-release-v2.9.0.apk" in content
+
 
 def test_version_code_calculation():
     from tools.bump_version import calculate_version_code

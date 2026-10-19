@@ -3,14 +3,17 @@ package id.tatap.app;
 import android.app.Activity;
 import android.content.Context;
 import android.media.AudioManager;
+import android.media.audiofx.HapticGenerator;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.view.GestureDetector;
+import android.view.HapticFeedbackConstants;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
@@ -21,7 +24,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.content.SharedPreferences;
+import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -29,6 +35,12 @@ import android.util.TypedValue;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.ImageButton;
+import android.widget.LinearLayout;
+
+import androidx.annotation.NonNull;
+import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
@@ -36,12 +48,18 @@ import androidx.media3.common.ForwardingPlayer;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
+import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
+import androidx.media3.common.audio.AudioProcessor;
+import androidx.media3.exoplayer.audio.AudioSink;
+import androidx.media3.exoplayer.audio.DefaultAudioSink;
+import androidx.media3.exoplayer.audio.TeeAudioProcessor;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
 import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.PlayerView;
@@ -54,6 +72,11 @@ import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.ShortBuffer;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
@@ -61,6 +84,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import android.content.Intent;
+import android.widget.EditText;
 
 public class PlayerActivity extends Activity {
     private ExoPlayer player;
@@ -71,6 +96,12 @@ public class PlayerActivity extends Activity {
     private View hudOsd;
     private TextView tvOsdIcon, tvOsdVal, tvRippleLeft, tvRippleRight;
     private ProgressBar pbOsdBar;
+    private View hudHoldSpeed;
+    private TextView tvHoldSpeedIcon, tvHoldSpeedText;
+    private boolean isHoldingSpeed = false;
+    private boolean isHoldingRewind = false;
+    private float holdOriginalSpeed = 1.0f;
+    private int holdRewindAccumMs = 0;
     private TextView tvPlayerTitle, tvSubStatus;
     private ImageButton btnPlayerBack;
     private View layoutTopBar;
@@ -91,10 +122,86 @@ public class PlayerActivity extends Activity {
     private View btnExoFullscreen;
     private Button btnAspect;
     private Button btnQuality;
+    private Button btnSpeed;
     private Button btnSubStyle;
     private Button btnSubSelector;
+    private Button btnSkipOpEd;
+    private float currentPlaybackSpeed = 1.0f;
+    private boolean isHapticEnabled = true;
+    private boolean isGeneralHapticEnabled = true;
+    private boolean isSceneHapticEnabled = false; // Haptic scene audio dimatikan
+    private boolean isTimeBarListenerAttached = false;
+    private volatile boolean isVideoPlaying = false;
+    private volatile boolean isInOpEd = false;
+    private Object hapticGenerator;
+    private int currentAudioSessionId = C.AUDIO_SESSION_ID_UNSET;
+    private int lastHapticBrightnessStep = -1;
+
+    // Watch Portrait View components
+    private View flPlayerWrapper;
+    private View layoutPortraitBottom;
+    private TextView tvPortraitAnimeTitle;
+    private TextView tvPortraitCurrentEp;
+    private TextView tvPortraitEpCount;
+    private Button btnPortraitSub;
+    private Button btnPortraitQuality;
+    private Button btnPortraitSpeed;
+    private Button btnPortraitFullscreen;
+    private Button btnPortraitSort;
+    private RecyclerView rvPortraitRanges;
+    private RecyclerView rvPortraitEpisodes;
+    private boolean isPortraitAscending = true;
+    private PortraitEpisodeAdapter portraitEpisodeAdapter;
+    private PortraitRangeAdapter portraitRangeAdapter;
+    private PortraitEpisodeRange activePortraitRange = null;
+    private final List<PortraitEpisodeRange> portraitRanges = new ArrayList<>();
+    private android.window.OnBackInvokedCallback backInvokedCallback;
+
+    public static class PortraitEpisodeRange {
+        public final int start;
+        public final int end;
+        public final String label;
+
+        public PortraitEpisodeRange(int start, int end) {
+            this.start = start;
+            this.end = end;
+            this.label = start + " - " + end;
+        }
+    }
+
+    private int dpToPx(int dp) {
+        return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp, getResources().getDisplayMetrics());
+    }
+    private static final float[] PLAYBACK_SPEEDS = new float[]{0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f};
+    private static final String[] PLAYBACK_SPEED_LABELS = new String[]{"0.5x", "0.75x", "1.0x (Normal)", "1.25x", "1.5x", "1.75x", "2.0x"};
+    private long introStartMs = 0;
+    private long introEndMs = 0;
+    private long outroStartMs = 0;
+    private long outroEndMs = 0;
+    private long currentSkipTargetMs = 0;
+    private boolean autoSkipOpEd = false;
     private float currentBrightness = 0.5f;
     private float currentVolumeFraction = -1f;
+    private int activeGestureZone = 0; // 0 = none / deadzone, 1 = brightness (left edge), 2 = volume (right edge)
+    private long pendingResumePosMs = -1;
+    private boolean hasPromptedResume = false;
+    private long lastProgressSaveMs = 0;
+    private View btnScreenLock;
+    private View btnScreenUnlock;
+    private boolean isScreenLocked = false;
+    private final Runnable hideUnlockButtonRunnable = () -> {
+        if (btnScreenUnlock != null && isScreenLocked) {
+            btnScreenUnlock.animate()
+                    .alpha(0f)
+                    .setDuration(250)
+                    .withEndAction(() -> {
+                        if (isScreenLocked && btnScreenUnlock != null) {
+                            btnScreenUnlock.setVisibility(View.GONE);
+                        }
+                    })
+                    .start();
+        }
+    };
 
     // Subtitle Engine State
     public static class SubtitleCue {
@@ -126,6 +233,9 @@ public class PlayerActivity extends Activity {
     private String activeEngine = "gtx"; // "gtx" | "gtx+" | "aigtx" | "ai" | "raw"
     private boolean subEnabled = true;
     private String activeStreamMode = "sub"; // "sub" | "dub"
+    private String customSubtitleName = "";
+    private String customSubtitleUrl = "";
+    private static final int REQUEST_CODE_PICK_SUBTITLE = 8769;
     private boolean hasAiKey = false;
     private String configuredAiModel = "gemini-2.0-flash";
     private boolean isHlsMode = false;
@@ -176,6 +286,11 @@ public class PlayerActivity extends Activity {
                 }
             }
 
+            if (player != null) {
+                checkSkipTimes(player.getCurrentPosition());
+                recordWatchProgress(false);
+            }
+
             if (player != null && player.isPlaying()) {
                 int syncInterval = TvFocusHelper.isTv(PlayerActivity.this) ? 150 : 75;
                 handler.postDelayed(this, syncInterval);
@@ -183,12 +298,106 @@ public class PlayerActivity extends Activity {
         }
     };
 
+    private void doSkipOpEd() {
+        if (player != null && currentSkipTargetMs > 0) {
+            player.seekTo(currentSkipTargetMs);
+            if (btnSkipOpEd != null) {
+                if (TvFocusHelper.isTv(this) && (btnSkipOpEd.isFocused() || getCurrentFocus() == btnSkipOpEd)) {
+                    if (playerView != null) {
+                        playerView.requestFocus();
+                    }
+                }
+                btnSkipOpEd.setVisibility(View.GONE);
+            }
+            long sec = currentSkipTargetMs / 1000;
+            currentSkipTargetMs = 0;
+            String timeStr = String.format("%02d:%02d", sec / 60, sec % 60);
+            performHapticClick();
+            Toast.makeText(this, "Melompat ke " + timeStr, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void updateSkipButtonLabel(boolean isIntro) {
+        if (btnSkipOpEd == null) return;
+        boolean isTv = TvFocusHelper.isTv(this);
+        String action = isIntro ? "Lewati Opening" : "Lewati Ending";
+        if (isTv) {
+            boolean focused = btnSkipOpEd.isFocused() || getCurrentFocus() == btnSkipOpEd;
+            btnSkipOpEd.setText(focused ? (action + " [OK]") : ("[▼] " + action));
+        } else {
+            btnSkipOpEd.setText(action);
+        }
+    }
+
+    private void checkSkipTimes(long posMs) {
+        if (btnSkipOpEd == null || player == null) return;
+        boolean inIntro = (introEndMs > introStartMs && (introEndMs - introStartMs) >= 10_000
+                && posMs >= introStartMs && posMs < introEndMs);
+        boolean inOutro = (outroEndMs > outroStartMs && (outroEndMs - outroStartMs) >= 10_000
+                && posMs >= outroStartMs && posMs < outroEndMs);
+        isInOpEd = (inIntro || inOutro);
+
+        if (autoSkipOpEd && (inIntro || inOutro)) {
+            currentSkipTargetMs = (inIntro ? introEndMs : outroEndMs) + 500;
+            doSkipOpEd();
+            return;
+        }
+
+        boolean isTv = TvFocusHelper.isTv(this);
+        if (inIntro) {
+            currentSkipTargetMs = introEndMs + 500;
+            updateSkipButtonLabel(true);
+            if (btnSkipOpEd.getVisibility() != View.VISIBLE) {
+                btnSkipOpEd.setVisibility(View.VISIBLE);
+                if (isTv) {
+                    btnSkipOpEd.requestFocus();
+                    updateSkipButtonLabel(true);
+                }
+            }
+        } else if (inOutro) {
+            currentSkipTargetMs = outroEndMs + 500;
+            updateSkipButtonLabel(false);
+            if (btnSkipOpEd.getVisibility() != View.VISIBLE) {
+                btnSkipOpEd.setVisibility(View.VISIBLE);
+                if (isTv) {
+                    btnSkipOpEd.requestFocus();
+                    updateSkipButtonLabel(false);
+                }
+            }
+        } else {
+            currentSkipTargetMs = 0;
+            if (btnSkipOpEd.getVisibility() == View.VISIBLE) {
+                if (isTv && (btnSkipOpEd.isFocused() || getCurrentFocus() == btnSkipOpEd)) {
+                    if (playerView != null) {
+                        playerView.requestFocus();
+                    }
+                }
+                btnSkipOpEd.setVisibility(View.GONE);
+            }
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
-        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        boolean isTvOrLandscape = TvFocusHelper.isTv(this) || getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+        if (isTvOrLandscape) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            backInvokedCallback = this::handleBackAction;
+            try {
+                getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                    backInvokedCallback
+                );
+            } catch (Throwable ignored) {}
+        }
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -200,12 +409,11 @@ public class PlayerActivity extends Activity {
             }
         } catch (Throwable ignored) {}
 
-        setContentView(R.layout.activity_player);
+        if (TvFocusHelper.isTv(this)) {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+        }
 
-        // Pastikan hideSystemUi hanya dieksekusi setelah decorView terpasang di window
-        try {
-            getWindow().getDecorView().post(this::hideSystemUi);
-        } catch (Throwable ignored) {}
+        setContentView(R.layout.activity_player);
 
         slug = getIntent().getStringExtra("slug");
         ep = getIntent().getIntExtra("ep", 1);
@@ -214,6 +422,79 @@ public class PlayerActivity extends Activity {
         if (passedList != null) {
             episodeList.addAll(passedList);
         }
+
+        flPlayerWrapper = findViewById(R.id.fl_player_wrapper);
+        layoutPortraitBottom = findViewById(R.id.layout_portrait_bottom);
+        tvPortraitAnimeTitle = findViewById(R.id.tv_portrait_anime_title);
+        tvPortraitCurrentEp = findViewById(R.id.tv_portrait_current_ep);
+        tvPortraitEpCount = findViewById(R.id.tv_portrait_ep_count);
+        btnPortraitSub = findViewById(R.id.btn_portrait_sub);
+        btnPortraitQuality = findViewById(R.id.btn_portrait_quality);
+        btnPortraitSpeed = findViewById(R.id.btn_portrait_speed);
+        btnPortraitFullscreen = findViewById(R.id.btn_portrait_fullscreen);
+        btnPortraitSort = findViewById(R.id.btn_portrait_sort);
+        rvPortraitRanges = findViewById(R.id.rv_portrait_ranges);
+        rvPortraitEpisodes = findViewById(R.id.rv_portrait_episodes);
+
+        if (layoutPortraitBottom != null && !TvFocusHelper.isTv(this)) {
+            if (title != null && !title.isEmpty()) {
+                tvPortraitAnimeTitle.setText(title);
+            } else {
+                tvPortraitAnimeTitle.setText("Episode " + ep);
+            }
+            tvPortraitCurrentEp.setText("Memutar Episode " + ep);
+
+            android.widget.ImageButton btnPortraitBack = findViewById(R.id.btn_portrait_back);
+            if (btnPortraitBack != null) {
+                btnPortraitBack.setOnClickListener(v -> handleBackAction());
+            }
+
+            if (btnPortraitSub != null) {
+                btnPortraitSub.setOnClickListener(v -> {
+                    HapticHelper.performClick(v);
+                    showSubtitleSelectorDialog();
+                });
+            }
+            if (btnPortraitQuality != null) {
+                btnPortraitQuality.setOnClickListener(v -> {
+                    HapticHelper.performClick(v);
+                    showQualitySelectorDialog();
+                });
+            }
+            if (btnPortraitSpeed != null) {
+                btnPortraitSpeed.setOnClickListener(v -> {
+                    HapticHelper.performClick(v);
+                    showSpeedSelectorDialog();
+                });
+            }
+            if (btnPortraitFullscreen != null) {
+                btnPortraitFullscreen.setOnClickListener(v -> {
+                    HapticHelper.performClick(v);
+                    setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+                });
+            }
+            if (btnPortraitSort != null) {
+                btnPortraitSort.setOnClickListener(v -> {
+                    HapticHelper.performClick(v);
+                    isPortraitAscending = !isPortraitAscending;
+                    btnPortraitSort.setText(isPortraitAscending ? "Urutan: 1 - N" : "Urutan: N - 1");
+                    updatePortraitEpisodeDisplay();
+                });
+            }
+
+            if (rvPortraitEpisodes != null) {
+                rvPortraitEpisodes.setLayoutManager(new GridLayoutManager(this, 4));
+                portraitEpisodeAdapter = new PortraitEpisodeAdapter();
+                rvPortraitEpisodes.setAdapter(portraitEpisodeAdapter);
+            }
+
+            if (rvPortraitRanges != null) {
+                rvPortraitRanges.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
+                portraitRangeAdapter = new PortraitRangeAdapter();
+                rvPortraitRanges.setAdapter(portraitRangeAdapter);
+            }
+        }
+
         ensureEpisodeListLoaded();
 
         playerView = findViewById(R.id.player_view);
@@ -223,8 +504,15 @@ public class PlayerActivity extends Activity {
         pbOsdBar = findViewById(R.id.pb_osd_bar);
         tvRippleLeft = findViewById(R.id.tv_ripple_left);
         tvRippleRight = findViewById(R.id.tv_ripple_right);
+        hudHoldSpeed = findViewById(R.id.hud_hold_speed);
+        tvHoldSpeedIcon = findViewById(R.id.tv_hold_speed_icon);
+        tvHoldSpeedText = findViewById(R.id.tv_hold_speed_text);
 
         layoutTopBar = findViewById(R.id.layout_top_bar);
+        boolean isLandscape = TvFocusHelper.isTv(this) || getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+        if (layoutTopBar != null) {
+            layoutTopBar.setVisibility(isLandscape ? View.VISIBLE : View.GONE);
+        }
         tvPlayerTitle = findViewById(R.id.tv_player_title);
         tvSubStatus = findViewById(R.id.tv_sub_status);
         btnPlayerBack = findViewById(R.id.btn_player_back);
@@ -240,31 +528,84 @@ public class PlayerActivity extends Activity {
         }
 
         if (btnPlayerBack != null) {
-            btnPlayerBack.setOnClickListener(v -> finish());
+            btnPlayerBack.setOnClickListener(v -> handleBackAction());
         }
 
         btnAspect = findViewById(R.id.btn_aspect);
         if (btnAspect != null) {
-            btnAspect.setOnClickListener(v -> cycleAspectRatio());
+            btnAspect.setOnClickListener(v -> {
+                HapticHelper.performClick(v);
+                cycleAspectRatio();
+            });
         }
 
         btnQuality = findViewById(R.id.btn_quality);
         if (btnQuality != null) {
-            btnQuality.setOnClickListener(v -> showQualitySelectorDialog());
+            btnQuality.setOnClickListener(v -> {
+                HapticHelper.performClick(v);
+                showQualitySelectorDialog();
+            });
         }
+
+        btnSpeed = findViewById(R.id.btn_speed);
+        if (btnSpeed != null) {
+            btnSpeed.setOnClickListener(v -> {
+                HapticHelper.performClick(v);
+                showSpeedSelectorDialog();
+            });
+        }
+        currentPlaybackSpeed = 1.0f;
+        updateSpeedButtonLabel();
 
         btnSubStyle = findViewById(R.id.btn_sub_style);
         if (btnSubStyle != null) {
-            btnSubStyle.setOnClickListener(v -> showSubtitleStyleDialog());
+            btnSubStyle.setOnClickListener(v -> {
+                HapticHelper.performClick(v);
+                showSubtitleStyleDialog();
+            });
         }
 
         btnSubSelector = findViewById(R.id.btn_sub_selector);
         if (btnSubSelector != null) {
-            btnSubSelector.setOnClickListener(v -> showSubtitleSelectorDialog());
+            btnSubSelector.setOnClickListener(v -> {
+                HapticHelper.performClick(v);
+                showSubtitleSelectorDialog();
+            });
+        }
+
+        btnSkipOpEd = findViewById(R.id.btn_skip_op_ed);
+        if (btnSkipOpEd != null) {
+            btnSkipOpEd.setOnClickListener(v -> doSkipOpEd());
+            if (TvFocusHelper.isTv(this)) {
+                TvFocusHelper.attachFocusScale(btnSkipOpEd, 1.10f, 6f);
+                btnSkipOpEd.setOnFocusChangeListener((v, hasFocus) -> {
+                    boolean inIntro = (introEndMs > introStartMs && player != null
+                            && player.getCurrentPosition() >= introStartMs && player.getCurrentPosition() < introEndMs);
+                    updateSkipButtonLabel(inIntro);
+                });
+            }
+        }
+
+        btnScreenLock = findViewById(R.id.btn_screen_lock);
+        if (btnScreenLock != null) {
+            btnScreenLock.setOnClickListener(v -> lockScreen());
+            if (TvFocusHelper.isTv(this)) {
+                btnScreenLock.setVisibility(View.GONE);
+            }
+        }
+
+        btnScreenUnlock = findViewById(R.id.btn_screen_unlock);
+        if (btnScreenUnlock != null) {
+            btnScreenUnlock.setOnClickListener(v -> unlockScreen());
+            btnScreenUnlock.setVisibility(View.GONE);
         }
 
         try {
             SharedPreferences sp = getSharedPreferences("tatap_player_prefs", MODE_PRIVATE);
+            autoSkipOpEd = sp.getBoolean("auto_skip_op_ed", false);
+            isGeneralHapticEnabled = !TvFocusHelper.isTv(this) && sp.getBoolean("pref_general_haptic", sp.getBoolean("pref_haptic", true));
+            isHapticEnabled = isGeneralHapticEnabled;
+            isSceneHapticEnabled = !TvFocusHelper.isTv(this) && sp.getBoolean("pref_scene_haptic", false);
             currentResizeMode = TvFocusHelper.isTv(this)
                     ? AspectRatioFrameLayout.RESIZE_MODE_FIT
                     : sp.getInt("aspect_mode", AspectRatioFrameLayout.RESIZE_MODE_FIT);
@@ -274,8 +615,16 @@ public class PlayerActivity extends Activity {
             subEnabled = sp.getBoolean("pref_sub_enabled", true);
             if (playerView != null) {
                 playerView.setResizeMode(currentResizeMode);
+                playerView.setHapticFeedbackEnabled(true);
             }
             updateAspectButtonLabel();
+        } catch (Throwable ignored) {}
+
+        updateLayoutForOrientation(getResources().getConfiguration().orientation);
+
+        // Pastikan hideSystemUi / showSystemUi dieksekusi setelah decorView terpasang di window
+        try {
+            getWindow().getDecorView().post(this::applySystemUiVisibility);
         } catch (Throwable ignored) {}
 
         applySubtitleStyle();
@@ -284,6 +633,7 @@ public class PlayerActivity extends Activity {
         TvFocusHelper.attachFocusScale(btnPlayerBack, 1.15f, 6f);
         TvFocusHelper.attachFocusScale(btnAspect, 1.08f, 6f);
         TvFocusHelper.attachFocusScale(btnQuality, 1.08f, 6f);
+        TvFocusHelper.attachFocusScale(btnSpeed, 1.08f, 6f);
         TvFocusHelper.attachFocusScale(btnSubStyle, 1.08f, 6f);
         TvFocusHelper.attachFocusScale(btnSubSelector, 1.08f, 6f);
 
@@ -295,6 +645,7 @@ public class PlayerActivity extends Activity {
         initExoPlayer();
         setupExoNativeControls();
         setupGestureControls();
+        checkAndPromptResume();
         resolveAndPlayStream();
     }
 
@@ -333,29 +684,149 @@ public class PlayerActivity extends Activity {
 
     private void hideSystemUi() {
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                Window window = getWindow();
-                if (window != null) {
+            Window window = getWindow();
+            if (window != null) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     android.view.WindowInsetsController controller = window.getInsetsController();
                     if (controller != null) {
                         controller.hide(android.view.WindowInsets.Type.statusBars() | android.view.WindowInsets.Type.navigationBars());
                         controller.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
                     }
-                }
-            } else {
-                View decorView = getWindow().getDecorView();
-                if (decorView != null) {
-                    decorView.setSystemUiVisibility(
-                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_FULLSCREEN
-                    );
+                } else {
+                    View decorView = window.getDecorView();
+                    if (decorView != null) {
+                        decorView.setSystemUiVisibility(
+                            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        );
+                    }
                 }
             }
         } catch (Throwable ignored) {}
+    }
+
+    private void showSystemUiForPortrait() {
+        try {
+            Window window = getWindow();
+            if (window != null) {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    android.view.WindowInsetsController controller = window.getInsetsController();
+                    if (controller != null) {
+                        controller.show(android.view.WindowInsets.Type.statusBars() | android.view.WindowInsets.Type.navigationBars());
+                        controller.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_DEFAULT);
+                    }
+                } else {
+                    View decorView = window.getDecorView();
+                    if (decorView != null) {
+                        decorView.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void applySystemUiVisibility() {
+        if (TvFocusHelper.isTv(this) || getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            hideSystemUi();
+        } else {
+            showSystemUiForPortrait();
+        }
+    }
+
+    private void updateLayoutForOrientation(int orientation) {
+        boolean isTv = TvFocusHelper.isTv(this);
+        if (isTv || orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            // Mode Landscape Fullscreen
+            if (layoutPortraitBottom != null) {
+                layoutPortraitBottom.setVisibility(View.GONE);
+            }
+            if (flPlayerWrapper != null) {
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+                flPlayerWrapper.setLayoutParams(lp);
+            }
+            // Pulihkan tombol aksi kontrol di landscape & TV
+            if (btnAspect != null) btnAspect.setVisibility(View.VISIBLE);
+            if (btnQuality != null) btnQuality.setVisibility(View.VISIBLE);
+            if (btnSpeed != null) btnSpeed.setVisibility(View.VISIBLE);
+            if (btnSubStyle != null) btnSubStyle.setVisibility(View.VISIBLE);
+            if (btnSubSelector != null) btnSubSelector.setVisibility(View.VISIBLE);
+            if (tvSubStatus != null) tvSubStatus.setVisibility(View.VISIBLE);
+            if (layoutTopBar != null) {
+                int padStart = isTv ? getResources().getDimensionPixelSize(R.dimen.tv_overscan_horizontal) : dpToPx(16);
+                layoutTopBar.setPadding(padStart, dpToPx(16), padStart, dpToPx(16));
+            }
+            hideSystemUi();
+        } else {
+            // Mode Watch Portrait View
+            if (layoutPortraitBottom != null) {
+                layoutPortraitBottom.setVisibility(View.VISIBLE);
+            }
+            if (flPlayerWrapper != null) {
+                int screenWidth = getResources().getDisplayMetrics().widthPixels;
+                int playerHeight = (int) (screenWidth * 9f / 16f);
+                if (playerHeight <= 0) playerHeight = dpToPx(215);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, playerHeight);
+                flPlayerWrapper.setLayoutParams(lp);
+            }
+            // Sembunyikan 5 tombol berjejal di header saat portrait (fungsi sudah ada di panel bawah)
+            if (btnAspect != null) btnAspect.setVisibility(View.GONE);
+            if (btnQuality != null) btnQuality.setVisibility(View.GONE);
+            if (btnSpeed != null) btnSpeed.setVisibility(View.GONE);
+            if (btnSubStyle != null) btnSubStyle.setVisibility(View.GONE);
+            if (btnSubSelector != null) btnSubSelector.setVisibility(View.GONE);
+            if (tvSubStatus != null) tvSubStatus.setVisibility(View.GONE);
+            if (btnScreenLock != null) btnScreenLock.setVisibility(View.GONE);
+            if (layoutTopBar != null) {
+                layoutTopBar.setVisibility(View.GONE);
+                layoutTopBar.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
+            }
+            showSystemUiForPortrait();
+            updatePortraitEpisodeDisplay();
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(@NonNull Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        updateLayoutForOrientation(newConfig.orientation);
+    }
+
+    private void exitLandscapeFullscreen() {
+        if (!TvFocusHelper.isTv(this)) {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+            handler.postDelayed(() -> {
+                if (!isFinishing() && !isDestroyed()) {
+                    setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER);
+                }
+            }, 500);
+        }
+    }
+
+    private void handleBackAction() {
+        performHapticTick();
+        if (isScreenLocked) {
+            showUnlockButtonBriefly();
+            Toast.makeText(this, "Layar terkunci. Buka kunci layar terlebih dahulu.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!TvFocusHelper.isTv(this) && getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            exitLandscapeFullscreen();
+            return;
+        }
+        finish();
+    }
+
+    @Override
+    public void onBackPressed() {
+        handleBackAction();
     }
 
     @Override
@@ -363,7 +834,7 @@ public class PlayerActivity extends Activity {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             try {
-                hideSystemUi();
+                applySystemUiVisibility();
             } catch (Throwable ignored) {}
         }
     }
@@ -407,8 +878,20 @@ public class PlayerActivity extends Activity {
                 .setInitialBitrateEstimate(25_000_000)
                 .build();
 
-        DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(this)
-                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+        DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(this) {
+            @Override
+            protected AudioSink buildAudioSink(Context context, boolean enableFloatOutput, boolean enableAudioTrackPlaybackParams) {
+                if (TvFocusHelper.isTv(PlayerActivity.this) || !isSceneHapticEnabled) {
+                    return super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams);
+                }
+                return new DefaultAudioSink.Builder(context)
+                        .setAudioProcessors(new AudioProcessor[] {
+                            new TeeAudioProcessor(new SceneHapticAudioSink())
+                        })
+                        .build();
+            }
+        };
+        renderersFactory.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
                 .setEnableDecoderFallback(true)
                 .forceEnableMediaCodecAsynchronousQueueing();
 
@@ -419,16 +902,36 @@ public class PlayerActivity extends Activity {
                 .setSeekBackIncrementMs(5000)
                 .build();
 
+        player.addAnalyticsListener(new AnalyticsListener() {
+            @Override
+            public void onAudioSessionIdChanged(EventTime eventTime, int audioSessionId) {
+                currentAudioSessionId = audioSessionId;
+                setupHapticGenerator(audioSessionId);
+            }
+        });
+
         player.setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT);
 
         forwardingPlayer = new ForwardingPlayer(player) {
+            private boolean isNextAllowed() {
+                boolean isTv = TvFocusHelper.isTv(PlayerActivity.this);
+                boolean isPaused = (player != null && !player.isPlaying());
+                return hasNextEpisode() && (!isTv || isPaused);
+            }
+
+            private boolean isPrevAllowed() {
+                boolean isTv = TvFocusHelper.isTv(PlayerActivity.this);
+                boolean isPaused = (player != null && !player.isPlaying());
+                return hasPrevEpisode() && (!isTv || isPaused);
+            }
+
             @Override
             public boolean isCommandAvailable(int command) {
-                if (command == COMMAND_SEEK_TO_NEXT_MEDIA_ITEM) {
-                    return hasNextEpisode();
+                if (command == COMMAND_SEEK_TO_NEXT || command == COMMAND_SEEK_TO_NEXT_MEDIA_ITEM) {
+                    return isNextAllowed();
                 }
-                if (command == COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM) {
-                    return hasPrevEpisode();
+                if (command == COMMAND_SEEK_TO_PREVIOUS || command == COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM) {
+                    return isPrevAllowed();
                 }
                 return super.isCommandAvailable(command);
             }
@@ -436,14 +939,18 @@ public class PlayerActivity extends Activity {
             @Override
             public Commands getAvailableCommands() {
                 Commands.Builder builder = super.getAvailableCommands().buildUpon();
-                if (hasNextEpisode()) {
+                if (isNextAllowed()) {
+                    builder.add(COMMAND_SEEK_TO_NEXT);
                     builder.add(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM);
                 } else {
+                    builder.remove(COMMAND_SEEK_TO_NEXT);
                     builder.remove(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM);
                 }
-                if (hasPrevEpisode()) {
+                if (isPrevAllowed()) {
+                    builder.add(COMMAND_SEEK_TO_PREVIOUS);
                     builder.add(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM);
                 } else {
+                    builder.remove(COMMAND_SEEK_TO_PREVIOUS);
                     builder.remove(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM);
                 }
                 return builder.build();
@@ -451,22 +958,40 @@ public class PlayerActivity extends Activity {
 
             @Override
             public boolean hasNextMediaItem() {
-                return hasNextEpisode();
+                return isNextAllowed();
             }
 
             @Override
             public boolean hasPreviousMediaItem() {
-                return hasPrevEpisode();
+                return isPrevAllowed();
+            }
+
+            @Override
+            public void seekToNext() {
+                if (hasNextEpisode()) {
+                    playNextEpisode();
+                }
             }
 
             @Override
             public void seekToNextMediaItem() {
-                playNextEpisode();
+                if (hasNextEpisode()) {
+                    playNextEpisode();
+                }
+            }
+
+            @Override
+            public void seekToPrevious() {
+                if (hasPrevEpisode()) {
+                    playPrevEpisode();
+                }
             }
 
             @Override
             public void seekToPreviousMediaItem() {
-                playPrevEpisode();
+                if (hasPrevEpisode()) {
+                    playPrevEpisode();
+                }
             }
         };
         playerView.setPlayer(forwardingPlayer);
@@ -503,10 +1028,25 @@ public class PlayerActivity extends Activity {
                     if (layoutBuffering != null) {
                         layoutBuffering.setVisibility(View.GONE);
                     }
+                    if (pendingResumePosMs > 0 && player != null) {
+                        player.seekTo(pendingResumePosMs);
+                        pendingResumePosMs = -1;
+                    }
+                    if (hapticGenerator == null && player != null) {
+                        int sessionId = player.getAudioSessionId();
+                        if (sessionId != C.AUDIO_SESSION_ID_UNSET && sessionId > 0) {
+                            currentAudioSessionId = sessionId;
+                            setupHapticGenerator(sessionId);
+                        }
+                    }
                 } else if (playbackState == Player.STATE_ENDED) {
                     if (layoutBuffering != null) {
                         layoutBuffering.setVisibility(View.GONE);
                     }
+                    try {
+                        SharedPreferences sp = getSharedPreferences("tatap_player_prefs", Context.MODE_PRIVATE);
+                        sp.edit().putLong("prog_" + slug + "_" + ep, 0).apply();
+                    } catch (Throwable ignored) {}
                     if (hasNextEpisode()) {
                         Toast.makeText(PlayerActivity.this, "Episode selesai. Memutar Episode " + getNextEpisodeNumber() + "...", Toast.LENGTH_SHORT).show();
                         playNextEpisode();
@@ -516,10 +1056,16 @@ public class PlayerActivity extends Activity {
 
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
+                isVideoPlaying = isPlaying;
                 if (isPlaying) {
                     handler.removeCallbacks(subtitleSyncRunnable);
                     handler.post(subtitleSyncRunnable);
                 }
+                if (playerView != null) {
+                    playerView.setKeepScreenOn(isPlaying);
+                }
+                updateHapticGeneratorState();
+                updateExoButtonStates();
             }
 
             @Override
@@ -561,8 +1107,13 @@ public class PlayerActivity extends Activity {
 
         playerView.setControllerVisibilityListener((PlayerView.ControllerVisibilityListener) visibility -> {
             boolean isVisible = (visibility == View.VISIBLE);
+            boolean isLandscape = TvFocusHelper.isTv(this) || getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
             if (layoutTopBar != null) {
-                layoutTopBar.setVisibility(visibility);
+                // Di mode portrait mobile, layoutTopBar MUTLAK GONE agar tidak menutupi panggung video
+                layoutTopBar.setVisibility(isLandscape ? visibility : View.GONE);
+            }
+            if (btnScreenLock != null && !TvFocusHelper.isTv(this)) {
+                btnScreenLock.setVisibility(isVisible && !isScreenLocked && isLandscape ? View.VISIBLE : View.GONE);
             }
             if (isVisible) {
                 handler.removeCallbacks(hideTopBarRunnable);
@@ -576,7 +1127,7 @@ public class PlayerActivity extends Activity {
                     btnExoSettings.setVisibility(View.VISIBLE);
                 }
             } else {
-                hideSystemUi();
+                applySystemUiVisibility();
             }
         });
     }
@@ -585,18 +1136,31 @@ public class PlayerActivity extends Activity {
         gestureDetector = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
             @Override
             public boolean onSingleTapConfirmed(MotionEvent e) {
-                // Toggle visibility top bar
-                if (layoutTopBar.getVisibility() == View.VISIBLE) {
-                    layoutTopBar.setVisibility(View.GONE);
-                    hideSystemUi();
-                } else {
-                    layoutTopBar.setVisibility(View.VISIBLE);
-                    handler.postDelayed(() -> {
-                        if (player != null && player.isPlaying()) {
-                            layoutTopBar.setVisibility(View.GONE);
-                            hideSystemUi();
+                boolean isLandscape = TvFocusHelper.isTv(PlayerActivity.this) || getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+                if (!isLandscape) {
+                    if (playerView != null) {
+                        if (playerView.isControllerFullyVisible()) {
+                            playerView.hideController();
+                        } else {
+                            playerView.showController();
                         }
-                    }, 4000);
+                    }
+                    return true;
+                }
+                // Toggle visibility top bar (Khusus landscape / TV)
+                if (layoutTopBar != null) {
+                    if (layoutTopBar.getVisibility() == View.VISIBLE) {
+                        layoutTopBar.setVisibility(View.GONE);
+                        applySystemUiVisibility();
+                    } else {
+                        layoutTopBar.setVisibility(View.VISIBLE);
+                        handler.postDelayed(() -> {
+                            if (player != null && player.isPlaying()) {
+                                layoutTopBar.setVisibility(View.GONE);
+                                applySystemUiVisibility();
+                            }
+                        }, 4000);
+                    }
                 }
                 return true;
             }
@@ -619,22 +1183,66 @@ public class PlayerActivity extends Activity {
                         player.play();
                     }
                 }
-                vibrate(25);
+                performHapticClick();
                 return true;
             }
 
             @Override
-            public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
-                if (e1 == null || e2 == null) return false;
-                float deltaY = e1.getY() - e2.getY();
-                float screenWidth = playerView.getWidth();
+            public void onLongPress(MotionEvent e) {
+                if (TvFocusHelper.isTv(PlayerActivity.this) || isScreenLocked || player == null) return;
+                if (activeGestureZone != 0) return;
 
-                if (Math.abs(distanceY) > Math.abs(distanceX)) {
-                    if (e1.getX() < screenWidth * 0.5f) {
-                        adjustBrightness(distanceY / playerView.getHeight());
-                    } else {
-                        adjustVolume(distanceY / playerView.getHeight());
+                float screenWidth = playerView.getWidth();
+                if (screenWidth <= 0) return;
+                float x = e.getX();
+
+                if (x >= screenWidth * 0.5f) {
+                    startHoldingSpeed();
+                } else {
+                    startHoldingRewind();
+                }
+            }
+
+            @Override
+            public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
+                if (TvFocusHelper.isTv(PlayerActivity.this)) return false;
+                if (isHoldingSpeed || isHoldingRewind) return true;
+                if (e1 == null || e2 == null || playerView == null) return false;
+
+                float viewHeight = playerView.getHeight();
+                float viewWidth = playerView.getWidth();
+                if (viewHeight <= 0 || viewWidth <= 0) return false;
+
+                // Exclusion zones: cegah pemicuan volume/kecerahan saat pengguna menarik bilah notifikasi/jam di atas atau bilah navigasi di bawah
+                float topExclusion = Math.max(dpToPx(56), viewHeight * 0.16f);
+                float bottomExclusion = viewHeight - Math.max(dpToPx(44), viewHeight * 0.12f);
+                if (e1.getY() < topExclusion || e1.getY() > bottomExclusion) {
+                    return false;
+                }
+
+                // Disambiguasi awal dan penguncian zona (Edge zoning: kiri 35% kecerahan, kanan 35% volume, tengah 30% deadzone)
+                if (activeGestureZone == 0) {
+                    float totalDeltaY = Math.abs(e1.getY() - e2.getY());
+                    float totalDeltaX = Math.abs(e1.getX() - e2.getX());
+                    if (totalDeltaY < dpToPx(14) || totalDeltaY <= totalDeltaX * 1.25f) {
+                        return false;
                     }
+                    if (e1.getX() <= viewWidth * 0.35f) {
+                        activeGestureZone = 1;
+                    } else if (e1.getX() >= viewWidth * 0.65f) {
+                        activeGestureZone = 2;
+                    } else {
+                        // Deadzone di tengah layar (35% s/d 65% lebar layar)
+                        return false;
+                    }
+                }
+
+                // Eksekusi penyesuaian nilai sesuai zona yang terkunci
+                if (activeGestureZone == 1) {
+                    adjustBrightness(distanceY / viewHeight);
+                    return true;
+                } else if (activeGestureZone == 2) {
+                    adjustVolume(distanceY / viewHeight);
                     return true;
                 }
                 return false;
@@ -642,37 +1250,179 @@ public class PlayerActivity extends Activity {
         });
 
         playerView.setOnTouchListener((v, event) -> {
+            if (isScreenLocked) {
+                if (event.getAction() == MotionEvent.ACTION_UP) {
+                    showUnlockButtonBriefly();
+                }
+                return true;
+            }
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                activeGestureZone = 0;
                 if (audioManager != null) {
                     int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
                     int curVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
                     currentVolumeFraction = maxVol > 0 ? ((float) curVol / (float) maxVol) : 0f;
                 }
+                lastHapticBrightnessStep = (int) (currentBrightness * 100) / 5;
             } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
                 currentVolumeFraction = -1f;
+                activeGestureZone = 0;
+                if (isHoldingSpeed) {
+                    stopHoldingSpeed();
+                }
+                if (isHoldingRewind) {
+                    stopHoldingRewind();
+                }
             }
-            gestureDetector.onTouchEvent(event);
-            return false;
+            boolean handled = gestureDetector.onTouchEvent(event);
+            return handled || activeGestureZone != 0 || isHoldingSpeed || isHoldingRewind;
         });
+    }
+
+    private final Runnable holdRewindRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!isHoldingRewind || player == null) return;
+            long curPos = player.getCurrentPosition();
+            long newPos = Math.max(0, curPos - 2000);
+            player.seekTo(newPos);
+            holdRewindAccumMs += 2000;
+
+            if (tvHoldSpeedText != null) {
+                int sec = holdRewindAccumMs / 1000;
+                tvHoldSpeedText.setText("Rewind (-" + sec + "s) <<");
+            }
+            handler.postDelayed(this, 180);
+        }
+    };
+
+    private void startHoldingSpeed() {
+        if (player == null || isHoldingSpeed || isHoldingRewind) return;
+        isHoldingSpeed = true;
+        holdOriginalSpeed = currentPlaybackSpeed;
+        float boostSpeed = holdOriginalSpeed >= 2.0f ? 3.0f : 2.0f;
+        player.setPlaybackParameters(new PlaybackParameters(boostSpeed));
+
+        if (hudHoldSpeed != null) {
+            if (tvHoldSpeedIcon != null) tvHoldSpeedIcon.setText("⚡");
+            if (tvHoldSpeedText != null) tvHoldSpeedText.setText(String.format(java.util.Locale.US, "%.0fX Cepat >>", boostSpeed));
+            hudHoldSpeed.setVisibility(View.VISIBLE);
+        }
+        performHapticClick();
+    }
+
+    private void stopHoldingSpeed() {
+        if (!isHoldingSpeed) return;
+        isHoldingSpeed = false;
+        if (player != null) {
+            player.setPlaybackParameters(new PlaybackParameters(holdOriginalSpeed > 0 ? holdOriginalSpeed : 1.0f));
+        }
+        if (hudHoldSpeed != null) {
+            hudHoldSpeed.setVisibility(View.GONE);
+        }
+        performHapticClick();
+    }
+
+    private void startHoldingRewind() {
+        if (player == null || isHoldingSpeed || isHoldingRewind) return;
+        isHoldingRewind = true;
+        holdRewindAccumMs = 0;
+
+        if (hudHoldSpeed != null) {
+            if (tvHoldSpeedIcon != null) tvHoldSpeedIcon.setText("⏪");
+            if (tvHoldSpeedText != null) tvHoldSpeedText.setText("Rewind (0s) <<");
+            hudHoldSpeed.setVisibility(View.VISIBLE);
+        }
+        performHapticClick();
+        handler.post(holdRewindRunnable);
+    }
+
+    private void stopHoldingRewind() {
+        if (!isHoldingRewind) return;
+        isHoldingRewind = false;
+        handler.removeCallbacks(holdRewindRunnable);
+        if (hudHoldSpeed != null) {
+            hudHoldSpeed.setVisibility(View.GONE);
+        }
+        performHapticClick();
+    }
+
+    private void lockScreen() {
+        if (TvFocusHelper.isTv(this)) return;
+        isScreenLocked = true;
+        if (playerView != null) {
+            playerView.hideController();
+            playerView.setUseController(false);
+        }
+        if (layoutTopBar != null) {
+            layoutTopBar.setVisibility(View.GONE);
+        }
+        if (btnSkipOpEd != null) {
+            btnSkipOpEd.setVisibility(View.GONE);
+        }
+        if (btnScreenLock != null) {
+            btnScreenLock.setVisibility(View.GONE);
+        }
+        performHapticHeavyClick();
+        Toast.makeText(this, "Layar terkunci. Ketuk layar untuk membuka kunci.", Toast.LENGTH_SHORT).show();
+        showUnlockButtonBriefly();
+    }
+
+    private void unlockScreen() {
+        isScreenLocked = false;
+        if (btnScreenUnlock != null) {
+            handler.removeCallbacks(hideUnlockButtonRunnable);
+            btnScreenUnlock.setVisibility(View.GONE);
+        }
+        if (playerView != null) {
+            playerView.setUseController(true);
+            playerView.showController();
+        }
+        showTopBarBriefly();
+        if (btnScreenLock != null && !TvFocusHelper.isTv(this)) {
+            btnScreenLock.setVisibility(View.VISIBLE);
+        }
+        performHapticClick();
+        Toast.makeText(this, "Layar terbuka", Toast.LENGTH_SHORT).show();
+    }
+
+    private void showUnlockButtonBriefly() {
+        if (btnScreenUnlock == null || !isScreenLocked || TvFocusHelper.isTv(this)) return;
+        btnScreenUnlock.animate().cancel();
+        btnScreenUnlock.setAlpha(1.0f);
+        btnScreenUnlock.setVisibility(View.VISIBLE);
+        handler.removeCallbacks(hideUnlockButtonRunnable);
+        handler.postDelayed(hideUnlockButtonRunnable, 3000);
     }
 
     private final Runnable hideTopBarRunnable = this::hideTopBar;
 
     private void showTopBarBriefly() {
+        boolean isLandscape = TvFocusHelper.isTv(this) || getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+        if (!isLandscape) {
+            if (layoutTopBar != null) layoutTopBar.setVisibility(View.GONE);
+            return;
+        }
         if (layoutTopBar != null) {
             layoutTopBar.setVisibility(View.VISIBLE);
             handler.removeCallbacks(hideTopBarRunnable);
             handler.postDelayed(hideTopBarRunnable, 5000);
+        }
+        if (btnScreenLock != null && !TvFocusHelper.isTv(this) && !isScreenLocked) {
+            btnScreenLock.setVisibility(View.VISIBLE);
         }
     }
 
     private void hideTopBar() {
         if (layoutTopBar != null) {
             layoutTopBar.setVisibility(View.GONE);
+            if (btnScreenLock != null) {
+                btnScreenLock.setVisibility(View.GONE);
+            }
             if (playerView != null) {
                 playerView.requestFocus();
             }
-            hideSystemUi();
+            applySystemUiVisibility();
         }
     }
 
@@ -715,8 +1465,23 @@ public class PlayerActivity extends Activity {
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             int keyCode = event.getKeyCode();
+
+            if (isScreenLocked) {
+                if (keyCode == KeyEvent.KEYCODE_BACK) {
+                    showUnlockButtonBriefly();
+                    Toast.makeText(this, "Layar terkunci. Buka kunci layar terlebih dahulu.", Toast.LENGTH_SHORT).show();
+                    return true;
+                }
+                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
+                    return super.dispatchKeyEvent(event);
+                }
+                return true;
+            }
+
             boolean isTopBarActive = (layoutTopBar != null && layoutTopBar.getVisibility() == View.VISIBLE);
             boolean hasFocusOnTopBar = isTopBarActive && isViewOrChildFocused(layoutTopBar);
+            boolean isSkipVisible = (btnSkipOpEd != null && btnSkipOpEd.getVisibility() == View.VISIBLE);
+            boolean isSkipFocused = isSkipVisible && (btnSkipOpEd.isFocused() || getCurrentFocus() == btnSkipOpEd);
 
             switch (keyCode) {
                 case KeyEvent.KEYCODE_MENU:
@@ -727,6 +1492,10 @@ public class PlayerActivity extends Activity {
 
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER:
+                    if (isSkipFocused) {
+                        doSkipOpEd();
+                        return true;
+                    }
                     if (hasFocusOnTopBar) {
                         View focused = getCurrentFocus();
                         if (focused != null && isChildOf(focused, layoutTopBar)) {
@@ -735,10 +1504,29 @@ public class PlayerActivity extends Activity {
                             return true;
                         }
                     }
+                    View focused = getCurrentFocus();
+                    if (focused != null) {
+                        if (focused == btnExoNext || (btnExoNext != null && focused.getId() == androidx.media3.ui.R.id.exo_next)) {
+                            playNextEpisode();
+                            return true;
+                        }
+                        if (focused == btnExoPrev || (btnExoPrev != null && focused.getId() == androidx.media3.ui.R.id.exo_prev)) {
+                            playPrevEpisode();
+                            return true;
+                        }
+                        if (playerView != null && isChildOf(focused, playerView)) {
+                            focused.performClick();
+                            return true;
+                        }
+                    }
                     if (player != null) {
                         if (player.isPlaying()) {
                             player.pause();
                             showTopBarBriefly();
+                            if (playerView != null) {
+                                playerView.showController();
+                            }
+                            updateExoButtonStates();
                         } else {
                             player.play();
                             hideTopBar();
@@ -753,6 +1541,10 @@ public class PlayerActivity extends Activity {
                         if (player.isPlaying()) {
                             player.pause();
                             showTopBarBriefly();
+                            if (playerView != null) {
+                                playerView.showController();
+                            }
+                            updateExoButtonStates();
                         } else {
                             player.play();
                             hideTopBar();
@@ -774,6 +1566,10 @@ public class PlayerActivity extends Activity {
                     if (player != null && player.isPlaying()) {
                         player.pause();
                         showTopBarBriefly();
+                        if (playerView != null) {
+                            playerView.showController();
+                        }
+                        updateExoButtonStates();
                         return true;
                     }
                     break;
@@ -797,6 +1593,15 @@ public class PlayerActivity extends Activity {
                     break;
 
                 case KeyEvent.KEYCODE_DPAD_LEFT:
+                    if (isSkipFocused && playerView != null) {
+                        playerView.requestFocus();
+                    }
+                    boolean isTvLeft = TvFocusHelper.isTv(this);
+                    boolean isPlayingLeft = (player != null && player.isPlaying());
+                    if (isTvLeft && !isPlayingLeft) {
+                        // Di Android TV saat video ter-pause: biarkan D-Pad bernavigasi antar tombol kontrol
+                        break;
+                    }
                     if (hasFocusOnTopBar) {
                         showTopBarBriefly();
                         break; // Jangan seek, biarkan navigasi fokus antar tombol
@@ -813,6 +1618,15 @@ public class PlayerActivity extends Activity {
                     return true;
 
                 case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    if (isSkipFocused && playerView != null) {
+                        playerView.requestFocus();
+                    }
+                    boolean isTvRight = TvFocusHelper.isTv(this);
+                    boolean isPlayingRight = (player != null && player.isPlaying());
+                    if (isTvRight && !isPlayingRight) {
+                        // Di Android TV saat video ter-pause: biarkan D-Pad bernavigasi antar tombol kontrol
+                        break;
+                    }
                     if (hasFocusOnTopBar) {
                         showTopBarBriefly();
                         break; // Jangan seek, biarkan navigasi fokus antar tombol
@@ -823,12 +1637,26 @@ public class PlayerActivity extends Activity {
                     return true;
 
                 case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
+                case KeyEvent.KEYCODE_BUTTON_R1:
+                    if (isSkipVisible) {
+                        doSkipOpEd();
+                        return true;
+                    }
                     seekRelative(5000);
                     showRipple(tvRippleRight);
                     vibrate(15);
                     return true;
 
                 case KeyEvent.KEYCODE_DPAD_UP:
+                    if (isSkipFocused) {
+                        showTopBarBriefly();
+                        if (btnSubSelector != null && btnSubSelector.getVisibility() == View.VISIBLE) {
+                            btnSubSelector.requestFocus();
+                        } else if (playerView != null) {
+                            playerView.requestFocus();
+                        }
+                        return true;
+                    }
                     showTopBarBriefly();
                     if (btnSubSelector != null && btnSubSelector.getVisibility() == View.VISIBLE) {
                         btnSubSelector.requestFocus();
@@ -840,6 +1668,27 @@ public class PlayerActivity extends Activity {
                     break;
 
                 case KeyEvent.KEYCODE_DPAD_DOWN:
+                    if (TvFocusHelper.isTv(this) && isSkipVisible && !isSkipFocused) {
+                        if (isTopBarActive) {
+                            hideTopBar();
+                        }
+                        btnSkipOpEd.requestFocus();
+                        boolean inIntro = (introEndMs > introStartMs && player != null
+                                && player.getCurrentPosition() >= introStartMs && player.getCurrentPosition() < introEndMs);
+                        updateSkipButtonLabel(inIntro);
+                        return true;
+                    }
+                    if (isSkipFocused) {
+                        if (playerView != null) playerView.requestFocus();
+                        if (playerView != null) {
+                            if (playerView.isControllerFullyVisible()) {
+                                playerView.hideController();
+                            } else {
+                                playerView.showController();
+                            }
+                        }
+                        return true;
+                    }
                     if (isTopBarActive) {
                         hideTopBar();
                         return true;
@@ -855,6 +1704,13 @@ public class PlayerActivity extends Activity {
                     break;
 
                 case KeyEvent.KEYCODE_BACK:
+                    if (isSkipFocused) {
+                        if (playerView != null) playerView.requestFocus();
+                        boolean inIntro = (introEndMs > introStartMs && player != null
+                                && player.getCurrentPosition() >= introStartMs && player.getCurrentPosition() < introEndMs);
+                        updateSkipButtonLabel(inIntro);
+                        return true;
+                    }
                     if (isTopBarActive) {
                         hideTopBar();
                         return true;
@@ -884,11 +1740,12 @@ public class PlayerActivity extends Activity {
         }
 
         // Akumulator float kontinu (sama seperti brightness) agar gerakan lambat tidak terpotong menjadi 0
-        currentVolumeFraction = Math.max(0.0f, Math.min(1.0f, currentVolumeFraction + (percent * 1.2f)));
+        currentVolumeFraction = Math.max(0.0f, Math.min(1.0f, currentVolumeFraction + (percent * 0.85f)));
         int targetVol = Math.round(currentVolumeFraction * maxVol);
         int curVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
         if (targetVol != curVol) {
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0);
+            performHapticTick();
         }
 
         int pct = Math.round(currentVolumeFraction * 100);
@@ -896,12 +1753,17 @@ public class PlayerActivity extends Activity {
     }
 
     private void adjustBrightness(float percent) {
-        currentBrightness = Math.max(0.05f, Math.min(1.0f, currentBrightness + (percent * 1.2f)));
+        currentBrightness = Math.max(0.05f, Math.min(1.0f, currentBrightness + (percent * 0.85f)));
         WindowManager.LayoutParams lp = getWindow().getAttributes();
         lp.screenBrightness = currentBrightness;
         getWindow().setAttributes(lp);
 
         int pct = (int) (currentBrightness * 100);
+        int step = pct / 5;
+        if (step != lastHapticBrightnessStep) {
+            lastHapticBrightnessStep = step;
+            performHapticTick();
+        }
         showOsd("BRT", pct);
     }
 
@@ -921,14 +1783,336 @@ public class PlayerActivity extends Activity {
         handler.postDelayed(() -> tv.setVisibility(View.GONE), 350);
     }
 
-    private void vibrate(long ms) {
-        Vibrator v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-        if (v != null && v.hasVibrator()) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE));
-            } else {
-                v.vibrate(ms);
+    private Vibrator cachedVibrator = null;
+
+    private Vibrator getVibratorService() {
+        if (cachedVibrator != null) return cachedVibrator;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                android.os.VibratorManager vm = (android.os.VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                if (vm != null) {
+                    Vibrator defVib = vm.getDefaultVibrator();
+                    if (defVib != null && defVib.hasVibrator()) {
+                        cachedVibrator = defVib;
+                        return cachedVibrator;
+                    }
+                }
             }
+            cachedVibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            return cachedVibrator;
+        } catch (Throwable t) {
+            try {
+                cachedVibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+                return cachedVibrator;
+            } catch (Throwable ignored) {
+                return null;
+            }
+        }
+    }
+
+    private void vibrateDirect(long ms, int amplitude) {
+        if (!isHapticEnabled || TvFocusHelper.isTv(this)) return;
+        try {
+            Vibrator v = getVibratorService();
+            if (v == null || !v.hasVibrator()) {
+                v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+                if (v == null || !v.hasVibrator()) return;
+            }
+
+            boolean hasAmp = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && v.hasAmplitudeControl();
+            long effectiveMs = ms;
+            // Adaptasi durasi untuk motor ERM (Samsung Galaxy A-series, Redmi, Poco, dll.)
+            // Motor ERM koin memiliki inersia fisik ~35-50ms sebelum massa eksentrik mulai berputar.
+            // Tanpa amplitudo kontrol (hasAmp == false), pulsa dinaikkan agar getaran terasa jelas di tangan.
+            if (!hasAmp) {
+                if (ms <= 20) {
+                    effectiveMs = 45; // Tick terasa di ERM
+                } else if (ms <= 30) {
+                    effectiveMs = 65; // Click terasa di ERM
+                } else if (ms <= 50) {
+                    effectiveMs = 90; // Heavy click terasa di ERM
+                } else {
+                    effectiveMs = Math.max(ms, 80); // Scene hit / ledakan di ERM
+                }
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                int amp = VibrationEffect.DEFAULT_AMPLITUDE;
+                if (amplitude > 0 && amplitude <= 255 && hasAmp) {
+                    amp = amplitude;
+                }
+                VibrationEffect effect = VibrationEffect.createOneShot(effectiveMs, amp);
+                try {
+                    // Gunakan USAGE_MEDIA agar lolos dari penyaringan sistem Samsung One UI
+                    // untuk feedback sentuh dan terikat dengan kanal playback media video aktif.
+                    android.media.AudioAttributes attrs = new android.media.AudioAttributes.Builder()
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                            .build();
+                    v.vibrate(effect, attrs);
+                } catch (Throwable fallbackAttr) {
+                    v.vibrate(effect);
+                }
+            } else {
+                v.vibrate(effectiveMs);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void performHapticTick() {
+        if (!isHapticEnabled || TvFocusHelper.isTv(this)) return;
+        try {
+            if (playerView != null) {
+                playerView.performHapticFeedback(
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                        ? HapticFeedbackConstants.SEGMENT_TICK
+                        : (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                            ? HapticFeedbackConstants.CLOCK_TICK
+                            : HapticFeedbackConstants.KEYBOARD_TAP),
+                    HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING | HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+                );
+            }
+        } catch (Throwable ignored) {}
+        vibrateDirect(15, 70);
+    }
+
+    private void performHapticClick() {
+        if (!isHapticEnabled || TvFocusHelper.isTv(this)) return;
+        try {
+            if (playerView != null) {
+                playerView.performHapticFeedback(
+                    HapticFeedbackConstants.KEYBOARD_TAP,
+                    HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING | HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+                );
+            }
+        } catch (Throwable ignored) {}
+        vibrateDirect(25, 140);
+    }
+
+    private void performHapticHeavyClick() {
+        if (!isHapticEnabled || TvFocusHelper.isTv(this)) return;
+        try {
+            if (playerView != null) {
+                playerView.performHapticFeedback(
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                        ? HapticFeedbackConstants.DRAG_START
+                        : HapticFeedbackConstants.LONG_PRESS,
+                    HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING | HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+                );
+            }
+        } catch (Throwable ignored) {}
+        vibrateDirect(45, 230);
+    }
+
+    private void vibrate(long ms) {
+        if (!isHapticEnabled || TvFocusHelper.isTv(this)) return;
+        vibrateDirect(ms > 0 ? ms : 25, -1);
+    }
+
+    private void setupHapticGenerator(int audioSessionId) {
+        if (TvFocusHelper.isTv(this)) return;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return;
+        if (audioSessionId == C.AUDIO_SESSION_ID_UNSET || audioSessionId <= 0) return;
+
+        releaseHapticGenerator();
+
+        try {
+            hapticGenerator = HapticGeneratorHelper.create(audioSessionId);
+            updateHapticGeneratorState();
+        } catch (Throwable t) {
+            hapticGenerator = null;
+        }
+    }
+
+    private void updateHapticGeneratorState() {
+        if (TvFocusHelper.isTv(this)) return;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return;
+        if (hapticGenerator instanceof HapticGenerator) {
+            // Isolasi getaran adegan: HapticGenerator bawaan Android dinonaktifkan (false)
+            // agar tidak bergetar secara buta mengikuti bass background music (BGM/OST).
+            // Seluruh haptic scene dikendalikan secara presisi oleh SceneHapticAudioSink.
+            HapticGeneratorHelper.setEnabled((HapticGenerator) hapticGenerator, false);
+        }
+    }
+
+    private void releaseHapticGenerator() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return;
+        if (hapticGenerator instanceof HapticGenerator) {
+            HapticGeneratorHelper.release((HapticGenerator) hapticGenerator);
+            hapticGenerator = null;
+        }
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.S)
+    private static class HapticGeneratorHelper {
+        static HapticGenerator create(int audioSessionId) {
+            try {
+                if (HapticGenerator.isAvailable()) {
+                    return HapticGenerator.create(audioSessionId);
+                }
+            } catch (Throwable ignored) {}
+            return null;
+        }
+
+        static void setEnabled(HapticGenerator generator, boolean enabled) {
+            if (generator != null) {
+                try {
+                    generator.setEnabled(enabled);
+                } catch (Throwable ignored) {}
+            }
+        }
+
+        static void release(HapticGenerator generator) {
+            if (generator != null) {
+                try {
+                    generator.setEnabled(false);
+                    generator.release();
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    private class SceneHapticAudioSink implements TeeAudioProcessor.AudioBufferSink {
+        private long lastHapticTriggerWallMs = -1000;
+        private long lastExplosionTriggerMs = -1000;
+        private float runningRms = 1500f;
+        private int prevRms = 1500;
+        private float lpFilterState = 0f;
+        private int currentSampleRateHz = 48000;
+        private int currentChannelCount = 2;
+
+        @Override
+        public void flush(int sampleRateHz, int channelCount, int encoding) {
+            runningRms = 1500f;
+            prevRms = 1500;
+            lpFilterState = 0f;
+            currentSampleRateHz = sampleRateHz > 0 ? sampleRateHz : 48000;
+            currentChannelCount = channelCount > 0 ? channelCount : 2;
+        }
+
+        @Override
+        public void handleBuffer(ByteBuffer buffer) {
+            if (!isSceneHapticEnabled || !isGeneralHapticEnabled || !isVideoPlaying || isInOpEd || TvFocusHelper.isTv(PlayerActivity.this)) return;
+
+            ByteBuffer duplicate = buffer.asReadOnlyBuffer();
+            duplicate.order(ByteOrder.LITTLE_ENDIAN);
+            ShortBuffer shortBuffer = duplicate.asShortBuffer();
+            int remaining = shortBuffer.remaining();
+            if (remaining <= 0) return;
+
+            int channels = Math.max(1, currentChannelCount);
+            int totalFrames = remaining / channels;
+            if (totalFrames <= 0) return;
+
+            // Koefisien Bipolar 200Hz Low-Pass Filter: alpha = (2 * pi * fc) / fs
+            float alpha = (float) ((2.0 * Math.PI * 200.0) / currentSampleRateHz);
+            alpha = Math.max(0.005f, Math.min(0.2f, alpha));
+
+            int peak = 0;
+            long sumSquares = 0;
+            double sumSquaresLp = 0;
+            float lp = lpFilterState;
+
+            for (int f = 0; f < totalFrames; f++) {
+                int baseIdx = f * channels;
+                short left = shortBuffer.get(baseIdx);
+                short right = (channels > 1) ? shortBuffer.get(baseIdx + 1) : left;
+
+                // Stereo channel fusion: baca kedua channel L dan R tanpa blind spot
+                int sampleMax = Math.max(Math.abs(left), Math.abs(right));
+                if (sampleMax > peak) peak = sampleMax;
+                sumSquares += (long) sampleMax * sampleMax;
+
+                // Low-pass filter pada kanal dominan akustik
+                int rawDominant = (Math.abs(left) >= Math.abs(right)) ? left : right;
+                lp += alpha * ((float) rawDominant - lp);
+                sumSquaresLp += (double) lp * lp;
+            }
+            lpFilterState = lp;
+
+            int rms = (int) Math.sqrt((double) sumSquares / totalFrames);
+            int subRms = (int) Math.sqrt(sumSquaresLp / totalFrames);
+            float crestFactor = (float) peak / Math.max(1f, (float) rms);
+            float subRatio = (float) subRms / Math.max(1f, (float) rms);
+
+            long nowMs = SystemClock.uptimeMillis();
+
+            int deltaRms = rms - prevRms;
+            prevRms = rms;
+
+            float effectiveBaseline = Math.max(1200f, runningRms);
+            float surgeRatio = (float) rms / effectiveBaseline;
+
+            // 1. Anti-Scream Rejection:
+            // Karakter anime berteriak (vokal murni) memiliki energi tinggi di mid-high frequencies,
+            // subRatio rendah (< 0.35), dan Crest Factor rendah (< 3.0).
+            boolean isVocalScream = (subRatio < 0.35f && crestFactor < 3.0f);
+            if (isVocalScream) {
+                runningRms = 0.88f * runningRms + 0.12f * rms;
+                return;
+            }
+
+            // 2. Klasifikasi Adegan Akustik:
+            // A. Gunfire / Rapid Kinetic Strike (tembakan pistol/senapan, benturan katana):
+            // Transien tajam, Crest Factor tinggi (>= 3.2), lonjakan mendadak (deltaRms >= 800)
+            boolean isGunshot = (crestFactor >= 3.2f && peak >= 16500 && deltaRms >= 800);
+
+            // B. Physical Strike / Heavy Attack Onset (pukulan tinju, tendangan):
+            boolean isAttackOnset = (deltaRms >= 1400 && peak >= 16500) ||
+                                    (surgeRatio >= 1.55f && peak >= 17000 && rms >= 2600 && deltaRms >= 600);
+
+            // C. Heavy Explosion / Super-Move / Colossal Blast:
+            // Dentuman dahsyat (bom, sihir kehancuran). Wajib attack onset (deltaRms >= 1200)
+            // agar tidak terpicu pada ekor gema / sub-bass rumble yang sedang meluruh.
+            boolean isColossal = (peak >= 22000 && (rms - runningRms) >= 1200 && deltaRms >= 1200) ||
+                                 (peak >= 24000 && subRms >= 7000 && subRatio >= 0.50f && deltaRms >= 1200);
+
+            // Anti-reverb lockout: abaikan gema/asap pasca-ledakan dalam 400ms
+            if (isColossal && (nowMs - lastExplosionTriggerMs < 400)) {
+                runningRms = 0.88f * runningRms + 0.12f * rms;
+                return;
+            }
+
+            // Dual-cadence cooldown:
+            // Tembakan: cooldown pendek 85ms (mendukung burst-fire / semi-auto)
+            // Benturan fisik / Ledakan: cooldown 200ms
+            long minCooldownMs = isGunshot ? 85 : 200;
+            if (nowMs - lastHapticTriggerWallMs < minCooldownMs) {
+                runningRms = 0.88f * runningRms + 0.12f * rms;
+                return;
+            }
+
+            boolean isSceneImpact = isGunshot || isAttackOnset || isColossal;
+            if (!isSceneImpact) {
+                runningRms = 0.88f * runningRms + 0.12f * rms;
+                return;
+            }
+
+            // Catat waktu pemicuan
+            lastHapticTriggerWallMs = nowMs;
+            if (isColossal) {
+                lastExplosionTriggerMs = nowMs;
+            }
+            runningRms = Math.max(runningRms, (float) rms * 0.75f);
+
+            int intensity = Math.min(255, 140 + ((peak - 16500) * 115 / 16267));
+
+            // Profil durasi haptik multi-tier:
+            // - Tembakan: pulsa tajam 15ms
+            // - Benturan fisik: 30ms
+            // - Ledakan dahsyat: 45ms
+            long vibeDurationMs;
+            if (isColossal) {
+                vibeDurationMs = 45;
+                intensity = Math.max(intensity, 230);
+            } else if (isGunshot) {
+                vibeDurationMs = 15;
+            } else {
+                vibeDurationMs = 30;
+            }
+
+            // Zero-delay direct trigger: eksekusi seketika tanpa antrean postDelayed
+            vibrateDirect(vibeDurationMs, intensity);
         }
     }
 
@@ -1012,25 +2196,48 @@ public class PlayerActivity extends Activity {
                     JSONArray subArr = data.optJSONArray("subtitles");
                     subtitleTracks.clear();
                     String foundEnSub = "";
+                    String foundExactEnSub = "";
+                    String foundAnyEnSub = "";
                     String foundIdSub = "";
                     String foundDefSub = "";
                     String foundNonArSub = "";
+
+                    String[] nonEnKeywords = new String[]{
+                        "arabic", "arab", "indonesia", "bahasa", "spanish", "espanol",
+                        "portuguese", "french", "francais", "german", "deutsch", "italian",
+                        "korean", "chinese", "russian", "thai", "vietnamese", "turkish",
+                        "hindi", "czech", "danish", "dutch", "finnish", "greek",
+                        "hungarian", "norwegian", "polish", "romanian", "slovak", "swedish",
+                        "malay", "tagalog", "filipino", "japanese"
+                    };
 
                     if (subArr != null) {
                         for (int i = 0; i < subArr.length(); i++) {
                             JSONObject s = subArr.getJSONObject(i);
                             subtitleTracks.add(s);
-                            String lang = s.optString("lang", "").toLowerCase();
-                            String lbl = s.optString("label", "").toLowerCase();
+                            String lang = s.optString("lang", "").toLowerCase().trim();
+                            String lbl = s.optString("label", "").toLowerCase().trim();
                             String url = s.optString("url", "");
                             boolean isDef = s.optBoolean("default", false);
 
                             boolean isArabic = lang.equals("ar") || lang.equals("ara") || lbl.contains("arabic") || lbl.contains("arab");
-                            boolean isEnglish = lang.equals("en") || lang.equals("eng") || lbl.contains("english") || lbl.startsWith("eng");
                             boolean isIndo = lang.equals("id") || lang.equals("ind") || lbl.contains("indonesia") || lbl.contains("bahasa");
 
-                            if (foundEnSub.isEmpty() && isEnglish && !url.isEmpty()) {
-                                foundEnSub = url;
+                            boolean hasNonEnKeyword = false;
+                            for (String kw : nonEnKeywords) {
+                                if (lbl.contains(kw)) {
+                                    hasNonEnKeyword = true;
+                                    break;
+                                }
+                            }
+
+                            boolean isEnglish = !hasNonEnKeyword && (lang.equals("en") || lang.equals("eng") || lbl.contains("english") || lbl.startsWith("eng"));
+                            boolean isExactEnglish = isEnglish && (lbl.equals("english") || lbl.equals("english [full]") || lbl.equals("eng"));
+
+                            if (isExactEnglish && !url.isEmpty() && foundExactEnSub.isEmpty()) {
+                                foundExactEnSub = url;
+                            } else if (isEnglish && !url.isEmpty() && foundAnyEnSub.isEmpty()) {
+                                foundAnyEnSub = url;
                             }
                             if (foundIdSub.isEmpty() && isIndo && !url.isEmpty()) {
                                 foundIdSub = url;
@@ -1042,6 +2249,12 @@ public class PlayerActivity extends Activity {
                                 foundNonArSub = url;
                             }
                         }
+                    }
+
+                    if (!foundExactEnSub.isEmpty()) {
+                        foundEnSub = foundExactEnSub;
+                    } else if (!foundAnyEnSub.isEmpty()) {
+                        foundEnSub = foundAnyEnSub;
                     }
 
                     // Backend juga menyediakan resolved default sub di data.optString("sub")
@@ -1077,6 +2290,25 @@ public class PlayerActivity extends Activity {
                     rawStreamUrl = streamUrl;
                     streamReferer = referer;
                     masterStreamUrl = (!masterUrl.isEmpty() && isHlsStream(masterUrl)) ? masterUrl : "";
+
+                    JSONObject introObj = data.optJSONObject("intro");
+                    if (introObj != null) {
+                        introStartMs = (long) (introObj.optDouble("start", 0) * 1000);
+                        introEndMs = (long) (introObj.optDouble("end", 0) * 1000);
+                    } else {
+                        introStartMs = 0;
+                        introEndMs = 0;
+                    }
+
+                    JSONObject outroObj = data.optJSONObject("outro");
+                    if (outroObj != null) {
+                        outroStartMs = (long) (outroObj.optDouble("start", 0) * 1000);
+                        outroEndMs = (long) (outroObj.optDouble("end", 0) * 1000);
+                    } else {
+                        outroStartMs = 0;
+                        outroEndMs = 0;
+                    }
+                    currentSkipTargetMs = 0;
 
                     if (!rawStreamUrl.isEmpty()) {
                         runOnUiThread(() -> {
@@ -1168,6 +2400,9 @@ public class PlayerActivity extends Activity {
 
             player.prepare();
             player.play();
+            try {
+                player.setPlaybackParameters(new PlaybackParameters(currentPlaybackSpeed));
+            } catch (Throwable ignored) {}
 
             applySubtitleSelection();
         } catch (Throwable t) {
@@ -1223,12 +2458,23 @@ public class PlayerActivity extends Activity {
             }
 
             // Bangun URL utama untuk terjemahan atau subtitle yang dipilih
-            String proxiedSub = "http://127.0.0.1:8767/api/player/sub?url=" + encodedSubUrl
-                    + "&referer=" + encodedRef
-                    + "&src=" + URLEncoder.encode(srcParam, "UTF-8")
-                    + "&lang=" + URLEncoder.encode(activeSubLang, "UTF-8")
-                    + (subModeParam.isEmpty() ? "" : "&mode=" + URLEncoder.encode(subModeParam, "UTF-8"))
-                    + (forceRefresh ? "&refresh=true" : "");
+            String proxiedSub;
+            if (activeSubUrl != null && activeSubUrl.contains("/api/player/sub_custom")) {
+                if (subModeParam.isEmpty()) {
+                    proxiedSub = activeSubUrl;
+                } else {
+                    proxiedSub = activeSubUrl + "&lang=" + URLEncoder.encode(activeSubLang, "UTF-8")
+                            + "&mode=" + URLEncoder.encode(subModeParam, "UTF-8")
+                            + (forceRefresh ? "&refresh=true" : "");
+                }
+            } else {
+                proxiedSub = "http://127.0.0.1:8767/api/player/sub?url=" + encodedSubUrl
+                        + "&referer=" + encodedRef
+                        + "&src=" + URLEncoder.encode(srcParam, "UTF-8")
+                        + "&lang=" + URLEncoder.encode(activeSubLang, "UTF-8")
+                        + (subModeParam.isEmpty() ? "" : "&mode=" + URLEncoder.encode(subModeParam, "UTF-8"))
+                        + (forceRefresh ? "&refresh=true" : "");
+            }
 
             loadSubtitlesAsync(proxiedSub, false);
         } catch (Exception e) {
@@ -1452,6 +2698,71 @@ public class PlayerActivity extends Activity {
         return null;
     }
 
+    private void showSpeedSelectorDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        builder.setTitle("Kecepatan Putar Video");
+
+        int checkedItem = 2; // Default 1.0x (index 2)
+        for (int i = 0; i < PLAYBACK_SPEEDS.length; i++) {
+            if (Math.abs(PLAYBACK_SPEEDS[i] - currentPlaybackSpeed) < 0.05f) {
+                checkedItem = i;
+                break;
+            }
+        }
+
+        builder.setSingleChoiceItems(PLAYBACK_SPEED_LABELS, checkedItem, (dialog, which) -> {
+            if (which >= 0 && which < PLAYBACK_SPEEDS.length) {
+                applyPlaybackSpeed(PLAYBACK_SPEEDS[which]);
+            }
+            dialog.dismiss();
+        });
+
+        builder.setNegativeButton("Batal", (dialog, which) -> dialog.dismiss());
+        builder.setOnDismissListener(dialog -> {
+            if (playerView != null) {
+                playerView.showController();
+                if (btnSpeed != null && btnSpeed.getVisibility() == View.VISIBLE) {
+                    btnSpeed.requestFocus();
+                } else if (btnExoSettings != null && btnExoSettings.getVisibility() == View.VISIBLE) {
+                    btnExoSettings.requestFocus();
+                }
+            }
+        });
+        builder.show();
+    }
+
+    private void applyPlaybackSpeed(float speed) {
+        currentPlaybackSpeed = speed;
+        if (player != null) {
+            try {
+                player.setPlaybackParameters(new PlaybackParameters(currentPlaybackSpeed));
+            } catch (Throwable ignored) {}
+        }
+        updateSpeedButtonLabel();
+        Toast.makeText(this, "Kecepatan: " + formatSpeedLabel(speed), Toast.LENGTH_SHORT).show();
+    }
+
+    private void updateSpeedButtonLabel() {
+        String label = formatSpeedLabel(currentPlaybackSpeed);
+        if (btnSpeed != null) {
+            btnSpeed.setText(label);
+        }
+        if (btnPortraitSpeed != null) {
+            btnPortraitSpeed.setText(label);
+        }
+    }
+
+    private String formatSpeedLabel(float speed) {
+        if (speed == 1.0f) return "1.0x";
+        if (speed == 0.5f) return "0.5x";
+        if (speed == 0.75f) return "0.75x";
+        if (speed == 1.25f) return "1.25x";
+        if (speed == 1.5f) return "1.5x";
+        if (speed == 1.75f) return "1.75x";
+        if (speed == 2.0f) return "2.0x";
+        return String.format(java.util.Locale.US, "%.2fx", speed);
+    }
+
     private void showQualitySelectorDialog() {
         if (streamVariants.isEmpty()) {
             Toast.makeText(this, "Hanya satu kualitas resolusi tersedia untuk video ini", Toast.LENGTH_SHORT).show();
@@ -1660,46 +2971,62 @@ public class PlayerActivity extends Activity {
         List<String> options = new ArrayList<>();
         List<Runnable> actions = new ArrayList<>();
 
-        if (enSourceSubUrl.isEmpty() && subtitleTracks.isEmpty()) {
-            String msg = "dub".equalsIgnoreCase(activeStreamMode) ? "Audio: English Dub (Tidak ada file subtitle)" : "Tidak ada file subtitle untuk video ini";
-            options.add("Peringatan: " + msg);
+        if (enSourceSubUrl.isEmpty() && subtitleTracks.isEmpty() && customSubtitleName.isEmpty()) {
+            String msg = "dub".equalsIgnoreCase(activeStreamMode) ? "Audio: English Dub (Tidak ada file subtitle bawaan)" : "Tidak ada file subtitle bawaan untuk video ini";
+            options.add("[Info] " + msg);
             actions.add(() -> {});
         } else {
+            // 0. Subtitle Kustom yang pernah dimuat
+            if (!customSubtitleName.isEmpty()) {
+                boolean isCustomSelected = subEnabled && "custom".equals(activeSubLang);
+                options.add("[Kustom] " + customSubtitleName + (isCustomSelected ? " [Aktif]" : ""));
+                actions.add(() -> {
+                    subEnabled = true;
+                    activeSubLang = "custom";
+                    activeEngine = "raw";
+                    if (!customSubtitleUrl.isEmpty()) {
+                        activeSubUrl = customSubtitleUrl;
+                    }
+                });
+            }
+
             // 1. Google GTX Murni (Prioritas Pertama / Super Cepat)
-            boolean isGtxSelected = subEnabled && "id".equals(activeSubLang) && "gtx".equals(activeEngine);
-            options.add("[ID] Bahasa Indonesia (Google GTX Murni - Cepat)" + (isGtxSelected ? " [Aktif]" : ""));
-            actions.add(() -> {
-                subEnabled = true;
-                activeSubLang = "id";
-                activeEngine = "gtx";
-                activeSubUrl = enSourceSubUrl;
-            });
+            if (!enSourceSubUrl.isEmpty()) {
+                boolean isGtxSelected = subEnabled && "id".equals(activeSubLang) && "gtx".equals(activeEngine);
+                options.add("[ID] Bahasa Indonesia (Google GTX Murni - Cepat)" + (isGtxSelected ? " [Aktif]" : ""));
+                actions.add(() -> {
+                    subEnabled = true;
+                    activeSubLang = "id";
+                    activeEngine = "gtx";
+                    activeSubUrl = enSourceSubUrl;
+                });
 
-            // 2. GTX+ (Prioritas Kedua / GTX + Smart Fansub & Scene Detection)
-            boolean isGtxPlusSelected = subEnabled && "id".equals(activeSubLang) && ("gtx+".equals(activeEngine) || "aigtx".equals(activeEngine));
-            options.add("[ID] Bahasa Indonesia (GTX+ - Smart Fansub & Scene Detection)" + (isGtxPlusSelected ? " [Aktif]" : ""));
-            actions.add(() -> {
-                subEnabled = true;
-                activeSubLang = "id";
-                activeEngine = "gtx+";
-                activeSubUrl = enSourceSubUrl;
-            });
+                // 2. GTX+ (Prioritas Kedua / GTX + Smart Fansub & Scene Detection)
+                boolean isGtxPlusSelected = subEnabled && "id".equals(activeSubLang) && ("gtx+".equals(activeEngine) || "aigtx".equals(activeEngine));
+                options.add("[ID] Bahasa Indonesia (GTX+ - Smart Fansub & Scene Detection)" + (isGtxPlusSelected ? " [Aktif]" : ""));
+                actions.add(() -> {
+                    subEnabled = true;
+                    activeSubLang = "id";
+                    activeEngine = "gtx+";
+                    activeSubUrl = enSourceSubUrl;
+                });
 
-            // 3. AI Fansub (Prioritas Ketiga / LLM Translate)
-            boolean isAiSelected = subEnabled && "id".equals(activeSubLang) && "ai".equals(activeEngine);
-            String aiOptionText = "[AI] Bahasa Indonesia (AI Fansub / " + configuredAiModel + ")"
-                    + (hasAiKey ? " [SIAP]" : " [Butuh Key]")
-                    + (isAiSelected ? " [Aktif]" : "");
-            options.add(aiOptionText);
-            actions.add(() -> {
-                subEnabled = true;
-                activeSubLang = "id";
-                activeEngine = "ai";
-                activeSubUrl = enSourceSubUrl;
-                if (!hasAiKey) {
-                    Toast.makeText(this, "Perhatian: API Key AI belum disetel (:apikey <key> di home). Menggunakan GTX sebagai fallback otomatis.", Toast.LENGTH_LONG).show();
-                }
-            });
+                // 3. AI Fansub (Prioritas Ketiga / LLM Translate)
+                boolean isAiSelected = subEnabled && "id".equals(activeSubLang) && "ai".equals(activeEngine);
+                String aiOptionText = "[AI] Bahasa Indonesia (AI Fansub / " + configuredAiModel + ")"
+                        + (hasAiKey ? " [SIAP]" : " [Butuh Key]")
+                        + (isAiSelected ? " [Aktif]" : "");
+                options.add(aiOptionText);
+                actions.add(() -> {
+                    subEnabled = true;
+                    activeSubLang = "id";
+                    activeEngine = "ai";
+                    activeSubUrl = enSourceSubUrl;
+                    if (!hasAiKey) {
+                        Toast.makeText(this, "Perhatian: API Key AI belum disetel (:apikey <key> di home). Menggunakan GTX sebagai fallback otomatis.", Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
 
             // 4. Native Indonesian (jika tersedia di track asli)
             if (!idNativeSubUrl.isEmpty()) {
@@ -1714,7 +3041,7 @@ public class PlayerActivity extends Activity {
             }
 
             // 5. English (Original)
-            if (!enSourceSubUrl.isEmpty()) {
+            if (!enSourceSubUrl.isEmpty() && !enSourceSubUrl.equals(customSubtitleUrl)) {
                 boolean isEnSelected = subEnabled && "en".equals(activeSubLang) && "raw".equals(activeEngine);
                 options.add("[EN] English (Original / Asli)" + (isEnSelected ? " [Aktif]" : ""));
                 actions.add(() -> {
@@ -1732,7 +3059,7 @@ public class PlayerActivity extends Activity {
                 String lbl = s.optString("label", "Track " + (i + 1));
                 String lang = s.optString("lang", "").toLowerCase();
                 // Lewati track English & ID native karena sudah disediakan di menu utama di atas
-                if (url.equals(enSourceSubUrl) || url.equals(idNativeSubUrl)) {
+                if (url.equals(enSourceSubUrl) || url.equals(idNativeSubUrl) || url.equals(customSubtitleUrl)) {
                     continue;
                 }
                 boolean isThisSelected = subEnabled && "raw".equals(activeEngine) && url.equals(activeSubUrl);
@@ -1755,6 +3082,13 @@ public class PlayerActivity extends Activity {
             });
         }
 
+        // Opsi Subtitle Kustom (File Lokal / URL)
+        options.add("[+] Pilih File Subtitle Lokal (.srt / .vtt)...");
+        actions.add(this::openSubtitleFilePicker);
+
+        options.add("[+] Masukkan URL Subtitle Kustom...");
+        actions.add(this::showCustomSubtitleUrlDialog);
+
         // 7. Pengaturan Tampilan & Gaya Subtitle
         options.add("Pengaturan Tampilan (Posisi, Latar Belakang & Ukuran)...");
         actions.add(this::showSubtitleStyleDialog);
@@ -1769,7 +3103,7 @@ public class PlayerActivity extends Activity {
             if (which >= 0 && which < actions.size()) {
                 String chosen = options.get(which);
                 actions.get(which).run();
-                if (!chosen.contains("[Refresh]")) {
+                if (!chosen.contains("[Refresh]") && !chosen.contains("[+]")) {
                     getSharedPreferences("tatap_player_prefs", MODE_PRIVATE).edit()
                             .putString("pref_sub_engine", activeEngine)
                             .putString("pref_sub_lang", activeSubLang)
@@ -1793,6 +3127,221 @@ public class PlayerActivity extends Activity {
             }
         });
         builder.show();
+    }
+
+    private void openSubtitleFilePicker() {
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
+            String[] mimeTypes = {"text/plain", "text/vtt", "application/x-subrip", "application/octet-stream"};
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
+            startActivityForResult(intent, REQUEST_CODE_PICK_SUBTITLE);
+        } catch (Exception e) {
+            try {
+                Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                intent.setType("*/*");
+                startActivityForResult(intent, REQUEST_CODE_PICK_SUBTITLE);
+            } catch (Exception ex) {
+                Toast.makeText(this, "Gagal membuka pengelola berkas: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_CODE_PICK_SUBTITLE && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            Uri uri = data.getData();
+            loadCustomSubtitleFromUri(uri);
+        }
+    }
+
+    private void loadCustomSubtitleFromUri(Uri uri) {
+        new Thread(() -> {
+            try {
+                InputStream is = getContentResolver().openInputStream(uri);
+                if (is == null) {
+                    runOnUiThread(() -> Toast.makeText(this, "Tidak dapat membaca file subtitle", Toast.LENGTH_SHORT).show());
+                    return;
+                }
+                BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line).append("\n");
+                }
+                reader.close();
+                is.close();
+                String rawSub = sb.toString();
+
+                String displayName = "File Lokal";
+                try (android.database.Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
+                    if (cursor != null && cursor.moveToFirst()) {
+                        int nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                        if (nameIdx >= 0) {
+                            String name = cursor.getString(nameIdx);
+                            if (name != null && !name.isEmpty()) displayName = name;
+                        }
+                    }
+                } catch (Exception ignored) {}
+
+                final String finalName = displayName;
+                String customUrl = registerCustomSubtitleToBackend(rawSub, finalName);
+                List<SubtitleCue> cues = parseVtt(rawSub);
+
+                runOnUiThread(() -> {
+                    if (cues.isEmpty()) {
+                        Toast.makeText(this, "Subtitle kosong atau format tidak dikenali (.srt/.vtt)", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    customSubtitleName = finalName;
+                    customSubtitleUrl = customUrl != null ? customUrl : "";
+                    currentCues = cues;
+                    subEnabled = true;
+                    activeSubLang = "custom";
+                    activeEngine = "raw";
+                    if (!customSubtitleUrl.isEmpty()) {
+                        activeSubUrl = customSubtitleUrl;
+                        enSourceSubUrl = customSubtitleUrl;
+                    }
+                    if (tvSubtitles != null) {
+                        tvSubtitles.setText("");
+                        tvSubtitles.setVisibility(View.GONE);
+                    }
+                    updateSubStatusText(true);
+                    subtitleSyncRunnable.run();
+                    Toast.makeText(this, "Subtitle aktif: " + cues.size() + " cue (" + finalName + ")", Toast.LENGTH_SHORT).show();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, "Gagal memuat subtitle: " + e.getMessage(), Toast.LENGTH_SHORT).show());
+            }
+        }).start();
+    }
+
+    private String registerCustomSubtitleToBackend(String text, String filename) {
+        HttpURLConnection conn = null;
+        try {
+            URL u = new URL("http://127.0.0.1:8767/api/player/sub_custom");
+            conn = (HttpURLConnection) u.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(6000);
+            JSONObject json = new JSONObject();
+            json.put("text", text);
+            json.put("filename", filename);
+            json.put("lang", "en");
+            byte[] bytes = json.toString().getBytes(StandardCharsets.UTF_8);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(bytes);
+            }
+            if (conn.getResponseCode() == 200) {
+                BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
+                StringBuilder resp = new StringBuilder();
+                String l;
+                while ((l = br.readLine()) != null) resp.append(l);
+                br.close();
+                JSONObject r = new JSONObject(resp.toString());
+                if (r.optBoolean("success", false)) {
+                    JSONObject d = r.optJSONObject("data");
+                    if (d != null) {
+                        String relUrl = d.optString("url", "");
+                        if (!relUrl.isEmpty()) {
+                            return "http://127.0.0.1:8767" + relUrl;
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+        return null;
+    }
+
+    private void showCustomSubtitleUrlDialog() {
+        AlertDialog.Builder b = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        b.setTitle("Masukkan URL Subtitle");
+        final EditText input = new EditText(this);
+        input.setHint("https://example.com/sub.vtt atau .srt");
+        input.setTextColor(0xFFFFFFFF);
+        input.setHintTextColor(0xFF888888);
+        input.setSingleLine(true);
+        input.setPadding(40, 30, 40, 30);
+        b.setView(input);
+
+        b.setPositiveButton("Muat", (dialog, which) -> {
+            String url = input.getText().toString().trim();
+            if (url.isEmpty()) {
+                Toast.makeText(this, "URL subtitle tidak boleh kosong", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            loadCustomSubtitleFromUrl(url);
+        });
+        b.setNegativeButton("Batal", (dialog, which) -> dialog.dismiss());
+        AlertDialog dialog = b.create();
+        dialog.show();
+    }
+
+    private void loadCustomSubtitleFromUrl(String url) {
+        Toast.makeText(this, "Mengunduh subtitle dari URL...", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                URL u = new URL("http://127.0.0.1:8767/api/player/sub_custom");
+                conn = (HttpURLConnection) u.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(15000);
+                JSONObject json = new JSONObject();
+                json.put("url", url);
+                json.put("filename", "Kustom URL");
+                byte[] bytes = json.toString().getBytes(StandardCharsets.UTF_8);
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(bytes);
+                }
+                int respCode = conn.getResponseCode();
+                if (respCode == 200) {
+                    BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
+                    StringBuilder resp = new StringBuilder();
+                    String l;
+                    while ((l = br.readLine()) != null) resp.append(l);
+                    br.close();
+                    JSONObject r = new JSONObject(resp.toString());
+                    if (r.optBoolean("success", false)) {
+                        JSONObject d = r.optJSONObject("data");
+                        if (d != null) {
+                            String relUrl = d.optString("url", "");
+                            String subFullUrl = "http://127.0.0.1:8767" + relUrl;
+                            runOnUiThread(() -> {
+                                customSubtitleName = "URL: " + (url.length() > 30 ? url.substring(0, 27) + "..." : url);
+                                customSubtitleUrl = subFullUrl;
+                                activeSubUrl = subFullUrl;
+                                enSourceSubUrl = subFullUrl;
+                                activeSubLang = "custom";
+                                activeEngine = "raw";
+                                subEnabled = true;
+                                applySubtitleSelection();
+                                Toast.makeText(this, "Subtitle dari URL berhasil diaktifkan", Toast.LENGTH_SHORT).show();
+                            });
+                            return;
+                        }
+                    }
+                    String err = r.optString("error", "Format tidak valid");
+                    runOnUiThread(() -> Toast.makeText(this, "Gagal memuat subtitle: " + err, Toast.LENGTH_LONG).show());
+                } else {
+                    runOnUiThread(() -> Toast.makeText(this, "Server error: HTTP " + respCode, Toast.LENGTH_SHORT).show());
+                }
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, "Koneksi gagal: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }).start();
     }
 
     private void applySubtitleStyle() {
@@ -2033,7 +3582,14 @@ public class PlayerActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        if (isHoldingSpeed) stopHoldingSpeed();
+        if (isHoldingRewind) stopHoldingRewind();
+        isVideoPlaying = false;
+        recordWatchProgress(true);
         if (player != null) player.pause();
+        if (hapticGenerator instanceof HapticGenerator && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            HapticGeneratorHelper.setEnabled((HapticGenerator) hapticGenerator, false);
+        }
         handler.removeCallbacks(subtitleSyncRunnable);
         handler.removeCallbacks(preResolveRunnable);
     }
@@ -2041,7 +3597,12 @@ public class PlayerActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        hideSystemUi();
+        applySystemUiVisibility();
+        SharedPreferences sp = getSharedPreferences("tatap_player_prefs", MODE_PRIVATE);
+        isGeneralHapticEnabled = !TvFocusHelper.isTv(this) && sp.getBoolean("pref_general_haptic", sp.getBoolean("pref_haptic", true));
+        isHapticEnabled = isGeneralHapticEnabled;
+        isSceneHapticEnabled = !TvFocusHelper.isTv(this) && sp.getBoolean("pref_scene_haptic", false);
+        updateHapticGeneratorState();
         if (player != null && player.isPlaying()) {
             handler.removeCallbacks(subtitleSyncRunnable);
             handler.post(subtitleSyncRunnable);
@@ -2051,11 +3612,180 @@ public class PlayerActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        isVideoPlaying = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && backInvokedCallback != null) {
+            try {
+                getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backInvokedCallback);
+            } catch (Throwable ignored) {}
+            backInvokedCallback = null;
+        }
+        recordWatchProgress(true);
         handler.removeCallbacks(subtitleSyncRunnable);
         handler.removeCallbacks(preResolveRunnable);
+        handler.removeCallbacks(hideTopBarRunnable);
+        handler.removeCallbacks(hideUnlockButtonRunnable);
+        releaseHapticGenerator();
         if (player != null) {
             player.release();
             player = null;
+        }
+    }
+
+    private void recordWatchProgress(boolean force) {
+        if (player == null || slug == null || slug.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        if (!force && (now - lastProgressSaveMs < 5000)) return;
+        lastProgressSaveMs = now;
+
+        long pos = player.getCurrentPosition();
+        long dur = player.getDuration();
+        if (pos <= 0 && !force) return;
+
+        final int progSec = (int) (pos / 1000);
+        final int durSec = dur > 0 ? (int) (dur / 1000) : 0;
+        final String curSlug = slug;
+        final int curEp = ep;
+
+        try {
+            SharedPreferences sp = getSharedPreferences("tatap_player_prefs", Context.MODE_PRIVATE);
+            sp.edit()
+                    .putLong("prog_" + curSlug + "_" + curEp, pos)
+                    .putLong("dur_" + curSlug + "_" + curEp, dur)
+                    .apply();
+        } catch (Throwable ignored) {}
+
+        new Thread(() -> {
+            try {
+                JSONObject b = new JSONObject();
+                b.put("slug", curSlug);
+                b.put("episode", curEp);
+                b.put("progress", progSec);
+                b.put("duration", durSec);
+
+                HttpURLConnection conn = (HttpURLConnection) new URL("http://127.0.0.1:8767/api/progress").openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(2000);
+                conn.setReadTimeout(2000);
+                java.io.OutputStream os = conn.getOutputStream();
+                os.write(b.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                os.close();
+                conn.getResponseCode();
+                conn.disconnect();
+            } catch (Exception ignored) {}
+        }).start();
+    }
+
+    private void checkAndPromptResume() {
+        if (hasPromptedResume || slug == null || slug.isEmpty()) return;
+        hasPromptedResume = true;
+
+        long localSavedMs = 0;
+        long localDurMs = 0;
+        try {
+            SharedPreferences sp = getSharedPreferences("tatap_player_prefs", Context.MODE_PRIVATE);
+            localSavedMs = sp.getLong("prog_" + slug + "_" + ep, 0);
+            localDurMs = sp.getLong("dur_" + slug + "_" + ep, 0);
+        } catch (Throwable ignored) {}
+
+        if (localSavedMs >= 15_000) {
+            if (localDurMs <= 30_000 || localSavedMs < (localDurMs - 30_000)) {
+                showResumeDialog(localSavedMs);
+                return;
+            }
+        }
+
+        final String curSlug = slug;
+        final int curEp = ep;
+        new Thread(() -> {
+            try {
+                String u = "http://127.0.0.1:8767/api/progress?slug=" + URLEncoder.encode(curSlug, "UTF-8")
+                        + "&ep=" + curEp;
+                HttpURLConnection conn = (HttpURLConnection) new URL(u).openConnection();
+                conn.setConnectTimeout(2000);
+                conn.setReadTimeout(2000);
+                if (conn.getResponseCode() == 200) {
+                    BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    StringBuilder sb = new StringBuilder();
+                    String l;
+                    while ((l = r.readLine()) != null) sb.append(l);
+                    r.close();
+                    JSONObject res = new JSONObject(sb.toString());
+                    if (res.optBoolean("success")) {
+                        JSONObject d = res.optJSONObject("data");
+                        if (d != null && d.optBoolean("should_resume", false)) {
+                            long progMs = d.optLong("progress", 0) * 1000;
+                            if (progMs >= 15_000) {
+                                runOnUiThread(() -> showResumeDialog(progMs));
+                            }
+                        }
+                    }
+                }
+                conn.disconnect();
+            } catch (Exception ignored) {}
+        }).start();
+    }
+
+    private void showResumeDialog(long savedMs) {
+        if (isFinishing() || isDestroyed()) return;
+        long sec = savedMs / 1000;
+        String timeStr = String.format("%02d:%02d", sec / 60, sec % 60);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        builder.setTitle("Lanjutkan Menonton?");
+        builder.setMessage("Anda sebelumnya menonton episode ini hingga menit " + timeStr + ".\nLanjutkan dari posisi terakhir atau mulai dari awal?");
+
+        builder.setPositiveButton("Lanjutkan (" + timeStr + ")", (dialog, which) -> {
+            pendingResumePosMs = savedMs;
+            if (player != null && player.getPlaybackState() == Player.STATE_READY) {
+                player.seekTo(savedMs);
+                player.play();
+            }
+        });
+
+        builder.setNegativeButton("Mulai dari Awal", (dialog, which) -> {
+            pendingResumePosMs = 0;
+            try {
+                SharedPreferences sp = getSharedPreferences("tatap_player_prefs", Context.MODE_PRIVATE);
+                sp.edit().putLong("prog_" + slug + "_" + ep, 0).apply();
+            } catch (Throwable ignored) {}
+            new Thread(() -> {
+                try {
+                    String u = "http://127.0.0.1:8767/api/progress?slug=" + URLEncoder.encode(slug != null ? slug : "", "UTF-8")
+                            + "&ep=" + ep;
+                    HttpURLConnection conn = (HttpURLConnection) new URL(u).openConnection();
+                    conn.setRequestMethod("DELETE");
+                    conn.setConnectTimeout(2000);
+                    conn.getResponseCode();
+                    conn.disconnect();
+                } catch (Exception ignored) {}
+            }).start();
+
+            if (player != null && player.getPlaybackState() == Player.STATE_READY) {
+                player.seekTo(0);
+                player.play();
+            }
+        });
+
+        builder.setOnCancelListener(dialog -> {
+            if (pendingResumePosMs < 0) {
+                pendingResumePosMs = savedMs;
+                if (player != null && player.getPlaybackState() == Player.STATE_READY) {
+                    player.seekTo(savedMs);
+                    player.play();
+                }
+            }
+        });
+
+        AlertDialog dialog = builder.create();
+        dialog.show();
+
+        if (TvFocusHelper.isTv(this)) {
+            Button btnPos = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
+            if (btnPos != null) {
+                btnPos.requestFocus();
+            }
         }
     }
 
@@ -2069,17 +3799,53 @@ public class PlayerActivity extends Activity {
 
     private void bindExoControlButtons() {
         if (playerView == null) return;
+
+        androidx.media3.ui.TimeBar timeBar = playerView.findViewById(androidx.media3.ui.R.id.exo_progress);
+        if (timeBar != null && !isTimeBarListenerAttached) {
+            isTimeBarListenerAttached = true;
+            timeBar.addListener(new androidx.media3.ui.TimeBar.OnScrubListener() {
+                private long lastScrubStep = -1;
+
+                @Override
+                public void onScrubStart(androidx.media3.ui.TimeBar timeBar, long position) {
+                    lastScrubStep = position / 5000;
+                    HapticHelper.performClick(playerView);
+                }
+
+                @Override
+                public void onScrubMove(androidx.media3.ui.TimeBar timeBar, long position) {
+                    long step = position / 5000;
+                    if (step != lastScrubStep) {
+                        lastScrubStep = step;
+                        HapticHelper.performTick(playerView);
+                    }
+                }
+
+                @Override
+                public void onScrubStop(androidx.media3.ui.TimeBar timeBar, long position, boolean canceled) {
+                    lastScrubStep = -1;
+                    HapticHelper.performClick(playerView);
+                }
+            });
+        }
+
         if (btnExoNext == null) {
             btnExoNext = playerView.findViewById(androidx.media3.ui.R.id.exo_next);
             if (btnExoNext != null) {
-                btnExoNext.setOnClickListener(v -> playNextEpisode());
+                btnExoNext.setOnClickListener(v -> {
+                    HapticHelper.performClick(v);
+                    playNextEpisode();
+                });
                 TvFocusHelper.attachFocusScale(btnExoNext, 1.15f, 6f);
             }
         }
         if (btnExoPrev == null) {
             btnExoPrev = playerView.findViewById(androidx.media3.ui.R.id.exo_prev);
             if (btnExoPrev != null) {
-                btnExoPrev.setOnClickListener(v -> playPrevEpisode());
+                btnExoPrev.setOnClickListener(v -> {
+                    HapticHelper.performClick(v);
+                    playPrevEpisode();
+                });
                 TvFocusHelper.attachFocusScale(btnExoPrev, 1.15f, 6f);
             }
         }
@@ -2087,7 +3853,10 @@ public class PlayerActivity extends Activity {
             btnExoSub = playerView.findViewById(androidx.media3.ui.R.id.exo_subtitle);
             if (btnExoSub != null) {
                 btnExoSub.setVisibility(View.VISIBLE);
-                btnExoSub.setOnClickListener(v -> showSubtitleSelectorDialog());
+                btnExoSub.setOnClickListener(v -> {
+                    HapticHelper.performClick(v);
+                    showSubtitleSelectorDialog();
+                });
                 TvFocusHelper.attachFocusScale(btnExoSub, 1.15f, 6f);
             }
         }
@@ -2095,7 +3864,10 @@ public class PlayerActivity extends Activity {
             btnExoSettings = playerView.findViewById(androidx.media3.ui.R.id.exo_settings);
             if (btnExoSettings != null) {
                 btnExoSettings.setVisibility(View.VISIBLE);
-                btnExoSettings.setOnClickListener(v -> showPlayerUnifiedSettingsDialog());
+                btnExoSettings.setOnClickListener(v -> {
+                    HapticHelper.performClick(v);
+                    showPlayerUnifiedSettingsDialog();
+                });
                 TvFocusHelper.attachFocusScale(btnExoSettings, 1.15f, 6f);
             }
         }
@@ -2103,7 +3875,19 @@ public class PlayerActivity extends Activity {
             btnExoFullscreen = playerView.findViewById(androidx.media3.ui.R.id.exo_fullscreen);
             if (btnExoFullscreen != null) {
                 btnExoFullscreen.setVisibility(View.VISIBLE);
-                btnExoFullscreen.setOnClickListener(v -> cycleAspectRatio());
+                btnExoFullscreen.setOnClickListener(v -> {
+                    HapticHelper.performClick(v);
+                    if (TvFocusHelper.isTv(this)) {
+                        cycleAspectRatio();
+                    } else {
+                        int orient = getResources().getConfiguration().orientation;
+                        if (orient == Configuration.ORIENTATION_LANDSCAPE) {
+                            exitLandscapeFullscreen();
+                        } else {
+                            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+                        }
+                    }
+                });
                 TvFocusHelper.attachFocusScale(btnExoFullscreen, 1.15f, 6f);
             }
         }
@@ -2114,16 +3898,21 @@ public class PlayerActivity extends Activity {
             bindExoControlButtons();
             boolean hasNext = hasNextEpisode();
             boolean hasPrev = hasPrevEpisode();
+            boolean isTv = TvFocusHelper.isTv(this);
+            boolean isPaused = (player != null && !player.isPlaying());
+
+            boolean enableNext = hasNext && (!isTv || isPaused);
+            boolean enablePrev = hasPrev && (!isTv || isPaused);
 
             if (btnExoNext != null) {
-                btnExoNext.setEnabled(hasNext);
-                btnExoNext.setFocusable(hasNext);
-                btnExoNext.setAlpha(hasNext ? 1.0f : 0.35f);
+                btnExoNext.setEnabled(enableNext);
+                btnExoNext.setFocusable(enableNext);
+                btnExoNext.setAlpha(enableNext ? 1.0f : 0.25f);
             }
             if (btnExoPrev != null) {
-                btnExoPrev.setEnabled(hasPrev);
-                btnExoPrev.setFocusable(hasPrev);
-                btnExoPrev.setAlpha(hasPrev ? 1.0f : 0.35f);
+                btnExoPrev.setEnabled(enablePrev);
+                btnExoPrev.setFocusable(enablePrev);
+                btnExoPrev.setAlpha(enablePrev ? 1.0f : 0.25f);
             }
             if (btnExoSub != null) {
                 btnExoSub.setAlpha(subEnabled ? 1.0f : 0.45f);
@@ -2138,24 +3927,54 @@ public class PlayerActivity extends Activity {
         AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
         builder.setTitle("Pengaturan Pemutar");
 
+        SharedPreferences sp = getSharedPreferences("tatap_player_prefs", MODE_PRIVATE);
+        boolean autoSkip = sp.getBoolean("auto_skip_op_ed", false);
+        String spdLabel = formatSpeedLabel(currentPlaybackSpeed);
         String qLabel = activeQuality != null && !activeQuality.isEmpty() ? activeQuality.toUpperCase() : "AUTO";
         String subLabel = !subEnabled ? "Mati" : (activeSubLang.toUpperCase() + " [" + activeEngine + "]");
-        String[] menu = new String[]{
-                "Pilihan Subtitle & Terjemahan (" + subLabel + ")",
-                "Pilihan Kualitas Video (" + qLabel + ")",
-                "Pengaturan Tampilan & Gaya Subtitle",
-                "Skala Layar / Rasio Aspek (" + getAspectLabel() + ")"
-        };
+        String autoSkipLabel = autoSkip ? "Aktif" : "Mati";
 
-        builder.setItems(menu, (dialog, which) -> {
-            if (which == 0) {
-                showSubtitleSelectorDialog();
-            } else if (which == 1) {
-                showQualitySelectorDialog();
-            } else if (which == 2) {
-                showSubtitleStyleDialog();
-            } else if (which == 3) {
-                cycleAspectRatio();
+        List<String> menuList = new ArrayList<>();
+        List<Runnable> actionList = new ArrayList<>();
+
+        if (TvFocusHelper.isTv(this)) {
+            if (hasNextEpisode()) {
+                menuList.add("Putar Episode Berikutnya (Ep " + getNextEpisodeNumber() + ")");
+                actionList.add(this::playNextEpisode);
+            }
+            if (hasPrevEpisode()) {
+                menuList.add("Putar Episode Sebelumnya (Ep " + getPrevEpisodeNumber() + ")");
+                actionList.add(this::playPrevEpisode);
+            }
+        }
+
+        menuList.add("Kecepatan Putar Video (" + spdLabel + ")");
+        actionList.add(this::showSpeedSelectorDialog);
+
+        menuList.add("Pilihan Subtitle & Terjemahan (" + subLabel + ")");
+        actionList.add(this::showSubtitleSelectorDialog);
+
+        menuList.add("Pilihan Kualitas Video (" + qLabel + ")");
+        actionList.add(this::showQualitySelectorDialog);
+
+        menuList.add("Pengaturan Tampilan & Gaya Subtitle");
+        actionList.add(this::showSubtitleStyleDialog);
+
+        menuList.add("Skala Layar / Rasio Aspek (" + getAspectLabel() + ")");
+        actionList.add(this::cycleAspectRatio);
+
+        menuList.add("Otomatis Lewati Opening & Ending (" + autoSkipLabel + ")");
+        actionList.add(() -> {
+            boolean newAutoSkip = !autoSkip;
+            sp.edit().putBoolean("auto_skip_op_ed", newAutoSkip).apply();
+            autoSkipOpEd = newAutoSkip;
+            Toast.makeText(this, "Otomatis Lewati OP/ED: " + (newAutoSkip ? "Aktif" : "Mati"), Toast.LENGTH_SHORT).show();
+        });
+
+        String[] menuArray = menuList.toArray(new String[0]);
+        builder.setItems(menuArray, (dialog, which) -> {
+            if (which >= 0 && which < actionList.size()) {
+                actionList.get(which).run();
             }
         });
 
@@ -2165,6 +3984,8 @@ public class PlayerActivity extends Activity {
                 playerView.showController();
                 if (btnExoSettings != null && btnExoSettings.getVisibility() == View.VISIBLE) {
                     btnExoSettings.requestFocus();
+                } else if (btnSpeed != null && btnSpeed.getVisibility() == View.VISIBLE) {
+                    btnSpeed.requestFocus();
                 } else if (btnQuality != null && btnQuality.getVisibility() == View.VISIBLE) {
                     btnQuality.requestFocus();
                 }
@@ -2214,6 +4035,7 @@ public class PlayerActivity extends Activity {
                                 episodeList.addAll(list);
                                 updateExoButtonStates();
                                 preResolveNeighbors();
+                                updatePortraitEpisodeDisplay();
                             }
                         });
                     }
@@ -2294,7 +4116,12 @@ public class PlayerActivity extends Activity {
 
     private void switchEpisode(int targetEp) {
         if (ep == targetEp) return;
+        performHapticClick();
+        recordWatchProgress(true);
         ep = targetEp;
+        hasPromptedResume = false;
+        pendingResumePosMs = -1;
+        checkAndPromptResume();
 
         currentResolveLoadId++;
         final int thisResolveId = currentResolveLoadId;
@@ -2310,6 +4137,14 @@ public class PlayerActivity extends Activity {
         masterStreamUrl = "";
         subtitleTracks.clear();
         hasFallbackAttempted = false;
+        introStartMs = 0;
+        introEndMs = 0;
+        outroStartMs = 0;
+        outroEndMs = 0;
+        currentSkipTargetMs = 0;
+        if (btnSkipOpEd != null) {
+            btnSkipOpEd.setVisibility(View.GONE);
+        }
 
         if (player != null) {
             player.stop();
@@ -2322,6 +4157,15 @@ public class PlayerActivity extends Activity {
             tvPlayerTitle.setText("Episode " + ep);
         }
 
+        try {
+            SharedPreferences histSp = getSharedPreferences("tatap_history", Context.MODE_PRIVATE);
+            histSp.edit()
+                    .putInt("last_ep_" + slug, ep)
+                    .putBoolean("watched_" + slug + "_" + ep, true)
+                    .apply();
+        } catch (Throwable ignored) {}
+
+        updatePortraitEpisodeDisplay();
         updateExoButtonStates();
 
         if (layoutBuffering != null) {
@@ -2410,6 +4254,222 @@ public class PlayerActivity extends Activity {
                 } catch (Exception ignored) {}
             }
         }).start();
+    }
+
+    private void updatePortraitEpisodeDisplay() {
+        if (TvFocusHelper.isTv(this) || layoutPortraitBottom == null) return;
+
+        if (title != null && !title.isEmpty()) {
+            if (tvPortraitAnimeTitle != null) tvPortraitAnimeTitle.setText(title);
+        }
+        if (tvPortraitCurrentEp != null) {
+            tvPortraitCurrentEp.setText("Memutar Episode " + ep);
+        }
+
+        if (episodeList == null || episodeList.isEmpty()) {
+            if (tvPortraitEpCount != null) tvPortraitEpCount.setText("Daftar Episode");
+            return;
+        }
+
+        if (tvPortraitEpCount != null) {
+            tvPortraitEpCount.setText("Daftar Episode (" + episodeList.size() + ")");
+        }
+
+        // Build ranges if size > 30
+        if (episodeList.size() > 30) {
+            portraitRanges.clear();
+            int minEp = episodeList.get(0);
+            int maxEp = episodeList.get(episodeList.size() - 1);
+            int rangeSize = 30;
+            PortraitEpisodeRange foundActiveRange = null;
+            for (int s = minEp; s <= maxEp; s += rangeSize) {
+                int e = Math.min(s + rangeSize - 1, maxEp);
+                PortraitEpisodeRange r = new PortraitEpisodeRange(s, e);
+                portraitRanges.add(r);
+                if (ep >= s && ep <= e) {
+                    foundActiveRange = r;
+                }
+            }
+            if (activePortraitRange == null || foundActiveRange != null) {
+                activePortraitRange = foundActiveRange != null ? foundActiveRange : portraitRanges.get(0);
+            }
+            if (rvPortraitRanges != null) {
+                rvPortraitRanges.setVisibility(View.VISIBLE);
+                if (portraitRangeAdapter != null) {
+                    portraitRangeAdapter.setRanges(portraitRanges, activePortraitRange);
+                }
+            }
+        } else {
+            activePortraitRange = null;
+            if (rvPortraitRanges != null) {
+                rvPortraitRanges.setVisibility(View.GONE);
+            }
+        }
+
+        // Filter list based on range
+        List<Integer> filtered = new ArrayList<>();
+        for (int e : episodeList) {
+            if (activePortraitRange == null || (e >= activePortraitRange.start && e <= activePortraitRange.end)) {
+                filtered.add(e);
+            }
+        }
+
+        if (!isPortraitAscending) {
+            java.util.Collections.reverse(filtered);
+        }
+
+        if (portraitEpisodeAdapter != null) {
+            portraitEpisodeAdapter.setEpisodes(filtered);
+            int targetPos = filtered.indexOf(ep);
+            if (targetPos >= 0 && rvPortraitEpisodes != null) {
+                rvPortraitEpisodes.scrollToPosition(targetPos);
+            }
+        }
+    }
+
+    private class PortraitEpisodeAdapter extends RecyclerView.Adapter<PortraitEpisodeAdapter.EpViewHolder> {
+        private final List<Integer> items = new ArrayList<>();
+        private final java.util.Set<Integer> watchedSet = new java.util.HashSet<>();
+
+        public void setEpisodes(List<Integer> list) {
+            items.clear();
+            watchedSet.clear();
+            if (list != null) {
+                items.addAll(list);
+                try {
+                    SharedPreferences hist = getSharedPreferences("tatap_history", Context.MODE_PRIVATE);
+                    for (int itemEp : list) {
+                        if (hist.getBoolean("watched_" + slug + "_" + itemEp, false)) {
+                            watchedSet.add(itemEp);
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+            notifyDataSetChanged();
+        }
+
+        @NonNull
+        @Override
+        public EpViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            View v = getLayoutInflater().inflate(R.layout.item_episode, parent, false);
+            return new EpViewHolder(v);
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull EpViewHolder holder, int position) {
+            int itemEp = items.get(position);
+            holder.tvTitle.setText(String.format(java.util.Locale.US, "EP %02d", itemEp));
+
+            if (itemEp == ep) {
+                // Active playing episode: cyan highlight
+                holder.card.setCardBackgroundColor(0xFF1E293B);
+                holder.card.setStrokeColor(0xFF38BDF8);
+                holder.card.setStrokeWidth(dpToPx(1));
+                holder.tvTitle.setTextColor(0xFF38BDF8);
+                holder.tvBadge.setVisibility(View.VISIBLE);
+                holder.tvBadge.setText("MEMUTAR");
+                holder.tvBadge.setTextColor(0xFF38BDF8);
+            } else if (watchedSet.contains(itemEp)) {
+                // Watched episode
+                holder.card.setCardBackgroundColor(0xFF0E1017);
+                holder.card.setStrokeColor(0xFF1C202C);
+                holder.card.setStrokeWidth(dpToPx(1));
+                holder.tvTitle.setTextColor(0xFF64748B);
+                holder.tvBadge.setVisibility(View.VISIBLE);
+                holder.tvBadge.setText("DITONTON");
+                holder.tvBadge.setTextColor(0xFF10B981);
+            } else {
+                // Unwatched episode
+                holder.card.setCardBackgroundColor(0xFF11141C);
+                holder.card.setStrokeColor(0xFF1C202C);
+                holder.card.setStrokeWidth(dpToPx(1));
+                holder.tvTitle.setTextColor(0xFFF1F5F9);
+                holder.tvBadge.setVisibility(View.GONE);
+            }
+
+            holder.itemView.setOnClickListener(v -> {
+                if (itemEp != ep) {
+                    HapticHelper.performClick(v);
+                    switchEpisode(itemEp);
+                }
+            });
+        }
+
+        @Override
+        public int getItemCount() {
+            return items.size();
+        }
+
+        class EpViewHolder extends RecyclerView.ViewHolder {
+            com.google.android.material.card.MaterialCardView card;
+            TextView tvTitle;
+            TextView tvBadge;
+
+            public EpViewHolder(@NonNull View itemView) {
+                super(itemView);
+                card = itemView.findViewById(R.id.card_episode);
+                tvTitle = itemView.findViewById(R.id.tv_ep_title);
+                tvBadge = itemView.findViewById(R.id.tv_ep_status_badge);
+            }
+        }
+    }
+
+    private class PortraitRangeAdapter extends RecyclerView.Adapter<PortraitRangeAdapter.RangeViewHolder> {
+        private final List<PortraitEpisodeRange> ranges = new ArrayList<>();
+        private PortraitEpisodeRange selectedRange;
+
+        public void setRanges(List<PortraitEpisodeRange> list, PortraitEpisodeRange selected) {
+            ranges.clear();
+            if (list != null) ranges.addAll(list);
+            this.selectedRange = selected;
+            notifyDataSetChanged();
+        }
+
+        @NonNull
+        @Override
+        public RangeViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            View v = getLayoutInflater().inflate(R.layout.item_range_chip, parent, false);
+            return new RangeViewHolder(v);
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull RangeViewHolder holder, int position) {
+            PortraitEpisodeRange r = ranges.get(position);
+            holder.tvLabel.setText(r.label);
+            boolean isSel = (selectedRange != null && selectedRange.label.equals(r.label));
+            if (isSel) {
+                holder.card.setCardBackgroundColor(0xFF1E293B);
+                holder.card.setStrokeColor(0xFF38BDF8);
+                holder.tvLabel.setTextColor(0xFF38BDF8);
+            } else {
+                holder.card.setCardBackgroundColor(0xFF161B26);
+                holder.card.setStrokeColor(0xFF2A3347);
+                holder.tvLabel.setTextColor(0xFF94A3B8);
+            }
+            holder.itemView.setOnClickListener(v -> {
+                HapticHelper.performTick(v);
+                selectedRange = r;
+                activePortraitRange = r;
+                notifyDataSetChanged();
+                updatePortraitEpisodeDisplay();
+            });
+        }
+
+        @Override
+        public int getItemCount() {
+            return ranges.size();
+        }
+
+        class RangeViewHolder extends RecyclerView.ViewHolder {
+            com.google.android.material.card.MaterialCardView card;
+            TextView tvLabel;
+
+            public RangeViewHolder(@NonNull View itemView) {
+                super(itemView);
+                card = itemView.findViewById(R.id.card_range_chip);
+                tvLabel = itemView.findViewById(R.id.tv_range_label);
+            }
+        }
     }
 
     @Override

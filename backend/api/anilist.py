@@ -21,8 +21,80 @@ query ($season: MediaSeason, $year: Int, $page: Int, $perPage: Int, $statusIn: [
       averageScore
       season
       seasonYear
+      source
+      genres
+      studios(isMain: true) {
+        nodes {
+          name
+        }
+      }
       coverImage { large medium }
       siteUrl
+      description(asHtml: false)
+      nextAiringEpisode {
+        episode
+        airingAt
+        timeUntilAiring
+      }
+    }
+  }
+}
+"""
+
+def clean_synopsis_text(desc: str) -> str:
+    """Bersihkan tag HTML, unescape entitas, dan normalkan spasi tanpa memotong panjang narasi."""
+    if not desc:
+        return ""
+    import html as _html, re
+    text = re.sub(r'<br\s*/?>', '\n', desc, flags=re.I)
+    text = re.sub(r'</?p>', '\n\n', text, flags=re.I)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = _html.unescape(text)
+    text = re.sub(r'\n*\(Source:[^)]*\)', '', text, flags=re.I)
+    text = re.sub(r'\n*\[Written by MAL Rewrite\]', '', text, flags=re.I)
+    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+    return text
+
+def compute_episode_counts(m: dict) -> tuple:
+    """Menghitung (eps_released, eps_total) dari objek media AniList.
+    Jika anime ongoing dan memiliki nextAiringEpisode, episode rilis = next_episode - 1."""
+    total = m.get("episodes") or 0
+    status = (m.get("status") or "").upper()
+    next_air = m.get("nextAiringEpisode")
+    if next_air and isinstance(next_air, dict) and next_air.get("episode"):
+        released = max(0, int(next_air.get("episode")) - 1)
+    elif status in ("FINISHED", "COMPLETED"):
+        released = total
+    else:
+        released = total
+    return released, total
+
+RECENTLY_FINISHED_QUERY = """
+query AiringFinished($page: Int, $perPage: Int) {
+  Page(page: $page, perPage: $perPage) {
+    pageInfo { total perPage currentPage lastPage hasNextPage }
+    media(format: TV, status: FINISHED, type: ANIME, sort: [END_DATE_DESC, POPULARITY_DESC]) {
+      id
+      status
+      title { romaji english }
+      format
+      episodes
+      duration
+      averageScore
+      season
+      seasonYear
+      source
+      genres
+      studios(isMain: true) {
+        nodes {
+          name
+        }
+      }
+      startDate { year month day }
+      endDate { year month day }
+      coverImage { large medium }
+      siteUrl
+      description(asHtml: false)
     }
   }
 }
@@ -79,11 +151,47 @@ def season_page(name, year, page=1, per_page=25, status_in=None):
         d.setdefault("pageInfo", {})
         d.setdefault("media", [])
         # AniList PageInfo untuk season-filter sering over-report (total=5000, lastPage=200).
-        # Batas hanya didasarkan pada item terisi — kalau page ini < per_page, tidak ada next.
+        # Batas didasarkan pada item terisi — kalau page ini < per_page, tidak ada next.
         items = d.get("media") or []
         pi = d.get("pageInfo") or {}
-        pi["hasNextPage"] = bool(pi.get("hasNextPage")) and len(items) >= per_page
-        pi["lastPage"] = max(1, pi.get("currentPage") or page)
+        has_next = bool(pi.get("hasNextPage")) and len(items) >= per_page
+        pi["hasNextPage"] = has_next
+        if has_next:
+            raw_last = pi.get("lastPage") or 1
+            pi["lastPage"] = max(page + 1, min(raw_last, 20))
+        else:
+            pi["lastPage"] = max(1, page)
+        pi["perPage"] = per_page
+        d["pageInfo"] = pi
+        return d
+    except Exception:
+        return {"pageInfo": {"total": 0, "perPage": per_page, "currentPage": page,
+                             "lastPage": 1, "hasNextPage": False}, "media": []}
+
+
+def recently_finished_page(page=1, per_page=20):
+    """Fetch anime musiman yang baru saja tamat dari AniList, diurutkan dari yang paling baru tamat."""
+    try:
+        c = _get_al_client()
+        r = c.post(ANILIST_URL, json={
+            "query": RECENTLY_FINISHED_QUERY,
+            "variables": {"page": page, "perPage": per_page}
+        })
+        if r.status_code != 200:
+            return {"pageInfo": {"total": 0, "perPage": per_page, "currentPage": page,
+                                 "lastPage": 1, "hasNextPage": False}, "media": []}
+        d = r.json().get("data", {}).get("Page", {})
+        d.setdefault("pageInfo", {})
+        d.setdefault("media", [])
+        items = d.get("media") or []
+        pi = d.get("pageInfo") or {}
+        has_next = bool(pi.get("hasNextPage")) and len(items) >= per_page
+        pi["hasNextPage"] = has_next
+        if has_next:
+            raw_last = pi.get("lastPage") or 1
+            pi["lastPage"] = max(page + 1, min(raw_last, 15))
+        else:
+            pi["lastPage"] = max(1, page)
         pi["perPage"] = per_page
         d["pageInfo"] = pi
         return d
@@ -141,7 +249,7 @@ def anilist_schedules(now_ts, end_ts, per_page=50):
     except Exception:
         return []
 
-def anilist_schedules_range(start_ts: int, end_ts: int, max_pages: int = 3):
+def anilist_schedules_range(start_ts: int, end_ts: int, max_pages: int = 6):
     """Episode yang tayang dalam rentang waktu (start_ts..end_ts) dengan pagination."""
     all_schedules = []
     c = _get_al_client()

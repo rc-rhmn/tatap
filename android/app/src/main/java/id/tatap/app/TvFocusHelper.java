@@ -8,6 +8,10 @@ import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.drawable.Drawable;
+import android.text.style.ImageSpan;
 import android.view.View;
 import android.widget.ImageButton;
 
@@ -81,5 +85,28 @@ public class TvFocusHelper {
 
     public static void attachCardFocus(final MaterialCardView card) {
         attachFocusScale(card, 1.04f, 0f);
+    }
+
+    /**
+     * ImageSpan yang memusatkan posisi vertikal ikon secara matematis
+     * terhadap tinggi font (ascent & descent) untuk tampilan 10-Foot UI Android TV.
+     */
+    public static class CenteredImageSpan extends ImageSpan {
+        public CenteredImageSpan(Drawable drawable) {
+            super(drawable);
+        }
+
+        @Override
+        public void draw(Canvas canvas, CharSequence text, int start, int end,
+                         float x, int top, int y, int bottom, Paint paint) {
+            Drawable b = getDrawable();
+            if (b == null) return;
+            canvas.save();
+            Paint.FontMetricsInt fm = paint.getFontMetricsInt();
+            int transY = (y + fm.descent + y + fm.ascent) / 2 - b.getBounds().height() / 2;
+            canvas.translate(x, transY);
+            b.draw(canvas);
+            canvas.restore();
+        }
     }
 }

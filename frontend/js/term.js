@@ -7,6 +7,9 @@ var Tui = (function () {
   function isModalOpen(){
     return (!$("title-modal").classList.contains("hidden")) ||
            (!$("player-modal").classList.contains("hidden")) ||
+           ($("resume-modal") && !$("resume-modal").classList.contains("hidden")) ||
+           ($("genre-modal") && !$("genre-modal").classList.contains("hidden")) ||
+           ($("catalog-filter-modal") && !$("catalog-filter-modal").classList.contains("hidden")) ||
            ($("drawer-panel") && !$("drawer-panel").classList.contains("hidden")) ||
            ($("update-modal") && !$("update-modal").classList.contains("hidden"));
   }
@@ -25,19 +28,31 @@ var Tui = (function () {
   function saveCmdHist(h){try{localStorage.setItem("tatap_hist",JSON.stringify(h.slice(0,50)));}catch(e){}}
 
   function cmdUsage(){
-    return "perintah:\n  cari <judul> | :musim | :lanjutan | :katalog\n  :terbaru | :season <winter|spring|summer|fall> <tahun>\n  :switch [hianime|otaku] (ganti sumber video HiAnime / Otakudesu)\n  :filter [key=val...] | :filter reset\n  :genre <slug|title> | :genre | :genre --list | :genre reset\n  :update (cek versi rilis terbaru secara on-demand)\n  :apikey <key> | :ollama <key> | :groq <key> | :gemini <key> | :model <nama> | :apiurl <url>\n  :logs | :crt on|off|toggle | :ambient on|off|toggle\n  :riwayat | :status | :bantuan | :q";
+    return "perintah:\n  cari <judul> | :musim | :lanjutan | :favorit | :katalog\n  :terbaru | :season <winter|spring|summer|fall> <tahun>\n  :switch [hianime|otaku] (ganti sumber video HiAnime / Otakudesu)\n  :filter [key=val...] | :filter reset\n  :genre <slug|title> | :genre | :genre --list | :genre reset\n  :update (cek versi rilis terbaru secara on-demand)\n  :apikey <key> | :ollama <key> | :groq <key> | :gemini <key> | :model <nama> | :apiurl <url>\n  :logs | :crt on|off|toggle | :ambient on|off|toggle\n  :riwayat | :favorit | :status | :bantuan | :q";
   }
 
   function applyFilter(){
     if(S.view!=="katalog"){log("filter hanya di katalog","err");return;}
-    S.page=1;loadView();
+    S.page=1;
+    $("results-title").textContent=getCatalogFilterTitle();
+    loadView();
   }
+
+  var SCHEDULE_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+  var SCHEDULE_LABELS = {
+    monday: "Senin", tuesday: "Selasa", wednesday: "Rabu",
+    thursday: "Kamis", friday: "Jumat", saturday: "Sabtu", sunday: "Minggu"
+  };
 
   S.scheduleDay = S.scheduleDay || "today";
 
-  function updateScheduleChips(){
+  function updateScheduleChips(currentServerDay){
     document.querySelectorAll("#schedule-days-bar button").forEach(function(b){
-      b.classList.toggle("active", b.getAttribute("data-day") === (S.scheduleDay || "today"));
+      var d = b.getAttribute("data-day");
+      b.classList.toggle("active", d === S.scheduleDay);
+      if(currentServerDay){
+        b.classList.toggle("is-today", d === currentServerDay);
+      }
     });
   }
 
@@ -51,14 +66,17 @@ var Tui = (function () {
     var sBar = $("schedule-days-bar");
     if(sBar) sBar.classList.toggle("hidden", v !== "terbaru");
     if(v === "terbaru") updateScheduleChips();
+    var cfBtn = $("btn-catalog-filter");
+    if(cfBtn) cfBtn.classList.toggle("hidden", v !== "katalog");
     $("continue-sec").classList.add("hidden");
     switch(v){
       case "cari":$("results-title").textContent="cari judul";$("empty-state").style.display="";break;
       case "musim":$("results-title").textContent="Tayang musim ini";break;
       case "lanjutan":$("results-title").textContent="Masih tayang (lanjut)";break;
-      case "katalog":$("results-title").textContent="Katalog";break;
+      case "favorit":$("results-title").textContent="Anime Favorit";break;
+      case "katalog":$("results-title").textContent=getCatalogFilterTitle();break;
       case "terbaru":{
-        var lblDay = S.scheduleDay === "yesterday" ? "kemarin" : (S.scheduleDay === "tomorrow" ? "besok" : "hari ini");
+        var lblDay = SCHEDULE_LABELS[S.scheduleDay] || S.scheduleDay || "Hari Ini";
         $("results-title").textContent="Jadwal rilis (" + lblDay + ")";
         break;
       }
@@ -72,15 +90,60 @@ var Tui = (function () {
     loadView();
   }
 
+  var _genreList=null;
+  function getGenreTitle(slug){
+    if(!slug) return "";
+    if(_genreList){
+      var g = _genreList.find(function(x){ return x.slug === slug; });
+      if(g) return g.title;
+    }
+    return slug.replace(/-/g, " ").replace(/\b\w/g, function(l){ return l.toUpperCase(); });
+  }
+
+  function getCatalogFilterTitle(){
+    if(!S.catalogFilter) return "Katalog Populer";
+    var f = S.catalogFilter;
+    var parts = [];
+    if(f.genre) {
+      parts.push("Genre: " + getGenreTitle(f.genre));
+    }
+    if(f.sort && f.sort !== "popularity") {
+      var sNames = {score: "Skor Tertinggi", latest: "Terbaru", trending: "Trending", az: "A-Z", most_favorite: "Favorit"};
+      parts.push(sNames[f.sort] || f.sort);
+    }
+    if(f.year) parts.push(f.year);
+    if(f.season) {
+      var seasonNames = {spring: "Musim Semi", summer: "Musim Panas", fall: "Musim Gugur", winter: "Musim Dingin"};
+      parts.push(seasonNames[f.season] || f.season);
+    }
+    if(f.month) {
+      var mNames = ["", "Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+      var mi = parseInt(f.month);
+      parts.push((mi >= 1 && mi <= 12) ? mNames[mi] : ("Bln " + f.month));
+    }
+    if(f.type) parts.push(f.type.toUpperCase());
+    if(f.status) parts.push(f.status === "releasing" ? "Airing" : "Tamat");
+    if(!parts.length) return "Katalog Populer";
+    return "Katalog (" + parts.join(" · ") + ")";
+  }
+
   function apiCall(name){
     switch(name){
       case "musim":return window.Tatap.seasonNow(S.page);
       case "lanjutan":return window.Tatap.stillAiring(S.page);
-      case "katalog":return window.Tatap.browse(S.filter,S.page);
+      case "favorit":return window.Tatap.bookmarks();
+      case "katalog":{
+        var f = S.catalogFilter || {};
+        var hasFilter = (f.sort && f.sort !== "popularity") || f.year || f.season || f.month || f.type || f.status || f.genre;
+        if(hasFilter) {
+          return window.Tatap.browse(f, S.page);
+        }
+        return window.Tatap.catalog(S.page);
+      }
       case "terbaru":return window.Tatap.schedule(S.scheduleDay || "today");
       case "season-custom":{
         if(!S.seasonFilter)return null;
-        return window.Tatap.seasonBy(S.seasonFilter.season, S.seasonFilter.year);
+        return window.Tatap.seasonBy(S.seasonFilter.season, S.seasonFilter.year, S.page);
       }
       case "cari":return null;
     }
@@ -104,7 +167,35 @@ var Tui = (function () {
         return;
       }
       var d=r.data||{};
-      S.items=d.items||[];S.page=d.page||1;S.total=d.total_pages||1;S.sel=-1;
+      if(S.view==="favorit" && Array.isArray(d)){
+        S.rawBookmarks = d;
+        var pageSize = 24;
+        S.total = Math.max(1, Math.ceil(d.length / pageSize));
+        if(S.page > S.total) S.page = S.total;
+        var start = (S.page - 1) * pageSize;
+        S.items = d.slice(start, start + pageSize);
+        S.sel = -1;
+      }else if(S.view==="terbaru"){
+        var curDayKey = d.weekday || d.day || "";
+        if(curDayKey && SCHEDULE_DAYS.indexOf(curDayKey) >= 0){
+          S.scheduleDay = curDayKey;
+        }
+        var curIdx = SCHEDULE_DAYS.indexOf(S.scheduleDay || "");
+        if(curIdx < 0) curIdx = 0;
+        S.page = curIdx + 1;
+        S.total = 7;
+        S.items = d.items || (Array.isArray(d) ? d : []);
+        S.sel = -1;
+        if(d.current_day) updateScheduleChips(d.current_day);
+        else updateScheduleChips();
+        var lblDay = SCHEDULE_LABELS[S.scheduleDay] || S.scheduleDay;
+        var isToday = d.is_today || (d.current_day === S.scheduleDay);
+        $("results-title").textContent = "Jadwal rilis (" + lblDay + (isToday ? " · Hari Ini" : "") + ")";
+      }else if(Array.isArray(d)){
+        S.items=d;S.page=1;S.total=1;S.sel=-1;
+      }else{
+        S.items=d.items||[];S.page=d.page||1;S.total=d.total_pages||1;S.sel=-1;
+      }
       var label=$("results-title").textContent;
       if(d.season) label+=" · "+String(d.season).toUpperCase();
       $("results-title").textContent=label;
@@ -118,7 +209,13 @@ var Tui = (function () {
     var box=$("results");box.innerHTML="";
     var sBar = $("schedule-days-bar");
     if(sBar) sBar.classList.add("hidden");
-    if(!r.length){$("empty-state").style.display="";$("results-title").textContent="siap";$("results-meta").textContent="";$("pager").classList.add("hidden");return;}
+    if(!r.length){
+      $("empty-state").style.display="";
+      $("results-title").textContent="siap";
+      $("results-meta").textContent="";
+      renderPager();
+      return;
+    }
     $("empty-state").style.display="none";
     $("results-title").textContent="saran pencarian";$("results-meta").textContent=r.length+" recent";
     for(var i=0;i<r.length;i++){
@@ -129,6 +226,7 @@ var Tui = (function () {
         box.appendChild(d);
       })(r[i]);
     }
+    renderPager();
   }
 
   function renderResults(){
@@ -136,7 +234,11 @@ var Tui = (function () {
     var sBar = $("schedule-days-bar");
     if(sBar) sBar.classList.toggle("hidden", S.view !== "terbaru");
     var isTxt = S.view==="cari" || S.view==="terbaru";
-    if(!S.items.length){box.innerHTML="<p class='dim'>Kosong.</p>";return;}
+    if(!S.items.length){
+      var emptyMsg = S.view==="favorit" ? "Belum ada anime favorit tersimpan. Ketuk tombol + FAVORIT pada detail anime untuk menyimpannya ke sini." : "Kosong.";
+      box.innerHTML="<p class='dim'>"+emptyMsg+"</p>";
+      return;
+    }
     if(isTxt){
       var nowTs=Math.floor(Date.now()/1000);
       var frag=document.createDocumentFragment();
@@ -211,7 +313,7 @@ var Tui = (function () {
 
             d.addEventListener("click",function(){
               if(typeof App==="undefined"){log("App belum siap, coba lagi","err");return;}
-              App.openTitle(a.id,a.title);
+              App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
             });
             frag.appendChild(d);
           } else {
@@ -261,9 +363,13 @@ var Tui = (function () {
             subMeta2.className="tr-meta";
             var sm2=[];
             if(a.type) sm2.push(a.type);
-            if(a.sub) sm2.push("SUB "+a.sub);
-            if(a.dub) sm2.push("DUB "+a.dub);
-            if(a.eps) sm2.push(a.eps+" ep");
+            if(a.eps_counter){
+              sm2.push("Ep " + a.eps_counter);
+            } else {
+              if(a.sub) sm2.push("SUB "+a.sub);
+              if(a.dub) sm2.push("DUB "+a.dub);
+              if(a.eps) sm2.push(a.eps+" ep");
+            }
             if(a.id) sm2.push(a.id);
             subMeta2.textContent=sm2.join(" · ");
             infoCol2.appendChild(subMeta2);
@@ -271,7 +377,7 @@ var Tui = (function () {
 
             d2.addEventListener("click",function(){
               if(typeof App==="undefined"){log("App belum siap, coba lagi","err");return;}
-              App.openTitle(a.id,a.title);
+              App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
             });
             frag.appendChild(d2);
           }
@@ -282,20 +388,56 @@ var Tui = (function () {
       var grid=document.createElement("div");grid.className="poster-grid";
       for(var j=0;j<S.items.length;j++){
         (function(a,idx){
+          if(a.is_header){
+            var h=document.createElement("div");
+            h.className="lane-header-banner";
+            var isLong = a.lane === "long_running";
+            var col = isLong ? "#F59E0B" : "#38BDF8";
+            h.style.cssText="grid-column:1 / -1;width:100%;margin:16px 0 8px 0;padding:8px 12px;background:rgba(15,23,42,0.8);border-left:4px solid "+col+";border-radius:4px;display:flex;align-items:center;justify-content:space-between;user-select:none;box-sizing:border-box;";
+            h.innerHTML="<span style='font-weight:bold;font-size:12px;letter-spacing:0.04em;color:"+col+"'>"+(a.header_title||a.title||"")+"</span><span style='font-family:monospace;font-size:10px;color:#64748B'>"+(isLong?"[CONTINUOUS]":"[SEASONAL]")+"</span>";
+            grid.appendChild(h);
+            return;
+          }
           var isUnavail=!a.id;
           var d=document.createElement("div");
           d.className="poster-card"+(idx===S.sel?" sel":"")+(isUnavail?" unmapped":"");
           d.tabIndex=0;
           var idxSpan=document.createElement("span");idxSpan.className="pc-idx";idxSpan.textContent=String(idx+1).padStart(2,"0");d.appendChild(idxSpan);
+          if(a.badge){
+            var bgTag=document.createElement("span");
+            var isTam = a.badge === "TAMAT" || a.is_finished;
+            var isLongB = a.badge === "SERIAL PANJANG" || a.is_long_running;
+            var bgCol = isTam ? "rgba(5,150,105,0.92)" : (isLongB ? "rgba(217,119,6,0.92)" : "rgba(15,23,42,0.85)");
+            bgTag.className="pc-badge-tag";
+            bgTag.style.cssText="position:absolute;bottom:6px;left:6px;font-size:10px;font-weight:bold;padding:2px 5px;border-radius:3px;background:"+bgCol+";color:#fff;z-index:2;pointer-events:none;";
+            var bText = a.badge;
+            if(a.badge === "ONGOING" && a.eps_counter){
+              bText = "EP " + a.eps_counter;
+            }
+            bgTag.textContent=bText;
+            d.appendChild(bgTag);
+          }
           if(isUnavail){var bad=document.createElement("span");bad.className="pc-bad";bad.textContent="?";bad.title="Tidak ada di hianime";d.appendChild(bad);}
           if(a.poster){var im=document.createElement("img");im.loading="lazy";im.decoding="async";im.alt=a.title;im.src=a.poster;im.onerror=function(){this.style.display="none";};d.appendChild(im);}
           var body=document.createElement("div");body.className="poster-body";
           var b=document.createElement("b");b.textContent=a.title;body.appendChild(b);
           var meta=document.createElement("div");meta.className="poster-meta";
-          var m=[];if(a.type)m.push(a.type);if(a.eps)m.push(a.eps+" ep");if(a.sub)m.push("SUB "+a.sub);if(a.dub)m.push("DUB "+a.dub);if(a.duration)m.push(a.duration);if(a.score)m.push(a.score.toFixed(1));meta.textContent=m.join(" · ");body.appendChild(meta);
+          var m=[];
+          if(a.type)m.push(a.type);
+          if(a.eps_counter){
+            m.push("Ep "+a.eps_counter);
+          }else{
+            if(a.eps)m.push(a.eps+" ep");
+            if(a.sub)m.push("SUB "+a.sub);
+            if(a.dub)m.push("DUB "+a.dub);
+          }
+          if(a.duration)m.push(a.duration);
+          if(a.score)m.push(a.score.toFixed(1));
+          meta.textContent=m.join(" · ");
+          body.appendChild(meta);
           d.appendChild(body);
           if(!isUnavail){
-            d.addEventListener("click",function(){App.openTitle(a.id,a.title);});
+            d.addEventListener("click",function(){App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);});
           }
           grid.appendChild(d);
         })(S.items[j],j);
@@ -305,16 +447,53 @@ var Tui = (function () {
   }
 
   function renderPager(){
-    var show=S.view!=="cari";
-    $("pager").classList.toggle("hidden",!show);
-    if(!show)return;
-    $("pg-info").textContent=S.total>1?("hal "+S.page+"/"+S.total+" · ["+"] halaman"):(S.items.length+" item");
+    var hasPagination = false;
+    if(S.view === "terbaru"){
+      hasPagination = !!(SCHEDULE_DAYS && SCHEDULE_DAYS.length > 1);
+    } else if(S.view === "cari"){
+      hasPagination = false;
+    } else {
+      hasPagination = (S.total > 1);
+    }
+
+    var pagerEl = $("pager");
+    if(!pagerEl) return;
+    pagerEl.classList.toggle("hidden", !hasPagination);
+    if(!hasPagination) return;
+
+    var prevBtn = $("pg-prev");
+    var nextBtn = $("pg-next");
+    var info = $("pg-info");
+
+    if(S.view === "terbaru"){
+      var curIdx = SCHEDULE_DAYS.indexOf(S.scheduleDay || "");
+      if(curIdx < 0) curIdx = 0;
+      if(prevBtn) prevBtn.disabled = (curIdx <= 0);
+      if(nextBtn) nextBtn.disabled = (curIdx >= SCHEDULE_DAYS.length - 1);
+      var dayName = SCHEDULE_LABELS[SCHEDULE_DAYS[curIdx]] || SCHEDULE_DAYS[curIdx];
+      if(info) info.textContent = dayName + " (" + (curIdx + 1) + "/7) · " + S.items.length + " anime";
+      return;
+    }
+
+    if(prevBtn) prevBtn.disabled = (S.page <= 1);
+    if(nextBtn) nextBtn.disabled = (S.page >= S.total);
+    if(info){
+      info.textContent = "Halaman " + S.page + " / " + S.total + " · [ ]";
+    }
   }
 
   function moveSel(d){
     if(!S.items.length)return;
-    S.sel=(S.sel+d+S.items.length)%S.items.length;
-    renderSel();
+    var count=S.items.length;
+    var next=S.sel;
+    for(var step=0;step<count;step++){
+      next=(next+d+count)%count;
+      if(!S.items[next]||!S.items[next].is_header){
+        S.sel=next;
+        renderSel();
+        return;
+      }
+    }
   }
   function renderSel(){
     var box=$("results");
@@ -326,10 +505,11 @@ var Tui = (function () {
     if(all[S.sel])all[S.sel].scrollIntoView({block:"nearest"});
   }
   function openSelected(){
-    if(!S.items.length)return;
+    if(!S.items.length||S.sel<0)return;
     var a=S.items[S.sel];
-    if(!a||!a.id){log("judul ini belum tersedia di hianime","err");return;}
-    App.openTitle(a.id,a.title);
+    if(!a||a.is_header)return;
+    if(!a.id){log("judul ini belum tersedia di hianime","err");return;}
+    App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
   }
 
   function startSearch(q){
@@ -374,8 +554,57 @@ var Tui = (function () {
     if(sBar) sBar.classList.toggle("hidden", v !== "terbaru");
   }
 
+  // ==== :filter (Catalog Cross-Filter) ====
+  function openCatalogFilterModal(){
+    var m = $("catalog-filter-modal");
+    if(!m) return;
+    m.classList.remove("hidden");
+    syncCatalogFilterUI();
+  }
+  function closeCatalogFilterModal(){
+    var m = $("catalog-filter-modal");
+    if(m) m.classList.add("hidden");
+  }
+  function syncCatalogFilterUI(){
+    var f = S.catalogFilter || {sort: "popularity", year: "", season: "", month: "", type: "", status: "", genre: ""};
+    setGroupActive("cf-chips-sort", f.sort || "popularity");
+    setGroupActive("cf-chips-year", f.year || "");
+    setGroupActive("cf-chips-season", f.season || "");
+    setGroupActive("cf-chips-month", f.month || "");
+    setGroupActive("cf-chips-type", f.type || "");
+    setGroupActive("cf-chips-status", f.status || "");
+
+    var genreLabel = $("cf-btn-genre-label");
+    var btnGenre = $("cf-btn-pick-genre");
+    var btnClearGenre = $("cf-btn-genre-clear");
+    var curGenre = f.genre || S.genreFilter || "";
+    if(curGenre){
+      var gTitle = getGenreTitle(curGenre);
+      if(genreLabel) genreLabel.textContent = "Genre: " + gTitle;
+      if(btnGenre) btnGenre.classList.add("active");
+      if(btnClearGenre) btnClearGenre.classList.remove("hidden");
+    } else {
+      if(genreLabel) genreLabel.textContent = "Semua Genre (Pilih...)";
+      if(btnGenre) btnGenre.classList.remove("active");
+      if(btnClearGenre) btnClearGenre.classList.add("hidden");
+    }
+  }
+  function setGroupActive(containerId, activeVal){
+    var box = $(containerId);
+    if(!box) return;
+    box.querySelectorAll(".cf-chip").forEach(function(b){
+      var v = b.getAttribute("data-val") || "";
+      b.classList.toggle("active", v === activeVal);
+    });
+  }
+  function getGroupActive(containerId){
+    var box = $(containerId);
+    if(!box) return "";
+    var act = box.querySelector(".cf-chip.active");
+    return act ? (act.getAttribute("data-val") || "") : "";
+  }
+
   // ==== :genre ====
-  var _genreList=null;
   function slugifyGenre(s){
     return String(s||"").trim().toLowerCase()
       .replace(/&/g,"and").replace(/[^a-z0-9]+/g,"-")
@@ -394,18 +623,33 @@ var Tui = (function () {
     $("genre-modal").classList.remove("hidden");
     $("genre-search").value="";
     var list=await loadGenres();
+    updateGenreStatusUI();
     renderGenreList(list);
     setTimeout(function(){$("genre-search").focus();},30);
   }
   function closeGenreModal(){$("genre-modal").classList.add("hidden");}
+  function updateGenreStatusUI(){
+    var st = $("genre-active-status");
+    if(!st) return;
+    var activeSlug = (S.catalogFilter && S.catalogFilter.genre) || S.genreFilter || "";
+    if(activeSlug){
+      st.innerHTML = 'Genre aktif: <span class="active-label">' + esc(getGenreTitle(activeSlug)) + '</span>';
+    } else {
+      st.textContent = "Tidak ada genre aktif (semua anime)";
+    }
+  }
   function renderGenreList(list){
     var box=$("genre-list");box.innerHTML="";
     if(!list.length){
       var e=document.createElement("div");e.className="empty";e.textContent="(tidak ada hasil)";box.appendChild(e);return;
     }
+    var activeSlug = (S.catalogFilter && S.catalogFilter.genre) || S.genreFilter || "";
     for(var i=0;i<list.length;i++){
       (function(g){
         var b=document.createElement("button");
+        if(activeSlug && g.slug === activeSlug){
+          b.className = "active";
+        }
         b.innerHTML='<span class="g-slug">'+esc(g.slug)+'</span><span class="g-title">'+esc(g.title)+'</span>';
         b.addEventListener("click",function(){
           applyGenreFilter(g.slug);closeGenreModal();
@@ -419,21 +663,37 @@ var Tui = (function () {
     if(s==="hentai"||s.indexOf("hentai")>=0){
       log("genre 'hentai' tidak didukung / diblokir","err");return;
     }
-    S.filter={genre:slug};S.page=1;
-    log("genre: "+slug,"ok");
+    if(!S.catalogFilter) S.catalogFilter = {sort: "popularity", year: "", season: "", month: "", type: "", status: ""};
+    S.catalogFilter.genre = slug;
+    S.genreFilter = slug;
+    S.filter = {genre: slug};
+    S.page = 1;
+    log("genre: "+getGenreTitle(slug),"ok");
     setViewSilent("katalog");
-    $("results-title").textContent="Genre: "+slug;
-    $("empty-state").style.display="none";
-    $("pager").classList.remove("hidden");
+    var cfBtn = $("btn-catalog-filter");
+    if(cfBtn) cfBtn.classList.remove("hidden");
+    syncCatalogFilterUI();
+    $("results-title").textContent = getCatalogFilterTitle();
+    $("empty-state").style.display = "none";
+    loadView();
+  }
+  function clearGenreFilter(){
+    if(S.catalogFilter) delete S.catalogFilter.genre;
+    delete S.genreFilter;
+    if(S.filter && S.filter.genre) delete S.filter.genre;
+    S.page = 1;
+    log("genre filter dihapus","ok");
+    syncCatalogFilterUI();
+    updateGenreStatusUI();
+    $("results-title").textContent = getCatalogFilterTitle();
     loadView();
   }
   async function cmdGenre(parts){
     if(parts.length<=1){openGenreModal();return;}
     var a=parts.slice(1);
     if(a[0]==="reset"){
-      if(S.filter&&S.filter.genre){delete S.filter.genre;S.page=1;
-        log("genre filter dihapus","ok");applyFilter();}
-      else log("tidak ada genre filter aktif","err");return;
+      clearGenreFilter();
+      return;
     }
     if(a[0]==="--list"||a[0]==="list"){
       var kw=a[1]&&a[1]!=="--search"?a[1]:(a[2]||"");
@@ -467,7 +727,6 @@ var Tui = (function () {
     setViewSilent("season-custom");
     $("results-title").textContent = "Season: "+name[0].toUpperCase()+name.slice(1)+" "+year;
     $("empty-state").style.display = "none";
-    $("pager").classList.remove("hidden");
     loadView();
   }
   function cmdSeason(rawArgs){
@@ -624,8 +883,18 @@ var Tui = (function () {
       case "musim":setView("musim");break;
       case "lanjutan":setView("lanjutan");break;
       case "katalog":setView("katalog");break;
+      case "filter":case "cf":openCatalogFilterModal();break;
       case "season":cmdSeason(args);break;
-      case "terbaru":case "airing":setView("terbaru");break;
+      case "jadwal":case "schedule":case "terbaru":case "airing":
+        var dArg = (args || "").trim().toLowerCase();
+        if(dArg) {
+          var idMap = {senin:"monday",selasa:"tuesday",rabu:"wednesday",kamis:"thursday",jumat:"friday",sabtu:"saturday",minggu:"sunday",kemarin:"yesterday",besok:"tomorrow","hari ini":"today"};
+          if(idMap[dArg]) dArg = idMap[dArg];
+          if(SCHEDULE_DAYS.indexOf(dArg) >= 0 || dArg === "today" || dArg === "yesterday" || dArg === "tomorrow"){
+            S.scheduleDay = dArg;
+          }
+        }
+        setView("terbaru");break;
       case "switch":
         var target = (args || "").toLowerCase().trim();
         var curSrc = (window.cur && window.cur.source) || "hianime";
@@ -665,10 +934,10 @@ var Tui = (function () {
         if(!args){log("usage: crt on|off|toggle","err");break;}
         var v1=args==="on"?"on":args==="off"?"off":null;
         if(v1===null&&args!=="toggle"){log("usage: crt on|off|toggle","err");break;}
-        var cur=localStorage.getItem("tatap_crt")||"on";
+        var cur=localStorage.getItem("tatap_crt")||"off";
         var nxt=v1||(cur==="on"?"off":"on");
         try{localStorage.setItem("tatap_crt",nxt);}catch(e){}
-        document.body.classList.toggle("no-crt",nxt==="off");
+        document.body.classList.toggle("no-crt",nxt!=="on");
         log("crt "+(nxt==="on"?"ON":"OFF"),"ok");break;
       case "ambient":
         if(!args){log("usage: ambient on|off|toggle","err");break;}
@@ -681,6 +950,8 @@ var Tui = (function () {
         log("ambient "+(nxt2==="on"?"ON":"OFF"),"ok");break;
       case "riwayat":
         try{await fetch("/api/history",{method:"DELETE"});log("riwayat dihapus","ok");}catch(e){log("err: "+e.message,"err");}break;
+      case "favorit":case "bookmark":case "bookmarks":
+        setView("favorit");break;
       case "logs":case "translog":
         await cmdLogs();break;
       case "apikey":case "model":case "apiurl":
@@ -800,8 +1071,63 @@ var Tui = (function () {
     var ord=["cari","musim","terbaru","lanjutan","katalog"];
     var idx=ord.indexOf(S.view);setView(ord[(idx+1)%ord.length]);
   }
-  function pagePrev(){if(S.page>1){S.page--;loadView();}}
-  function pageNext(){if(S.page<S.total){S.page++;loadView();}}
+  function pagePrev(){
+    if(S.view==="terbaru"){
+      var curIdx = SCHEDULE_DAYS.indexOf(S.scheduleDay || "");
+      if(curIdx < 0) curIdx = 0;
+      if(curIdx > 0){
+        S.scheduleDay = SCHEDULE_DAYS[curIdx - 1];
+        updateScheduleChips();
+        loadView();
+      }
+      return;
+    }
+    if(S.view==="favorit" && S.rawBookmarks){
+      if(S.page>1){
+        S.page--;
+        var pageSize=24;
+        var start=(S.page-1)*pageSize;
+        S.items=S.rawBookmarks.slice(start,start+pageSize);
+        renderResults();renderPager();
+        try{window.scrollTo({top:0,behavior:"smooth"});}catch(_){}
+      }
+      return;
+    }
+    if(S.page>1){
+      S.page--;
+      loadView();
+      try{window.scrollTo({top:0,behavior:"smooth"});}catch(_){}
+    }
+  }
+
+  function pageNext(){
+    if(S.view==="terbaru"){
+      var curIdx = SCHEDULE_DAYS.indexOf(S.scheduleDay || "");
+      if(curIdx < 0) curIdx = 0;
+      if(curIdx < SCHEDULE_DAYS.length - 1){
+        S.scheduleDay = SCHEDULE_DAYS[curIdx + 1];
+        updateScheduleChips();
+        loadView();
+      }
+      return;
+    }
+    if(S.view==="favorit" && S.rawBookmarks){
+      if(S.page<S.total){
+        S.page++;
+        var pageSize=24;
+        var start=(S.page-1)*pageSize;
+        S.items=S.rawBookmarks.slice(start,start+pageSize);
+        renderResults();renderPager();
+        try{window.scrollTo({top:0,behavior:"smooth"});}catch(_){}
+      }
+      return;
+    }
+    if(S.page<S.total){
+      S.page++;
+      loadView();
+      try{window.scrollTo({top:0,behavior:"smooth"});}catch(_){}
+    }
+  }
 
   function onPromptFocus(){S.promptFoc=true;$("cmd").classList.add("focus");}
   function onPromptBlur(){S.promptFoc=false;$("cmd").classList.remove("focus");setTimeout(function(){if($("cmd").value.trim()&&S.items.length){/* keep sel visible */}},50);}
@@ -824,15 +1150,100 @@ var Tui = (function () {
     // Genre modal listeners
     $("genre-close").addEventListener("click",closeGenreModal);
     $("genre-modal").addEventListener("click",function(e){if(e.target===$("genre-modal"))closeGenreModal();});
-    $("genre-search").addEventListener("input",function(){
-      var kw=this.value.trim().toLowerCase();
+    var btnGenreReset = $("genre-reset-btn");
+    if(btnGenreReset){
+      btnGenreReset.addEventListener("click", function(){
+        clearGenreFilter();
+        closeGenreModal();
+      });
+    }
+    var genreInput = $("genre-search");
+    if(genreInput){
+      genreInput.addEventListener("input", function(){
+        var kw = this.value.trim().toLowerCase();
         loadGenres().then(function(list){
-          var filtered=kw?list.filter(function(g){
-            return (g.title+" "+g.slug).toLowerCase().indexOf(kw)>=0;
-          }):list;
+          var filtered = kw ? list.filter(function(g){
+            return (g.title + " " + g.slug).toLowerCase().indexOf(kw) >= 0;
+          }) : list;
           renderGenreList(filtered);
         });
       });
+      genreInput.addEventListener("keydown", function(e){
+        if(e.key === "Enter"){
+          e.preventDefault();
+          var firstBtn = $("genre-list").querySelector("button");
+          if(firstBtn) firstBtn.click();
+        } else if(e.key === "Escape"){
+          e.preventDefault();
+          closeGenreModal();
+        }
+      });
+    }
+
+    // Catalog filter modal listeners
+    var cfClose = $("cf-close");
+    if(cfClose) cfClose.addEventListener("click", closeCatalogFilterModal);
+    var cfModal = $("catalog-filter-modal");
+    if(cfModal) cfModal.addEventListener("click", function(e){ if(e.target === cfModal) closeCatalogFilterModal(); });
+    document.querySelectorAll("#catalog-filter-modal .cf-chip").forEach(function(chip){
+      chip.addEventListener("click", function(){
+        var parent = chip.closest(".cf-chips");
+        if(!parent) return;
+        parent.querySelectorAll(".cf-chip").forEach(function(c){ c.classList.remove("active"); });
+        chip.classList.add("active");
+      });
+    });
+    var btnPickGenre = $("cf-btn-pick-genre");
+    if(btnPickGenre){
+      btnPickGenre.addEventListener("click", function(){
+        closeCatalogFilterModal();
+        openGenreModal();
+      });
+    }
+    var btnClearCfGenre = $("cf-btn-genre-clear");
+    if(btnClearCfGenre){
+      btnClearCfGenre.addEventListener("click", function(e){
+        e.stopPropagation();
+        if(S.catalogFilter) delete S.catalogFilter.genre;
+        delete S.genreFilter;
+        if(S.filter && S.filter.genre) delete S.filter.genre;
+        syncCatalogFilterUI();
+      });
+    }
+    var cfReset = $("cf-reset-btn");
+    if(cfReset){
+      cfReset.addEventListener("click", function(){
+        S.catalogFilter = {sort: "popularity", year: "", season: "", month: "", type: "", status: "", genre: ""};
+        delete S.genreFilter;
+        if(S.filter && S.filter.genre) delete S.filter.genre;
+        syncCatalogFilterUI();
+        closeCatalogFilterModal();
+        setView("katalog");
+      });
+    }
+    var cfApply = $("cf-apply-btn");
+    if(cfApply){
+      cfApply.addEventListener("click", function(){
+        var prevGenre = (S.catalogFilter && S.catalogFilter.genre) || S.genreFilter || "";
+        S.catalogFilter = {
+          sort: getGroupActive("cf-chips-sort") || "popularity",
+          year: getGroupActive("cf-chips-year"),
+          season: getGroupActive("cf-chips-season"),
+          month: getGroupActive("cf-chips-month"),
+          type: getGroupActive("cf-chips-type"),
+          status: getGroupActive("cf-chips-status"),
+          genre: prevGenre
+        };
+        closeCatalogFilterModal();
+        setView("katalog");
+      });
+    }
+    var btnCatFilter = $("btn-catalog-filter");
+    if(btnCatFilter){
+      btnCatFilter.addEventListener("click", function(){
+        openCatalogFilterModal();
+      });
+    }
     $("clear-hist").addEventListener("click",async function(){
       try{await fetch("/api/history",{method:"DELETE"});}catch(e){}
       App.renderContinue();log("riwayat dihapus","ok");
@@ -845,9 +1256,14 @@ var Tui = (function () {
         setView("terbaru");
       });
     });
+    var btnPgPrev = $("pg-prev");
+    if(btnPgPrev) btnPgPrev.addEventListener("click", function(e){ e.preventDefault(); pagePrev(); });
+    var btnPgNext = $("pg-next");
+    if(btnPgNext) btnPgNext.addEventListener("click", function(e){ e.preventDefault(); pageNext(); });
     $("sb-view").textContent="view: "+S.view;
     renderRecents();
+    renderPager();
   }
 
-  return {boot:boot,log:log,clearLog:clearLog,setView:setView,loadView:loadView,moveSel:moveSel,renderSel:renderSel,openSelected:openSelected,startSearch:startSearch,doSearch:doSearch,renderResults:renderResults,renderPager:renderPager,renderRecents:renderRecents,cmdUsage:cmdUsage,openGenreModal:openGenreModal,view:function(){return S.view;},state:function(){return S;}};
+  return {boot:boot,log:log,clearLog:clearLog,setView:setView,loadView:loadView,moveSel:moveSel,renderSel:renderSel,openSelected:openSelected,startSearch:startSearch,doSearch:doSearch,renderResults:renderResults,renderPager:renderPager,renderRecents:renderRecents,cmdUsage:cmdUsage,openGenreModal:openGenreModal,openCatalogFilterModal:openCatalogFilterModal,closeCatalogFilterModal:closeCatalogFilterModal,applyGenreFilter:function(genreOrSlug){applyGenreFilter(slugifyGenre(genreOrSlug));},slugifyGenre:slugifyGenre,view:function(){return S.view;},state:function(){return S;}};
 })();

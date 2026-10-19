@@ -12,46 +12,38 @@
     android:clipToPadding="false"
     android:background="#090A0F">
 
-    <!-- Top App Bar / Redesigned Header with Search & Folded Menu -->
+    <!-- Top App Bar / Modern Unified Header with Clean Fluid Search Bar (44dp) -->
     <LinearLayout
         android:id="@+id/layout_header_root"
         android:layout_width="match_parent"
-        android:layout_height="56dp"
+        android:layout_height="44dp"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:paddingHorizontal="12dp"
-        android:background="#090A0F">
+        android:background="#090A0F"
+        android:paddingHorizontal="12dp">
 
-        <!-- App Brand Logo / Title -->
+        <!-- App Brand Logo / Title (Kapital TATAP) -->
         <TextView
             android:id="@+id/tv_app_logo"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Tatap"
+            android:text="TATAP"
             android:textColor="#FFFFFF"
-            android:textSize="18sp"
+            android:textSize="17sp"
             android:textStyle="bold"
-            android:letterSpacing="0.01"
+            android:letterSpacing="0.04"
             android:layout_marginEnd="10dp" />
 
-        <!-- Search Box (Expands when folded menu is closed, shrinks when opened) -->
+        <!-- Fluid Search Bar (Clean from icon, pure text field) -->
         <LinearLayout
             android:id="@+id/layout_search_box"
             android:layout_width="0dp"
-            android:layout_height="38dp"
+            android:layout_height="34dp"
             android:layout_weight="1"
-            android:minWidth="96dp"
             android:background="@drawable/bg_search_box"
             android:gravity="center_vertical"
-            android:paddingHorizontal="10dp"
-            android:layout_marginEnd="6dp">
-
-            <ImageView
-                android:layout_width="16dp"
-                android:layout_height="16dp"
-                android:src="@android:drawable/ic_menu_search"
-                app:tint="#64748B"
-                android:layout_marginEnd="6dp" />
+            android:paddingHorizontal="12dp"
+            android:layout_marginEnd="8dp">
 
             <EditText
                 android:id="@+id/et_search"
@@ -59,164 +51,66 @@
                 android:layout_height="match_parent"
                 android:layout_weight="1"
                 android:background="@null"
-                android:hint="Cari judul anime atau ketik :command..."
+                android:drawableStart="@drawable/ic_search"
+                android:drawablePadding="6dp"
+                android:drawableTint="#64748B"
+                android:paddingStart="2dp"
+                android:hint="Cari anime atau :command..."
                 android:textColorHint="#4B5563"
                 android:textColor="#F1F5F9"
-                android:textSize="12.5sp"
+                android:textSize="12sp"
                 android:imeOptions="actionSearch"
                 android:inputType="text"
                 android:singleLine="true" />
 
-            <!-- Clear Search Button -->
+            <!-- Clear Search Button (Hanya muncul saat ada teks diketik) -->
             <TextView
                 android:id="@+id/btn_clear_search"
-                android:layout_width="26dp"
-                android:layout_height="26dp"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
                 android:gravity="center"
-                android:text="✕"
-                android:textColor="#64748B"
-                android:textSize="11sp"
+                android:drawableStart="@drawable/ic_close"
+                android:drawableTint="#64748B"
+                android:padding="4dp"
                 android:visibility="gone"
                 android:clickable="true"
                 android:focusable="true"
                 android:background="?attr/selectableItemBackgroundBorderless" />
-
-            <ProgressBar
-                android:id="@+id/pb_loading"
-                android:layout_width="16dp"
-                android:layout_height="16dp"
-                android:visibility="gone"
-                android:indeterminateTint="#38BDF8" />
         </LinearLayout>
 
-        <!-- Folded Menu Container (Scrollable strip when open, hidden by default) -->
-        <HorizontalScrollView
-            android:id="@+id/layout_folded_menu"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:visibility="gone"
-            android:scrollbars="none"
-            android:overScrollMode="never"
-            android:layout_marginEnd="6dp">
+        <!-- Status Online Server Icon (Antara Search Bar & Tombol Menu) -->
+        <ImageView
+            android:id="@+id/btn_status_power"
+            android:layout_width="34dp"
+            android:layout_height="34dp"
+            android:background="@drawable/bg_status_pill"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?attr/selectableItemBackgroundBorderless"
+            android:padding="7dp"
+            android:src="@drawable/ic_server"
+            app:tint="#10B981"
+            android:layout_marginEnd="8dp"
+            android:contentDescription="Status Backend Server" />
 
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="38dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <!-- Header Quick Action: AI Settings Button -->
-                <TextView
-                    android:id="@+id/btn_header_ai"
-                    android:layout_width="wrap_content"
-                    android:layout_height="30dp"
-                    android:layout_marginEnd="5dp"
-                    android:background="@drawable/bg_header_button"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:foreground="?attr/selectableItemBackground"
-                    android:gravity="center"
-                    android:paddingHorizontal="9dp"
-                    android:text="AI"
-                    android:textColor="#38BDF8"
-                    android:textSize="11sp"
-                    android:textStyle="bold" />
-
-                <!-- Header Quick Action: Genre Selector Button -->
-                <TextView
-                    android:id="@+id/btn_header_genre"
-                    android:layout_width="wrap_content"
-                    android:layout_height="30dp"
-                    android:layout_marginEnd="5dp"
-                    android:background="@drawable/bg_header_button"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:foreground="?attr/selectableItemBackground"
-                    android:gravity="center"
-                    android:paddingHorizontal="9dp"
-                    android:text="Genre"
-                    android:textColor="#94A3B8"
-                    android:textSize="11sp" />
-
-                <!-- Header Quick Action: Watch History Button -->
-                <TextView
-                    android:id="@+id/btn_header_history"
-                    android:layout_width="wrap_content"
-                    android:layout_height="30dp"
-                    android:layout_marginEnd="5dp"
-                    android:background="@drawable/bg_header_button"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:foreground="?attr/selectableItemBackground"
-                    android:gravity="center"
-                    android:paddingHorizontal="9dp"
-                    android:text="Riwayat"
-                    android:textColor="#94A3B8"
-                    android:textSize="11sp" />
-
-                <!-- Header Quick Action: Favorites Button -->
-                <TextView
-                    android:id="@+id/btn_header_favorites"
-                    android:layout_width="wrap_content"
-                    android:layout_height="30dp"
-                    android:layout_marginEnd="5dp"
-                    android:background="@drawable/bg_header_button"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:foreground="?attr/selectableItemBackground"
-                    android:gravity="center"
-                    android:paddingHorizontal="9dp"
-                    android:text="&#9733; Favorit"
-                    android:textColor="#94A3B8"
-                    android:textSize="11sp" />
-
-                <!-- Header Quick Action: Terminal Help Button -->
-                <TextView
-                    android:id="@+id/btn_header_help"
-                    android:layout_width="wrap_content"
-                    android:layout_height="30dp"
-                    android:layout_marginEnd="5dp"
-                    android:background="@drawable/bg_header_button"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:foreground="?attr/selectableItemBackground"
-                    android:gravity="center"
-                    android:paddingHorizontal="8dp"
-                    android:text=":cmd"
-                    android:textColor="#64748B"
-                    android:textSize="10.5sp" />
-
-                <!-- Status Badge -->
-                <TextView
-                    android:id="@+id/tv_status_badge"
-                    android:layout_width="wrap_content"
-                    android:layout_height="26dp"
-                    android:background="@drawable/bg_status_pill"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:foreground="?attr/selectableItemBackground"
-                    android:gravity="center"
-                    android:paddingHorizontal="8dp"
-                    android:text="Online"
-                    android:textColor="#10B981"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-        </HorizontalScrollView>
-
-        <!-- Toggle Button for Folded Menu -->
+        <!-- Header Quick Menu Button -->
         <TextView
             android:id="@+id/btn_toggle_menu"
             android:layout_width="wrap_content"
-            android:layout_height="36dp"
+            android:layout_height="34dp"
             android:background="@drawable/bg_menu_toggle"
             android:clickable="true"
             android:focusable="true"
+            android:foreground="?attr/selectableItemBackground"
+            android:nextFocusDown="@+id/btn_tab_musim"
             android:gravity="center"
             android:paddingHorizontal="10dp"
+            android:drawableStart="@drawable/ic_more_vert"
+            android:drawablePadding="4dp"
+            android:drawableTint="#CBD5E1"
             android:text="Menu"
             android:textColor="#CBD5E1"
-            android:textSize="12sp"
+            android:textSize="11.5sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -248,9 +142,9 @@
             android:layout_width="26dp"
             android:layout_height="26dp"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:text="✕"
-            android:textColor="#64748B"
-            android:textSize="11sp" />
+            android:drawableStart="@drawable/ic_close"
+            android:drawableTint="#64748B"
+            android:padding="6dp" />
     </LinearLayout>
 
     <!-- Active Filter Badge Bar (Genre, Season, Search) -->
@@ -288,10 +182,9 @@
                 android:layout_height="24dp"
                 android:layout_marginStart="4dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
-                android:text="✕"
-                android:textColor="#38BDF8"
-                android:textSize="12sp"
-                android:textStyle="bold" />
+                android:drawableStart="@drawable/ic_close"
+                android:drawableTint="#38BDF8"
+                android:padding="5dp" />
         </LinearLayout>
 
         <View
@@ -317,217 +210,318 @@
             android:visibility="gone" />
     </LinearLayout>
 
-    <!-- Minimalist Segmented Tabs (Musim Ini, Masih Tayang, Katalog, Jadwal) -->
-    <LinearLayout
+    <!-- Modern Horizontal Scrollable Category Pills Carousel (36dp) -->
+    <HorizontalScrollView
         android:id="@+id/layout_tabs_segmented"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginHorizontal="14dp"
+        android:layout_marginHorizontal="12dp"
         android:layout_marginTop="2dp"
-        android:layout_marginBottom="6dp"
-        android:background="@drawable/bg_tabs_container"
-        android:orientation="horizontal"
-        android:padding="3dp">
+        android:layout_marginBottom="4dp"
+        android:fillViewport="true"
+        android:scrollbars="none"
+        android:overScrollMode="never"
+        android:clipToPadding="false">
 
-        <TextView
-            android:id="@+id/btn_tab_musim"
-            android:layout_width="0dp"
-            android:layout_height="34dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_tab_active"
-            android:clickable="true"
-            android:focusable="true"
-            android:nextFocusUp="@+id/btn_toggle_menu"
-            android:nextFocusDown="@+id/rv_anime_grid"
-            android:nextFocusRight="@+id/btn_tab_airing"
-            android:gravity="center"
-            android:paddingHorizontal="4dp"
-            android:text="Musim Ini"
-            android:textColor="#FFFFFF"
-            android:textSize="11.5sp"
-            android:textStyle="bold"
-            android:singleLine="true"
-            android:ellipsize="end" />
+        <LinearLayout
+            android:id="@+id/layout_tabs_container"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
 
-        <TextView
-            android:id="@+id/btn_tab_airing"
-            android:layout_width="0dp"
-            android:layout_height="34dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_tab_inactive"
-            android:clickable="true"
-            android:focusable="true"
-            android:nextFocusUp="@+id/btn_toggle_menu"
-            android:nextFocusDown="@+id/rv_anime_grid"
-            android:nextFocusLeft="@+id/btn_tab_musim"
-            android:nextFocusRight="@+id/btn_tab_katalog"
-            android:gravity="center"
-            android:paddingHorizontal="4dp"
-            android:text="Masih Tayang"
-            android:textColor="#8892B0"
-            android:textSize="11.5sp"
-            android:textStyle="bold"
-            android:singleLine="true"
-            android:ellipsize="end" />
+            <!-- 1. Tab Musim Ini -->
+            <TextView
+                android:id="@+id/btn_tab_musim"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:background="@drawable/bg_tab_active"
+                android:clickable="true"
+                android:focusable="true"
+                android:nextFocusUp="@+id/layout_search_box"
+                android:nextFocusDown="@+id/rv_anime_grid"
+                android:nextFocusLeft="@+id/btn_tab_musim"
+                android:nextFocusRight="@+id/btn_tab_airing"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:drawableStart="@drawable/ic_tab_season"
+                android:drawablePadding="5dp"
+                android:drawableTint="#FFFFFF"
+                android:text="Musim Ini"
+                android:textColor="#FFFFFF"
+                android:textSize="11.5sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="6dp" />
 
-        <TextView
-            android:id="@+id/btn_tab_katalog"
-            android:layout_width="0dp"
-            android:layout_height="34dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_tab_inactive"
-            android:clickable="true"
-            android:focusable="true"
-            android:nextFocusUp="@+id/btn_toggle_menu"
-            android:nextFocusDown="@+id/rv_anime_grid"
-            android:nextFocusLeft="@+id/btn_tab_airing"
-            android:gravity="center"
-            android:paddingHorizontal="4dp"
-            android:text="Katalog"
-            android:textColor="#8892B0"
-            android:textSize="11.5sp"
-            android:textStyle="bold"
-            android:singleLine="true"
-            android:ellipsize="end" />
+            <!-- 2. Tab Masih Tayang -->
+            <TextView
+                android:id="@+id/btn_tab_airing"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:background="@drawable/bg_tab_inactive"
+                android:clickable="true"
+                android:focusable="true"
+                android:nextFocusUp="@+id/layout_search_box"
+                android:nextFocusDown="@+id/rv_anime_grid"
+                android:nextFocusLeft="@+id/btn_tab_musim"
+                android:nextFocusRight="@+id/btn_tab_jadwal"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:drawableStart="@drawable/ic_tab_airing"
+                android:drawablePadding="5dp"
+                android:drawableTint="#8892B0"
+                android:text="Masih Tayang"
+                android:textColor="#8892B0"
+                android:textSize="11.5sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="6dp" />
 
-        <!-- Tab Jadwal (Mobile Only, default gone agar TV tidak berubah) -->
-        <TextView
-            android:id="@+id/btn_tab_jadwal"
-            android:layout_width="0dp"
-            android:layout_height="34dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_tab_inactive"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:paddingHorizontal="4dp"
-            android:text="Jadwal"
-            android:textColor="#8892B0"
-            android:textSize="11.5sp"
-            android:textStyle="bold"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:visibility="gone" />
-    </LinearLayout>
+            <!-- 3. Tab Jadwal -->
+            <TextView
+                android:id="@+id/btn_tab_jadwal"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:background="@drawable/bg_tab_inactive"
+                android:clickable="true"
+                android:focusable="true"
+                android:nextFocusUp="@+id/btn_status_power"
+                android:nextFocusDown="@+id/rv_anime_grid"
+                android:nextFocusLeft="@+id/btn_tab_airing"
+                android:nextFocusRight="@+id/btn_tab_riwayat"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:drawableStart="@drawable/ic_tab_schedule"
+                android:drawablePadding="5dp"
+                android:drawableTint="#8892B0"
+                android:text="Jadwal"
+                android:textColor="#8892B0"
+                android:textSize="11.5sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="6dp" />
 
-    <!-- 3-Day Schedule Chip Selector (Kemarin, Hari Ini, Besok) - Khusus Mobile Tab Jadwal -->
-    <LinearLayout
+            <!-- 4. Tab Riwayat -->
+            <TextView
+                android:id="@+id/btn_tab_riwayat"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:background="@drawable/bg_tab_inactive"
+                android:clickable="true"
+                android:focusable="true"
+                android:nextFocusUp="@+id/btn_status_power"
+                android:nextFocusDown="@+id/rv_anime_grid"
+                android:nextFocusLeft="@+id/btn_tab_jadwal"
+                android:nextFocusRight="@+id/btn_tab_favorit"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:drawableStart="@drawable/ic_tab_history"
+                android:drawablePadding="5dp"
+                android:drawableTint="#8892B0"
+                android:text="Riwayat"
+                android:textColor="#8892B0"
+                android:textSize="11.5sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="6dp" />
+
+            <!-- 5. Tab Favorit -->
+            <TextView
+                android:id="@+id/btn_tab_favorit"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:background="@drawable/bg_tab_inactive"
+                android:clickable="true"
+                android:focusable="true"
+                android:nextFocusUp="@+id/btn_toggle_menu"
+                android:nextFocusDown="@+id/rv_anime_grid"
+                android:nextFocusLeft="@+id/btn_tab_riwayat"
+                android:nextFocusRight="@+id/btn_tab_katalog"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:drawableStart="@drawable/ic_tab_favorite"
+                android:drawablePadding="5dp"
+                android:drawableTint="#8892B0"
+                android:text="Favorit"
+                android:textColor="#8892B0"
+                android:textSize="11.5sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="6dp" />
+
+            <!-- 6. Tab Katalog -->
+            <TextView
+                android:id="@+id/btn_tab_katalog"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:background="@drawable/bg_tab_inactive"
+                android:clickable="true"
+                android:focusable="true"
+                android:nextFocusUp="@+id/btn_toggle_menu"
+                android:nextFocusDown="@+id/rv_anime_grid"
+                android:nextFocusLeft="@+id/btn_tab_favorit"
+                android:nextFocusRight="@+id/btn_tab_genre"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:drawableStart="@drawable/ic_tab_catalog"
+                android:drawablePadding="5dp"
+                android:drawableTint="#8892B0"
+                android:text="Katalog"
+                android:textColor="#8892B0"
+                android:textSize="11.5sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="6dp" />
+
+            <!-- 7. Tab Genre -->
+            <TextView
+                android:id="@+id/btn_tab_genre"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:background="@drawable/bg_tab_inactive"
+                android:clickable="true"
+                android:focusable="true"
+                android:nextFocusUp="@+id/btn_toggle_menu"
+                android:nextFocusDown="@+id/rv_anime_grid"
+                android:nextFocusLeft="@+id/btn_tab_katalog"
+                android:nextFocusRight="@+id/btn_tab_genre"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:drawableStart="@drawable/ic_tab_genre"
+                android:drawablePadding="5dp"
+                android:drawableTint="#8892B0"
+                android:text="Genre"
+                android:textColor="#8892B0"
+                android:textSize="11.5sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <!-- 7-Day Schedule Chip Selector (Senin - Minggu) -->
+    <HorizontalScrollView
         android:id="@+id/layout_schedule_days"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginHorizontal="14dp"
         android:layout_marginTop="0dp"
         android:layout_marginBottom="6dp"
-        android:orientation="horizontal"
-        android:gravity="center"
-        android:visibility="gone">
-
-        <TextView
-            android:id="@+id/btn_day_yesterday"
-            android:layout_width="0dp"
-            android:layout_height="30dp"
-            android:layout_weight="1"
-            android:layout_marginEnd="4dp"
-            android:background="@drawable/bg_header_button"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:text="Kemarin"
-            android:textColor="#8892B0"
-            android:textSize="11sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/btn_day_today"
-            android:layout_width="0dp"
-            android:layout_height="30dp"
-            android:layout_weight="1"
-            android:layout_marginHorizontal="2dp"
-            android:background="@drawable/bg_tab_active"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:text="Hari Ini"
-            android:textColor="#FFFFFF"
-            android:textSize="11sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/btn_day_tomorrow"
-            android:layout_width="0dp"
-            android:layout_height="30dp"
-            android:layout_weight="1"
-            android:layout_marginStart="4dp"
-            android:background="@drawable/bg_header_button"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:text="Besok"
-            android:textColor="#8892B0"
-            android:textSize="11sp"
-            android:textStyle="bold" />
-    </LinearLayout>
-
-    <!-- Katalog Filter Panel: Sort (Populer/Terbaru) + Filter Tahun Rilis -->
-    <LinearLayout
-        android:id="@+id/layout_katalog_filter"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginHorizontal="14dp"
-        android:layout_marginBottom="6dp"
-        android:orientation="vertical"
+        android:scrollbars="none"
+        android:overScrollMode="never"
         android:visibility="gone">
 
         <LinearLayout
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
 
             <TextView
-                android:id="@+id/btn_sort_popular"
-                android:layout_width="0dp"
+                android:id="@+id/btn_day_senin"
+                android:layout_width="wrap_content"
                 android:layout_height="30dp"
-                android:layout_weight="1"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/bg_tab_active"
-                android:clickable="true"
-                android:focusable="true"
-                android:gravity="center"
-                android:text="Populer"
-                android:textColor="#FFFFFF"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/btn_sort_newest"
-                android:layout_width="0dp"
-                android:layout_height="30dp"
-                android:layout_weight="1"
-                android:layout_marginStart="4dp"
+                android:minWidth="62dp"
+                android:layout_marginEnd="5dp"
                 android:background="@drawable/bg_header_button"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center"
-                android:text="Terbaru"
+                android:paddingHorizontal="10dp"
+                android:text="Senin"
+                android:textColor="#8892B0"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btn_day_selasa"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:minWidth="62dp"
+                android:layout_marginEnd="5dp"
+                android:background="@drawable/bg_header_button"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingHorizontal="10dp"
+                android:text="Selasa"
+                android:textColor="#8892B0"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btn_day_rabu"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:minWidth="62dp"
+                android:layout_marginEnd="5dp"
+                android:background="@drawable/bg_header_button"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingHorizontal="10dp"
+                android:text="Rabu"
+                android:textColor="#8892B0"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btn_day_kamis"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:minWidth="62dp"
+                android:layout_marginEnd="5dp"
+                android:background="@drawable/bg_header_button"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingHorizontal="10dp"
+                android:text="Kamis"
+                android:textColor="#8892B0"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btn_day_jumat"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:minWidth="62dp"
+                android:layout_marginEnd="5dp"
+                android:background="@drawable/bg_header_button"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingHorizontal="10dp"
+                android:text="Jumat"
+                android:textColor="#8892B0"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btn_day_sabtu"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:minWidth="62dp"
+                android:layout_marginEnd="5dp"
+                android:background="@drawable/bg_header_button"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingHorizontal="10dp"
+                android:text="Sabtu"
+                android:textColor="#8892B0"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btn_day_minggu"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:minWidth="62dp"
+                android:background="@drawable/bg_header_button"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingHorizontal="10dp"
+                android:text="Minggu"
                 android:textColor="#8892B0"
                 android:textSize="11sp"
                 android:textStyle="bold" />
         </LinearLayout>
-
-        <HorizontalScrollView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="5dp"
-            android:scrollbars="none"
-            android:overScrollMode="never">
-
-            <LinearLayout
-                android:id="@+id/layout_year_chips"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal" />
-        </HorizontalScrollView>
-    </LinearLayout>
+    </HorizontalScrollView>
 
     <!-- Section Title & Counter Bar -->
     <LinearLayout
@@ -547,6 +541,26 @@
             android:textColor="#F1F5F9"
             android:textSize="14sp"
             android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/btn_filter_catalog"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:background="@drawable/bg_header_button"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:paddingHorizontal="10dp"
+            android:layout_marginEnd="8dp"
+            android:drawableStart="@drawable/ic_filter"
+            android:drawablePadding="5dp"
+            android:drawableTint="#38BDF8"
+            android:text="Filter"
+            android:textColor="#38BDF8"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
 
         <TextView
             android:id="@+id/tv_item_count"
@@ -576,7 +590,7 @@
                 android:layout_height="match_parent"
                 android:clipChildren="false">
 
-                <!-- Native Grid of Anime Cards -->
+                <!-- Native Grid of Anime Cards with Entrance Cascade Animation -->
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/rv_anime_grid"
                     android:layout_width="match_parent"
@@ -586,7 +600,35 @@
                     android:paddingBottom="64dp"
                     android:clipToPadding="false"
                     android:clipChildren="false"
+                    android:layoutAnimation="@anim/grid_layout_animation"
                     android:scrollbars="vertical" />
+
+                <!-- Central Loading State (Animasi Loading Utama di Tengah Konten) -->
+                <LinearLayout
+                    android:id="@+id/layout_loading_state"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:gravity="center"
+                    android:orientation="vertical"
+                    android:visibility="visible">
+
+                    <ProgressBar
+                        android:id="@+id/pb_central_loading"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:indeterminateTint="#38BDF8" />
+
+                    <TextView
+                        android:id="@+id/tv_loading_label"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text="Memuat data anime..."
+                        android:textColor="#64748B"
+                        android:textSize="12sp"
+                        android:letterSpacing="0.02" />
+                </LinearLayout>
 
                 <!-- Empty / Error Placeholder View -->
                 <LinearLayout

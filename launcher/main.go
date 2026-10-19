@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -56,20 +58,49 @@ func isServerRunning(url string) bool {
 	return false
 }
 
-func killPortOccupant(port int) {
-	out, err := exec.Command("cmd", "/c", fmt.Sprintf("netstat -ano | findstr :%d | findstr LISTENING", port)).Output()
-	if err != nil || len(out) == 0 {
-		return
+func isPortListening(port int) bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 200*time.Millisecond)
+	if err == nil {
+		conn.Close()
+		return true
 	}
-	lines := strings.Split(string(out), "\n")
-	for _, line := range lines {
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) >= 5 {
-			pid := fields[len(fields)-1]
-			if pid != "0" && pid != "" {
-				_ = exec.Command("taskkill", "/F", "/PID", pid).Run()
-			}
+	return false
+}
+
+func terminateProcessByPID(pid int) {
+	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(pid))
+	if err == nil {
+		_ = windows.TerminateProcess(h, 1)
+		_ = windows.CloseHandle(h)
+	}
+}
+
+func freeServerPort(appDir string, port int) {
+	// 1. Coba kirim shutdown graceful via HTTP ke backend jika masih merespons
+	shutdownURL := fmt.Sprintf("http://127.0.0.1:%d/api/shutdown", port)
+	client := http.Client{Timeout: 600 * time.Millisecond}
+	req, err := http.NewRequest("POST", shutdownURL, nil)
+	if err == nil {
+		if resp, err := client.Do(req); err == nil {
+			resp.Body.Close()
 		}
+	}
+
+	// 2. Cek apakah ada file PID tersimpan dari sesi sebelumnya untuk di-terminate
+	pidFile := filepath.Join(appDir, "cache", "server.pid")
+	if data, err := os.ReadFile(pidFile); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
+			terminateProcessByPID(pid)
+		}
+		_ = os.Remove(pidFile)
+	}
+
+	// 3. Tunggu hingga port benar-benar bebas (maksimal 1 detik)
+	for i := 0; i < 10; i++ {
+		if !isPortListening(port) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -197,9 +228,8 @@ func main() {
 
 	// 1. Cek apakah server sudah aktif dan sehat
 	if !isServerRunning(pingURL) {
-		// 2. Bersihkan zombie di port 8767
-		killPortOccupant(8767)
-		time.Sleep(300 * time.Millisecond)
+		// 2. Bersihkan instance backend lama di port 8767 secara graceful
+		freeServerPort(appDir, 8767)
 
 		// 3. Tentukan path python.exe dan backend/main.py
 		pythonExe := filepath.Join(appDir, "runtime", "python.exe")
@@ -245,6 +275,12 @@ func main() {
 			return
 		}
 
+		// Simpan PID proses backend untuk recovery jika crash/force exit
+		if pyCmd.Process != nil {
+			pidFile := filepath.Join(cacheDir, "server.pid")
+			_ = os.WriteFile(pidFile, []byte(strconv.Itoa(pyCmd.Process.Pid)), 0644)
+		}
+
 		// 5. Polling hingga /api/ping merespons (maksimal 15 detik)
 		ready := false
 		for i := 0; i < 75; i++ {
@@ -266,6 +302,8 @@ func main() {
 		if !ready {
 			if pyCmd.Process != nil {
 				_ = pyCmd.Process.Kill()
+				pidFile := filepath.Join(cacheDir, "server.pid")
+				_ = os.Remove(pidFile)
 			}
 			logSnippet := getLastLogLines(logPath, 10)
 			msg := "Server backend tidak dapat berjalan atau gagal merespons dalam 15 detik."
@@ -281,6 +319,8 @@ func main() {
 	if pyCmd != nil && pyCmd.Process != nil {
 		defer func() {
 			_ = pyCmd.Process.Kill()
+			pidFile := filepath.Join(appDir, "cache", "server.pid")
+			_ = os.Remove(pidFile)
 		}()
 	}
 

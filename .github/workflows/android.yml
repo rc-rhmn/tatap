@@ -6,6 +6,14 @@ on:
       - 'v*'
     branches:
       - main
+    paths-ignore:
+      - '**.md'
+      - 'frontend/**'
+      - 'tools/**'
+      - 'launcher/**'
+      - 'linux/**'
+      - 'tests/**'
+      - 'LICENSE'
   workflow_dispatch:
 
 jobs:

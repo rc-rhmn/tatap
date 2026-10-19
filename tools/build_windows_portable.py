@@ -153,7 +153,7 @@ def build_launcher(target_exe):
 
     cmd = [
         "go", "build",
-        "-ldflags", "-H=windowsgui -s -w",
+        "-ldflags", "-H=windowsgui -w",
         "-o", target_exe,
         "."
     ]

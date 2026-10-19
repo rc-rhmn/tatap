@@ -35,6 +35,14 @@ async def init_db():
         except Exception:
             # Duplicate column name → kolom sudah ada, aman di-skip.
             pass
+        try:
+            await db.execute("ALTER TABLE episode_cache ADD COLUMN intro TEXT DEFAULT '{}'")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE episode_cache ADD COLUMN outro TEXT DEFAULT '{}'")
+        except Exception:
+            pass
         await db.execute("""CREATE TABLE IF NOT EXISTS watch_history(
             id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT, title TEXT,
             episode INTEGER, mode TEXT DEFAULT 'sub', progress INTEGER DEFAULT 0,
@@ -47,10 +55,6 @@ async def init_db():
             await db.execute("ALTER TABLE watch_history ADD COLUMN type TEXT DEFAULT ''")
         except Exception:
             pass
-        # Favorit/star anime user (fitur mark favorite lintas platform).
-        await db.execute("""CREATE TABLE IF NOT EXISTS favorites(
-            slug TEXT PRIMARY KEY, title TEXT, poster TEXT, type TEXT DEFAULT '',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
         await db.execute("""CREATE TABLE IF NOT EXISTS settings(
             key TEXT PRIMARY KEY, value TEXT)""")
         await db.execute("""CREATE TABLE IF NOT EXISTS browse_cache(
@@ -63,6 +67,45 @@ async def init_db():
         # Quota counter MyMemory per-day (Tier 2). Soft limit 4500/5000 char/day per-IP.
         await db.execute("""CREATE TABLE IF NOT EXISTS mychar_counts(
             day TEXT PRIMARY KEY, total INTEGER DEFAULT 0)""")
+        # Tabel bookmarks / favorit anime tersimpan mandiri & terisolasi
+        await db.execute("""CREATE TABLE IF NOT EXISTS bookmarks(
+            slug TEXT PRIMARY KEY,
+            title TEXT,
+            poster TEXT DEFAULT '',
+            type TEXT DEFAULT '',
+            sub TEXT DEFAULT '',
+            eps TEXT DEFAULT '',
+            score REAL DEFAULT 0.0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        # Migrasi sekali jalan: data favorites (fitur personal <= v2.7.0) -> bookmarks
+        try:
+            async with db.execute("SELECT COUNT(*) FROM bookmarks") as _cur:
+                _bm_count = (await _cur.fetchone())[0]
+            if _bm_count == 0:
+                await db.execute("""INSERT OR IGNORE INTO bookmarks(slug,title,poster,type,created_at)
+                    SELECT slug,title,COALESCE(poster,''),COALESCE(type,''),created_at FROM favorites""")
+        except Exception:
+            pass
+        # Tabel watch_progress: mencatat menit & detik tontonan per episode anime
+        await db.execute("""CREATE TABLE IF NOT EXISTS watch_progress(
+            slug TEXT,
+            episode INTEGER,
+            progress INTEGER DEFAULT 0,
+            duration INTEGER DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (slug, episode)
+        )""")
+        # Sanitasi satu kali relasi panzer yang salah ter-cache pada slug_map / cache
+        try:
+            await db.execute("DELETE FROM slug_map WHERE lower(title) LIKE '%panzer%' AND slug = 'girls-und-panzer-der-film-1161' AND lower(title) NOT LIKE '%film%'")
+            await db.execute("DELETE FROM slug_map WHERE lower(title) LIKE '%alice war%'")
+            await db.execute("DELETE FROM slug_map WHERE lower(title) LIKE '%finale%' OR lower(title) LIKE '%saishuushou%'")
+            await db.execute("DELETE FROM search_cache WHERE lower(query) LIKE '%panzer%'")
+            await db.execute("DELETE FROM browse_cache WHERE key LIKE '%panzer%'")
+            await db.execute("DELETE FROM browse_cache WHERE key LIKE '%relations%'")
+        except Exception:
+            pass
         await db.commit()
 
 def _now():
@@ -120,18 +163,32 @@ async def get_episode_cache(slug: str, ep: int, mode: str, ttl=12*3600):
                     "url": d["sub"],
                     "default": True,
                 }]
+            try:
+                d["intro"] = json.loads(d.get("intro") or '{"start": 0, "end": 0}')
+                if not isinstance(d["intro"], dict):
+                    d["intro"] = {"start": 0, "end": 0}
+            except Exception:
+                d["intro"] = {"start": 0, "end": 0}
+            try:
+                d["outro"] = json.loads(d.get("outro") or '{"start": 0, "end": 0}')
+                if not isinstance(d["outro"], dict):
+                    d["outro"] = {"start": 0, "end": 0}
+            except Exception:
+                d["outro"] = {"start": 0, "end": 0}
             return d
 
 async def set_episode_cache(slug, ep, mode, master, variants, sub, sub_lang, referer, server,
-                          subtitles=None):
-    """Simpan cache episode. subtitles=list[{label,lang,url,default}], default []."""
+                          subtitles=None, intro=None, outro=None):
+    """Simpan cache episode. subtitles=list, intro={start,end}, outro={start,end}."""
     subs_json = json.dumps(subtitles or [])
+    intro_json = json.dumps(intro or {"start": 0, "end": 0})
+    outro_json = json.dumps(outro or {"start": 0, "end": 0})
     async with _connect_db() as db:
         await db.execute("""INSERT OR REPLACE INTO episode_cache
-            (slug,ep,mode,master,variants,sub,sub_lang,referer,server,subtitles,fetched_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (slug,ep,mode,master,variants,sub,sub_lang,referer,server,subtitles,intro,outro,fetched_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (slug, ep, mode, master, json.dumps(variants), sub or "", sub_lang or "",
-             referer or "", server or "", subs_json, _now()))
+             referer or "", server or "", subs_json, intro_json, outro_json, _now()))
         await db.commit()
 
 async def add_history(slug, title, episode, mode="sub", progress=0, poster="", type=""):
@@ -157,35 +214,91 @@ async def clear_history():
         await db.execute("DELETE FROM watch_history")
         await db.commit()
 
-async def add_favorite(slug, title, poster="", type=""):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """INSERT INTO favorites(slug,title,poster,type) VALUES(?,?,?,?)
-               ON CONFLICT(slug) DO UPDATE SET title=excluded.title, poster=excluded.poster, type=excluded.type""",
-            (slug, title or slug, poster or "", type or ""))
+async def save_progress(slug: str, episode: int, progress: int, duration: int = 0):
+    """Simpan posisi menit & detik tontonan per episode, serta sinkronkan ke watch_history."""
+    if not slug or episode is None:
+        return
+    async with _connect_db() as db:
+        await db.execute("""INSERT OR REPLACE INTO watch_progress(slug, episode, progress, duration, updated_at)
+            VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            (slug, int(episode), int(progress), int(duration)))
+        # Update progress di watch_history jika anime dan episode cocok
+        await db.execute("UPDATE watch_history SET progress=? WHERE slug=? AND episode=?",
+                         (int(progress), slug, int(episode)))
         await db.commit()
 
-async def remove_favorite(slug):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM favorites WHERE slug=?", (slug,))
-        await db.commit()
-
-async def get_favorites():
-    async with aiosqlite.connect(DB_PATH) as db:
+async def get_progress(slug: str, episode: int):
+    """Ambil posisi menit & detik terakhir yang tersimpan untuk episode tertentu."""
+    if not slug or episode is None:
+        return None
+    async with _connect_db() as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM favorites ORDER BY created_at DESC") as cur:
+        async with db.execute("SELECT progress, duration, updated_at FROM watch_progress WHERE slug=? AND episode=?",
+                              (slug, int(episode))) as cur:
+            row = await cur.fetchone()
+            if row:
+                return dict(row)
+            return None
+
+async def clear_progress(slug: str, episode: int = None):
+    """Hapus progres episode tertentu atau seluruh progres anime."""
+    if not slug:
+        return
+    async with _connect_db() as db:
+        if episode is not None:
+            await db.execute("DELETE FROM watch_progress WHERE slug=? AND episode=?", (slug, int(episode)))
+            await db.execute("UPDATE watch_history SET progress=0 WHERE slug=? AND episode=?", (slug, int(episode)))
+        else:
+            await db.execute("DELETE FROM watch_progress WHERE slug=?", (slug,))
+            await db.execute("UPDATE watch_history SET progress=0 WHERE slug=?", (slug,))
+        await db.commit()
+
+async def add_bookmark(slug: str, title: str, poster: str = "", type: str = "", sub: str = "", eps: str = "", score: float = 0.0):
+    """Tambah atau update bookmark favorit anime."""
+    if not slug:
+        return
+    async with _connect_db() as db:
+        await db.execute("""INSERT OR REPLACE INTO bookmarks(slug, title, poster, type, sub, eps, score, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            (slug, title, poster or "", type or "", sub or "", eps or "", float(score or 0.0)))
+        await db.commit()
+
+async def remove_bookmark(slug: str):
+    """Hapus bookmark berdasarkan slug."""
+    if not slug:
+        return
+    async with _connect_db() as db:
+        await db.execute("DELETE FROM bookmarks WHERE slug=?", (slug,))
+        await db.commit()
+
+async def get_bookmarks(limit: int = 200):
+    """Ambil daftar bookmark tersimpan terurut dari yang terbaru.
+    Setiap row dilengkapi id=slug agar langsung kompatibel dengan grid adapter kartu anime.
+    """
+    async with _connect_db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM bookmarks ORDER BY created_at DESC LIMIT ?", (limit,)) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
             for r in rows:
-                if r.get("slug"):
+                if "slug" in r and r["slug"]:
                     r["id"] = r["slug"]
             return rows
 
-async def is_favorite(slug):
+async def is_bookmarked(slug: str) -> bool:
+    """Cek apakah anime dengan slug tertentu ada di bookmark."""
     if not slug:
         return False
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT 1 FROM favorites WHERE slug=?", (slug,)) as cur:
-            return await cur.fetchone() is not None
+    async with _connect_db() as db:
+        async with db.execute("SELECT 1 FROM bookmarks WHERE slug=? LIMIT 1", (slug,)) as cur:
+            row = await cur.fetchone()
+            return bool(row)
+
+async def clear_bookmarks():
+    """Hapus seluruh bookmark favorit."""
+    async with _connect_db() as db:
+        await db.execute("DELETE FROM bookmarks")
+        await db.commit()
+
 
 async def get_browse_cache(key: str, ttl=6*3600):
     async with _connect_db() as db:

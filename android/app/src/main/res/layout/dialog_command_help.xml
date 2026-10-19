@@ -25,12 +25,12 @@
 
         <Button
             android:id="@+id/btn_close_help_dialog"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:text="✕"
-      android:textColor="#8892B0"
-            android:textSize="16sp" />
+            android:drawableStart="@drawable/ic_close"
+            android:drawableTint="#8892B0"
+            android:padding="8dp" />
     </LinearLayout>
 
     <TextView
@@ -51,34 +51,6 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">
-
-            <!-- Item: :musim -->
-            <LinearLayout
-                android:id="@+id/cmd_item_musim"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@drawable/bg_command_tag"
-                android:orientation="vertical"
-                android:padding="8dp"
-                android:layout_marginBottom="6dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text=":musim"
-                    android:textColor="#38BDF8"
-                    android:textSize="13sp"
-                    android:textStyle="bold"
-                    android:fontFamily="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Tampilkan anime yang tayang musim ini"
-          android:textColor="#8892B0"
-                    android:textSize="11sp"
-                    android:fontFamily="monospace" />
-            </LinearLayout>
 
             <!-- Item: :season -->
             <LinearLayout
@@ -103,90 +75,6 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Filter anime spesifik per musim &amp; tahun (misal: :season fall 2024)"
-          android:textColor="#8892B0"
-                    android:textSize="11sp"
-                    android:fontFamily="monospace" />
-            </LinearLayout>
-
-            <!-- Item: :genre -->
-            <LinearLayout
-                android:id="@+id/cmd_item_genre"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@drawable/bg_command_tag"
-                android:orientation="vertical"
-                android:padding="8dp"
-                android:layout_marginBottom="6dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text=":genre [nama]"
-                    android:textColor="#38BDF8"
-                    android:textSize="13sp"
-                    android:textStyle="bold"
-                    android:fontFamily="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Buka pemilih genre anime interaktif atau ketik :genre action"
-          android:textColor="#8892B0"
-                    android:textSize="11sp"
-                    android:fontFamily="monospace" />
-            </LinearLayout>
-
-            <!-- Item: :airing -->
-            <LinearLayout
-                android:id="@+id/cmd_item_airing"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@drawable/bg_command_tag"
-                android:orientation="vertical"
-                android:padding="8dp"
-                android:layout_marginBottom="6dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text=":airing"
-                    android:textColor="#38BDF8"
-                    android:textSize="13sp"
-                    android:textStyle="bold"
-                    android:fontFamily="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Tampilkan anime yang masih sedang tayang"
-          android:textColor="#8892B0"
-                    android:textSize="11sp"
-                    android:fontFamily="monospace" />
-            </LinearLayout>
-
-            <!-- Item: :katalog -->
-            <LinearLayout
-                android:id="@+id/cmd_item_katalog"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@drawable/bg_command_tag"
-                android:orientation="vertical"
-                android:padding="8dp"
-                android:layout_marginBottom="6dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text=":katalog"
-                    android:textColor="#38BDF8"
-                    android:textSize="13sp"
-                    android:textStyle="bold"
-                    android:fontFamily="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Buka katalog anime lengkap berdasarkan popularitas"
           android:textColor="#8892B0"
                     android:textSize="11sp"
                     android:fontFamily="monospace" />
@@ -444,9 +332,9 @@
                     android:fontFamily="monospace" />
             </LinearLayout>
 
-            <!-- Item: :riwayat -->
+            <!-- Item: :haptic (Auto-toggle ON/OFF) -->
             <LinearLayout
-                android:id="@+id/cmd_item_riwayat"
+                android:id="@+id/cmd_item_haptic"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:background="@drawable/bg_command_tag"
@@ -454,78 +342,47 @@
                 android:padding="8dp"
                 android:layout_marginBottom="6dp">
 
-                <TextView
-                    android:layout_width="wrap_content"
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text=":riwayat"
-                    android:textColor="#38BDF8"
-                    android:textSize="13sp"
-                    android:textStyle="bold"
-                    android:fontFamily="monospace" />
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text=":haptic"
+                        android:textColor="#38BDF8"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        android:fontFamily="monospace" />
+
+                    <TextView
+                        android:id="@+id/tv_haptic_badge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="AKTIF"
+                        android:textColor="#38BDF8"
+                        android:textSize="10sp"
+                        android:textStyle="bold"
+                        android:fontFamily="monospace"
+                        android:background="@drawable/bg_badge_score"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="2dp"
+                        android:paddingBottom="2dp" />
+                </LinearLayout>
 
                 <TextView
+                    android:id="@+id/tv_haptic_desc"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Buka daftar riwayat anime yang pernah Anda tonton (:riwayat clear untuk hapus)"
-          android:textColor="#8892B0"
-                    android:textSize="11sp"
-                    android:fontFamily="monospace" />
-            </LinearLayout>
-
-            <!-- Item: :favorit -->
-            <LinearLayout
-                android:id="@+id/cmd_item_favorit"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@drawable/bg_command_tag"
-                android:orientation="vertical"
-                android:padding="8dp"
-                android:layout_marginBottom="6dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text=":favorit"
-                    android:textColor="#38BDF8"
-                    android:textSize="13sp"
-                    android:textStyle="bold"
-                    android:fontFamily="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Buka daftar anime favorit yang Anda tandai dengan tombol bintang"
+                    android:text="Umpan balik getaran sentuh UI (ketuk untuk on/off)"
                     android:textColor="#8892B0"
                     android:textSize="11sp"
-                    android:fontFamily="monospace" />
-            </LinearLayout>
-
-            <!-- Item: :tahun -->
-            <LinearLayout
-                android:id="@+id/cmd_item_tahun"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@drawable/bg_command_tag"
-                android:orientation="vertical"
-                android:padding="8dp"
-                android:layout_marginBottom="6dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text=":tahun"
-                    android:textColor="#38BDF8"
-                    android:textSize="13sp"
-                    android:textStyle="bold"
-                    android:fontFamily="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Filter katalog berdasarkan tahun rilis anime (contoh: :tahun 2024)"
-                    android:textColor="#8892B0"
-                    android:textSize="11sp"
-                    android:fontFamily="monospace" />
+                    android:fontFamily="monospace"
+                    android:layout_marginTop="2dp" />
             </LinearLayout>
 
             <!-- Item: :update -->

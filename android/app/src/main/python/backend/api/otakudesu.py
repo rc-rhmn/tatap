@@ -5,6 +5,7 @@ Mengambil episode dan mendekripsi stream HLS dari player embed putarin.xyz (AES-
 import re
 import json
 import base64
+import html as htmlmod
 import urllib.parse
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from config import OTAKU_BASE, HI_UA
@@ -66,6 +67,8 @@ def _fetch(url: str, referer: str = None, timeout: int = 12) -> str:
 def search(query: str, limit: int = 10) -> list:
     """Cari anime di Otakudesu. Return [{title, url, id, poster}]."""
     clean_q = re.sub(r"[^\w\s-]", "", query).strip()
+    clean_q = re.sub(r"\bund\s+panzer\b", "panzer", clean_q, flags=re.I)
+    clean_q = re.sub(r"\band\s+panzer\b", "panzer", clean_q, flags=re.I)
     url = f"{OTAKU_BASE}/?s={urllib.parse.quote_plus(clean_q)}&post_type=anime"
     html = _fetch(url)
     
@@ -73,7 +76,7 @@ def search(query: str, limit: int = 10) -> list:
     cards = re.findall(r'<a class="ot-k"\s+href="([^"]+)">.*?<img[^>]*src="([^"]+)".*?<h2 class="ot-k-j">([^<]+)</h2>', html, re.S)
     results = []
     for href, poster, title in cards[:limit]:
-        title = title.strip()
+        title = htmlmod.unescape(title.strip())
         slug_m = re.search(r'/anime/([^/]+)/?', href)
         slug = slug_m.group(1) if slug_m else href
         results.append({
@@ -152,7 +155,7 @@ def _decrypt_putarin_config(embed_url: str) -> dict:
 
 def _extract_season_num(t: str) -> int:
     t = (t or "").lower()
-    m = re.search(r"\b(?:season\s*(\d+)|(\d+)(?:nd|rd|th|st)\s*season|part\s*(\d+)|s(\d+))\b", t)
+    m = re.search(r"\b(?:season\s*(\d+)|(\d+)(?:nd|rd|th|st)\s*season|part\s*(\d+)|s(\d+)|saishuushou\s*(\d+)|finale\s*(\d+))\b|(?:\b|\s)(\d+)$", t)
     if m:
         for g in m.groups():
             if g:
@@ -164,18 +167,28 @@ def _extract_season_num(t: str) -> int:
 
 
 def _clean_title_tokens(t: str) -> set:
-    t = re.sub(r"\b(?:season\s*\d+|\d+(?:nd|rd|th|st)\s*season|part\s*\d+|s\d+)\b", "", t or "", flags=re.I)
+    t = (t or "").replace("&", " and ")
+    t = re.sub(r"\b(?:season\s*\d+|\d+(?:nd|rd|th|st)\s*season|part\s*\d+|s\d+|saishuushou\s*\d+|finale\s*\d+)\b|(?:\b|\s)\d+$", "", t, flags=re.I)
     t = re.sub(r"[^a-zA-Z0-9\s]", " ", t)
-    return set(t.lower().split())
+    tokens = set()
+    for tok in t.lower().split():
+        if tok == "ovas": tok = "ova"
+        elif tok == "specials": tok = "special"
+        elif tok == "movies": tok = "movie"
+        elif tok == "finale": tok = "saishuushou"
+        tokens.add(tok)
+    return tokens
 
 
 def _is_title_match(target_title: str, candidate_title: str) -> bool:
     if not target_title or not candidate_title:
         return False
     # 1. Exact normalized match (tanpa spasi & simbol)
-    norm_a = re.sub(r"[^a-zA-Z0-9]", "", target_title.lower())
-    norm_b = re.sub(r"[^a-zA-Z0-9]", "", candidate_title.lower())
-    if norm_a == norm_b:
+    def _norm(s):
+        s = (s or "").lower().replace("&", "and")
+        s = re.sub(r"\bund\b", "and", s)
+        return re.sub(r"[^a-zA-Z0-9]", "", s)
+    if _norm(target_title) == _norm(candidate_title):
         return True
 
     # 2. Validasi nomor season / part (mencegah Season 2 match ke Season 1)
@@ -190,7 +203,19 @@ def _is_title_match(target_title: str, candidate_title: str) -> bool:
     if not tokens_a or not tokens_b:
         return False
 
-    stopwords = {"the", "a", "an", "of", "in", "to", "and", "no", "wa", "ga", "ni", "de", "sub", "indo"}
+    # 4. Isolasi Movie/Film vs Serial
+    movie_keywords = {"movie", "film", "gekijouban"}
+    if bool(tokens_a.intersection(movie_keywords)) != bool(tokens_b.intersection(movie_keywords)):
+        return False
+
+    # 5. Isolasi part / saishuushou (mencegah TV series match ke Saishuushou / part lanjutan)
+    part_keywords = {"part", "saishuushou"}
+    has_part_a = bool(tokens_a.intersection(part_keywords))
+    has_part_b = bool(tokens_b.intersection(part_keywords))
+    if has_part_a != has_part_b:
+        return False
+
+    stopwords = {"the", "a", "an", "of", "in", "to", "and", "und", "der", "die", "das", "no", "wa", "ga", "ni", "de", "sub", "indo"}
     sig_common = tokens_a.intersection(tokens_b) - stopwords
     sig_a = tokens_a - stopwords
     sig_b = tokens_b - stopwords

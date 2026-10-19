@@ -24,12 +24,12 @@
 
         <Button
             android:id="@+id/btn_close_ai_dialog"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:text="✕"
-            android:textColor="#8892B0"
-            android:textSize="14sp" />
+            android:drawableStart="@drawable/ic_close"
+            android:drawableTint="#8892B0"
+            android:padding="8dp" />
     </LinearLayout>
 
     <ScrollView

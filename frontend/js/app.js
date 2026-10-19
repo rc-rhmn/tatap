@@ -1,10 +1,48 @@
-var cur = {slug:"", title:"", ep:1, mode:"sub", quality:"best", res:null, eps:[], watched:{},
+var cur = {slug:"", title:"", ep:1, mode:"sub", quality:"best", res:null, eps:[], watched:{}, lastWatchedEp:null,
             subLang:"English",    // preferensi bahasa user dari /api/settings
             activeSub:null,       // URL track subtitle yang sedang aktif (live switch)
             cues:[],              // cue subtitle hasil parse VTT (render overlay milik app)
             subSize:"m",          // ukuran subtitle overlay: s|m|l
-            translate:false        // toggle translate subtitle Indonesia (persist localStorage)
+            translate:false,      // toggle translate subtitle Indonesia (persist localStorage)
+            eps_counter:""
            };
+var _playTokenCounter = 0;
+var PLAYBACK_SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+var currentPlaybackSpeed = 1.0;
+
+function setPlaySpeed(spd, notify){
+  var num = parseFloat(spd);
+  if(isNaN(num) || num <= 0) num = 1.0;
+  currentPlaybackSpeed = num;
+  var v = $("vid");
+  if(v){
+    try {
+      v.playbackRate = currentPlaybackSpeed;
+    } catch(e){}
+  }
+  var sel = $("pm-speed-select");
+  if(sel){
+    sel.value = String(currentPlaybackSpeed);
+  }
+  if(notify){
+    toast("Kecepatan: " + currentPlaybackSpeed + "x");
+  }
+}
+
+function adjustPlaySpeed(dir){
+  var idx = 2; // default 1.0x (index 2)
+  for(var i = 0; i < PLAYBACK_SPEEDS.length; i++){
+    if(Math.abs(PLAYBACK_SPEEDS[i] - currentPlaybackSpeed) < 0.05){
+      idx = i;
+      break;
+    }
+  }
+  var nextIdx = idx + dir;
+  if(nextIdx < 0) nextIdx = 0;
+  if(nextIdx >= PLAYBACK_SPEEDS.length) nextIdx = PLAYBACK_SPEEDS.length - 1;
+  setPlaySpeed(PLAYBACK_SPEEDS[nextIdx], true);
+}
+
 function $(id){return document.getElementById(id);}
 function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 function toast(msg,ms){
@@ -15,13 +53,211 @@ function toast(msg,ms){
 }
 function loadPrefs(){
   try{
-    if(localStorage.getItem("tatap_crt")==="off"){document.body.classList.add("no-crt");}
-    if(localStorage.getItem("tatap_ambient")==="off"){document.body.classList.add("no-ambient");}
+    if(localStorage.getItem("tatap_crt") === "on"){
+      document.body.classList.remove("no-crt");
+    } else {
+      document.body.classList.add("no-crt");
+    }
+    if(localStorage.getItem("tatap_ambient") === "off"){
+      document.body.classList.add("no-ambient");
+    }
   }catch(e){}
 }
 
-function openTitle(slug,title){
-  cur.slug=slug;cur.title=title;cur.eps=[];
+function updateBookmarkBtn(isBookmarked){
+  var btn = $("tm-bookmark-btn");
+  if(!btn) return;
+  btn.classList.toggle("bookmarked", !!isBookmarked);
+  var starSvg = isBookmarked ? '<svg class="ui-icon"><use href="#icon-star-filled"/></svg>' : '<svg class="ui-icon"><use href="#icon-star"/></svg>';
+  btn.innerHTML = starSvg + " " + (isBookmarked ? "TERSIMPAN" : "+ FAVORIT");
+  btn.title = isBookmarked ? "Klik untuk menghapus dari favorit" : "Klik untuk menyimpan ke favorit";
+}
+
+function checkModalBookmark(slug){
+  window.Tatap.checkBookmark(slug).then(function(r){
+    if(cur.slug !== slug) return;
+    if(r && r.success && r.data){
+      updateBookmarkBtn(!!r.data.bookmarked);
+    }
+  }).catch(function(){});
+}
+
+function toggleModalBookmark(){
+  var slug = cur.slug;
+  if(!slug) return;
+  var btn = $("tm-bookmark-btn");
+  var currentlyBookmarked = btn && btn.classList.contains("bookmarked");
+  var nextState = !currentlyBookmarked;
+  updateBookmarkBtn(nextState);
+  if(nextState){
+    window.Tatap.addBookmark({
+      slug: slug,
+      title: cur.title,
+      poster: cur.poster || "",
+      type: cur.type || "TV",
+      score: 0.0
+    }).then(function(){
+      if(window.Tui && window.Tui.state && window.Tui.state.view === "favorit"){
+        window.Tui.setView("favorit");
+      }
+    });
+  } else {
+    window.Tatap.removeBookmark(slug).then(function(){
+      if(window.Tui && window.Tui.state && window.Tui.state.view === "favorit"){
+        window.Tui.setView("favorit");
+      }
+    });
+  }
+}
+
+function renderDetailMeta(meta){
+  var box = $("tm-detail-meta");
+  if(!box) return;
+  if(!meta){
+    box.classList.add("hidden");
+    return;
+  }
+  var hasAny = false;
+
+  // Score
+  var scoreEl = $("tm-score");
+  var scoreVal = $("tm-score-val");
+  if(scoreEl && scoreVal){
+    var sc = meta.score ? parseFloat(meta.score) : 0;
+    if(sc > 0){
+      scoreVal.textContent = sc.toFixed(1);
+      scoreEl.classList.remove("hidden");
+      hasAny = true;
+    } else {
+      scoreEl.classList.add("hidden");
+    }
+  }
+
+  // Status
+  var statEl = $("tm-status");
+  if(statEl){
+    var st = (meta.status || meta.badge || "").toLowerCase();
+    var isFin = st.indexOf("finish") !== -1 || st.indexOf("tamat") !== -1 || st.indexOf("completed") !== -1 || Boolean(meta.is_finished);
+    if(!isFin && meta.eps_counter){
+      var parts = String(meta.eps_counter).split("/");
+      if(parts.length === 2 && parts[1] !== "?"){
+        var cCur = parseInt(parts[0], 10);
+        var cTot = parseInt(parts[1], 10);
+        if(!isNaN(cCur) && !isNaN(cTot) && cTot > 0 && cCur >= cTot){
+          isFin = true;
+        }
+      }
+    }
+    if(isFin){
+      statEl.textContent = "TAMAT";
+      statEl.className = "badge-status finished";
+      hasAny = true;
+    } else if(st.indexOf("releas") !== -1 || st.indexOf("airing") !== -1 || st.indexOf("ongoing") !== -1){
+      statEl.textContent = "ONGOING";
+      statEl.className = "badge-status ongoing";
+      hasAny = true;
+    } else {
+      statEl.className = "badge-status hidden";
+    }
+  }
+
+  // Info Line (Studio / Musim / Sumber)
+  var infoEl = $("tm-info-line");
+  if(infoEl){
+    var parts = [];
+    if(meta.studio) parts.push("Studio: " + meta.studio);
+    if(meta.season) parts.push(meta.season);
+    if(meta.source) parts.push("Sumber: " + meta.source);
+    if(parts.length > 0){
+      infoEl.textContent = parts.join(" · ");
+      infoEl.classList.remove("hidden");
+      hasAny = true;
+    } else {
+      infoEl.textContent = "";
+      infoEl.classList.add("hidden");
+    }
+  }
+
+  // Genres
+  var genEl = $("tm-genres");
+  if(genEl){
+    genEl.innerHTML = "";
+    var gList = meta.genres || [];
+    if(typeof gList === "string"){
+      try { gList = JSON.parse(gList); } catch(e){ gList = gList.split(","); }
+    }
+    var validGenres = [];
+    if(Array.isArray(gList)){
+      validGenres = gList.map(function(x){ return (x||"").trim(); }).filter(function(x){ return x && x.toLowerCase() !== "hentai"; });
+    }
+    if(validGenres.length > 0){
+      validGenres.forEach(function(g){
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "genre-pill interactive";
+        btn.textContent = g;
+        btn.title = "Filter anime berdasarkan genre: " + g;
+        btn.onclick = function(e){
+          e.stopPropagation();
+          closeTitle();
+          if(window.Tui && window.Tui.applyGenreFilter){
+            window.Tui.applyGenreFilter(g);
+          }
+        };
+        genEl.appendChild(btn);
+      });
+      genEl.classList.remove("hidden");
+      hasAny = true;
+    } else {
+      genEl.classList.add("hidden");
+    }
+  }
+
+  // Synopsis
+  var synBox = $("tm-synopsis-box");
+  var synText = $("tm-synopsis");
+  var synToggle = $("tm-synopsis-toggle");
+  if(synBox && synText && synToggle){
+    var desc = (meta.synopsis || "").trim();
+    if(desc){
+      synText.textContent = desc;
+      synText.classList.remove("expanded");
+      synText.classList.add("clamped");
+      synToggle.textContent = "Selengkapnya ▼";
+      synBox.classList.remove("hidden");
+      hasAny = true;
+
+      synToggle.onclick = function(){
+        if(synText.classList.contains("clamped")){
+          synText.classList.remove("clamped");
+          synText.classList.add("expanded");
+          synToggle.textContent = "Tutup Sinopsis ▲";
+        } else {
+          synText.classList.remove("expanded");
+          synText.classList.add("clamped");
+          synToggle.textContent = "Selengkapnya ▼";
+        }
+      };
+    } else {
+      synBox.classList.add("hidden");
+    }
+  }
+
+  if(hasAny){
+    box.classList.remove("hidden");
+  } else {
+    box.classList.add("hidden");
+  }
+}
+
+function openTitle(slug,title,poster,type,epsCounter,meta){
+  cur.slug=slug;cur.title=title;cur.poster=poster||cur.poster||"";cur.type=type||cur.type||"";cur.eps=[];
+  cur.eps_counter=epsCounter||"";
+  cur.lastWatchedEp=null;
+  cur.watched={};
+  cur.activeEpRange=null;
+  cur.meta=meta||null;
+  setPlaySpeed(1.0, false);
   renderSourceUI();
   $("tm-title").textContent=title;
   $("tm-sub").textContent=slug;
@@ -31,6 +267,9 @@ function openTitle(slug,title){
   $("ep-filter").value="";
   var sBar=$("tm-seasons");if(sBar)sBar.classList.add("hidden");
   var sChips=$("tm-seasons-chips");if(sChips)sChips.innerHTML="";
+  renderDetailMeta(meta);
+  updateBookmarkBtn(false);
+  checkModalBookmark(slug);
   $("title-modal").classList.remove("hidden");
   loadEps();
   loadRelations();
@@ -51,14 +290,15 @@ function loadRelations(){
     var count=0;
     for(var i=0;i<rels.length;i++){
       (function(rel){
-        if(!rel.slug)return; // Lewati jika belum termap ke sumber video
+        if(!rel.slug || rel.slug === thisSlug)return; // Lewati jika belum termap ke sumber video atau menunjuk ke anime aktif
         count++;
         var b=document.createElement("button");
         var cls="season-chip";
-        var icon="📺";
-        if(rel.relation==="PREQUEL"){cls+=" prequel";icon="⏮";}
-        else if(rel.relation==="SEQUEL"){cls+=" sequel";icon="⏭";}
-        else if(rel.format==="MOVIE"){cls+=" movie";icon="🎬";}
+        var icon='<svg class="ui-icon"><use href="#icon-tv"/></svg>';
+        if(rel.format==="MOVIE"){cls+=" movie";icon='<svg class="ui-icon"><use href="#icon-film"/></svg>';}
+        else if(rel.format==="OVA"||rel.format==="SPECIAL"||rel.format==="ONA"){cls+=" special";icon='<svg class="ui-icon"><use href="#icon-disc"/></svg>';}
+        else if(rel.relation==="PREQUEL"){cls+=" prequel";icon='<svg class="ui-icon"><use href="#icon-step-prev"/></svg>';}
+        else if(rel.relation==="SEQUEL"){cls+=" sequel";icon='<svg class="ui-icon"><use href="#icon-step-next"/></svg>';}
         b.className=cls;
         b.title=rel.title+(rel.year?" ("+rel.year+")":"");
         b.innerHTML="<span>"+icon+"</span> <b>"+rel.label+"</b>: "+esc(rel.title);
@@ -81,6 +321,38 @@ function loadRelations(){
 var _epsMemCache = {};
 cur.activeEpRange = null;
 
+function recordEpisodeWatched(slug, ep){
+  if(!slug || !ep) return;
+  ep = parseInt(ep);
+  if(isNaN(ep)) return;
+  if(!cur.watched) cur.watched = {};
+  if(cur.slug === slug){
+    cur.watched[ep] = 1;
+    cur.lastWatchedEp = ep;
+  }
+
+  try {
+    localStorage.setItem("tatap_last_ep_" + slug, String(ep));
+    var wKey = "tatap_watched_" + slug;
+    var wObj = {};
+    try { wObj = JSON.parse(localStorage.getItem(wKey) || "{}"); } catch(e){}
+    wObj[ep] = 1;
+    localStorage.setItem(wKey, JSON.stringify(wObj));
+  } catch(e){}
+
+  window.Tatap.saveHist({
+    slug: slug,
+    title: cur.title || slug,
+    episode: ep,
+    mode: cur.mode || "sub",
+    progress: 0,
+    poster: cur.poster || "",
+    type: cur.type || ""
+  }).then(function(){
+    renderContinue();
+  }).catch(function(){});
+}
+
 function renderEpRanges(){
   var bar = $("tm-ep-ranges");
   if(!bar) return;
@@ -94,13 +366,20 @@ function renderEpRanges(){
   bar.classList.remove("hidden");
   var total = cur.eps.length;
   var step = 100;
-  var lastWatchedEp = -1;
-  if(cur.watched){
+  var lastWatchedEp = cur.lastWatchedEp || -1;
+  if(lastWatchedEp <= 0 && cur.slug){
+    try {
+      var sLast = localStorage.getItem("tatap_last_ep_" + cur.slug);
+      if(sLast) lastWatchedEp = parseInt(sLast);
+    } catch(e){}
+  }
+  if(lastWatchedEp <= 0 && cur.watched){
     for(var w in cur.watched){
       var n = parseInt(w);
       if(n > lastWatchedEp) lastWatchedEp = n;
     }
   }
+  if(lastWatchedEp > 0) cur.lastWatchedEp = lastWatchedEp;
 
   var ranges = [];
   for(var s = 1; s <= total; s += step){
@@ -136,29 +415,81 @@ function renderEpRanges(){
 
 function loadEps(){
   cur.activeEpRange = null;
-  var cached = _epsMemCache[cur.slug];
-  if(cached){
+  cur.lastWatchedEp = null;
+  cur.watched = {};
+  var thisSlug = cur.slug;
+  if(thisSlug){
+    try {
+      var localWatched = JSON.parse(localStorage.getItem("tatap_watched_" + thisSlug) || "{}");
+      cur.watched = Object.assign({}, localWatched);
+      var s = localStorage.getItem("tatap_last_ep_" + thisSlug);
+      if(s) cur.lastWatchedEp = parseInt(s);
+    } catch(e){}
+  }
+
+  var countLabel = function(){
+    var base = cur.eps.length + " episode";
+    if(cur.eps_counter){
+      var parts = cur.eps_counter.split('/');
+      if(parts.length === 2 && parts[1] && parts[1] !== '?'){
+        base = cur.eps.length + "/" + parts[1] + " episode rilis";
+      } else {
+        base = cur.eps.length + " episode rilis";
+      }
+    }
+    return base + " · " + cur.mode.toUpperCase();
+  };
+  var cached = _epsMemCache[thisSlug];
+  if(cached && thisSlug === cur.slug){
     cur.eps = cached;
-    $("tm-count").textContent = cur.eps.length + " episode · " + cur.mode.toUpperCase();
+    $("tm-count").textContent = countLabel();
     renderEpRanges();
     renderEpGrid();
   }
 
-  window.Tatap.episodes(cur.slug).then(function(r){
+  window.Tatap.episodes(thisSlug).then(function(r){
+    if(thisSlug !== cur.slug) return;
     if(!r.success){
       if(!cached) $("tm-count").textContent = "error: " + r.error;
       return;
     }
     cur.eps = r.data.episodes || [];
-    _epsMemCache[cur.slug] = cur.eps;
-    var watched = {};
+    _epsMemCache[thisSlug] = cur.eps;
+    if(r.data.detail || r.data.synopsis){
+      var detail = Object.assign({}, cur.meta || {}, r.data.detail || {});
+      if(r.data.synopsis && (!detail.synopsis || r.data.synopsis.length > detail.synopsis.length)){
+        detail.synopsis = r.data.synopsis;
+      }
+      cur.meta = detail;
+      renderDetailMeta(detail);
+    }
     window.Tatap.history().then(function(h){
-      (h.data || []).forEach(function(x){ if(x.slug === cur.slug) watched[x.episode] = 1; });
-      cur.watched = watched;
-      $("tm-count").textContent = cur.eps.length + " episode · " + cur.mode.toUpperCase();
+      if(thisSlug !== cur.slug) return;
+      var foundInHist = false;
+      (h.data || []).forEach(function(x){
+        if(x.slug === thisSlug){
+          foundInHist = true;
+          if(!cur.watched) cur.watched = {};
+          cur.watched[x.episode] = 1;
+          cur.lastWatchedEp = x.episode;
+        }
+      });
+      if(foundInHist && thisSlug === cur.slug && cur.lastWatchedEp){
+        try {
+          var wKey = "tatap_watched_" + thisSlug;
+          var wObj = {};
+          try { wObj = JSON.parse(localStorage.getItem(wKey) || "{}"); } catch(e){}
+          for(var k in cur.watched){ wObj[k] = 1; }
+          localStorage.setItem(wKey, JSON.stringify(wObj));
+          localStorage.setItem("tatap_last_ep_" + thisSlug, String(cur.lastWatchedEp));
+        } catch(e){}
+      }
+      $("tm-count").textContent = countLabel();
       renderEpRanges();
       renderEpGrid();
     }).catch(function(){
+      if(thisSlug !== cur.slug) return;
+      $("tm-count").textContent = countLabel();
       renderEpRanges();
       renderEpGrid();
     });
@@ -175,6 +506,14 @@ function renderEpGrid(){
   var epsToRender = cur.eps || [];
   var useRange = !f && cur.activeEpRange && !cur.activeEpRange.isAll;
 
+  var lastEp = cur.lastWatchedEp;
+  if(!lastEp && cur.slug){
+    try {
+      var storedLast = localStorage.getItem("tatap_last_ep_" + cur.slug);
+      if(storedLast) lastEp = parseInt(storedLast);
+    } catch(e){}
+  }
+
   for(var i = 0; i < epsToRender.length; i++){
     var epObj = epsToRender[i];
     var ep = epObj.ep;
@@ -183,8 +522,25 @@ function renderEpGrid(){
 
     shown++;
     var b = document.createElement("button");
-    b.className = "ep" + (cur.watched && cur.watched[ep] ? " watched" : "");
-    b.textContent = ep;
+    var isLast = (lastEp && ep === lastEp);
+    var isWatched = (cur.watched && cur.watched[ep]);
+
+    var cls = "ep";
+    if(isLast){
+      cls += " last-watch";
+    } else if(isWatched){
+      cls += " watched";
+    }
+    b.className = cls;
+
+    if(isLast){
+      b.innerHTML = '<span class="ep-num">' + ep + '</span><span class="ep-badge-last">TERAKHIR</span>';
+      b.title = "Episode " + ep + " (Terakhir ditonton)";
+    } else {
+      b.textContent = ep;
+      if(isWatched) b.title = "Episode " + ep + " (Sudah ditonton)";
+    }
+
     (function(targetEp){
       b.addEventListener("click", function(e){
         if(e) e.stopPropagation();
@@ -196,6 +552,16 @@ function renderEpGrid(){
 
   if(shown > 0){
     box.appendChild(frag);
+    if(lastEp){
+      setTimeout(function(){
+        var activeBtn = box.querySelector(".ep.last-watch");
+        if(activeBtn){
+          try {
+            activeBtn.scrollIntoView({behavior: "smooth", block: "nearest", inline: "nearest"});
+          } catch(e){}
+        }
+      }, 50);
+    }
   } else {
     box.innerHTML = "<p class='dim'>Tidak ada episode cocok filter.</p>";
   }
@@ -205,10 +571,187 @@ function syncSeg(){
   document.querySelectorAll("#mode-seg button").forEach(function(x){x.classList.toggle("active",x.getAttribute("data-mode")===cur.mode);});
 }
 
+function formatTimeSec(sec){
+  sec = Math.max(0, Math.floor(sec || 0));
+  var m = Math.floor(sec / 60);
+  var s = sec % 60;
+  if(m >= 60){
+    var h = Math.floor(m / 60);
+    m = m % 60;
+    return h + ":" + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+  }
+  return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+}
+
+var _lastProgressSaveTime = 0;
+function recordWatchProgress(force){
+  var v = $("vid");
+  if(!v || !cur.slug || !cur.ep) return;
+  var now = Date.now();
+  if(!force && (now - _lastProgressSaveTime < 5000)) return;
+  _lastProgressSaveTime = now;
+  var curPos = Math.floor(v.currentTime || 0);
+  var dur = Math.floor(v.duration || 0);
+  if(curPos <= 0 && !force) return;
+  window.Tatap.saveProgress(cur.slug, cur.ep, curPos, dur).then(function(){
+    renderContinue();
+  }).catch(function(){});
+}
+
+var _activeResumeCleanup = null;
+function closeResumeModal(){
+  if(_activeResumeCleanup){
+    _activeResumeCleanup();
+    _activeResumeCleanup = null;
+  }
+  var rm = $("resume-modal");
+  if(rm) rm.classList.add("hidden");
+}
+
+function dismissResumeModal(){
+  cur.playToken = ++_playTokenCounter;
+  var savedSlug = cur.slug;
+  var savedTitle = cur.title;
+  var savedPoster = cur.poster;
+  var savedType = cur.type;
+  var savedCounter = cur.eps_counter;
+
+  closeResumeModal();
+
+  if(savedSlug){
+    var tm = $("title-modal");
+    if(tm && tm.classList.contains("hidden")){
+      openTitle(savedSlug, savedTitle, savedPoster, savedType, savedCounter);
+    } else {
+      if(tm) tm.classList.remove("hidden");
+      renderEpGrid();
+    }
+  }
+}
+
 function openPlayer(ep, resumeTime){
+  if(resumeTime === undefined){
+    var fetchToken = ++_playTokenCounter;
+    cur.playToken = fetchToken;
+    var reqSlug = cur.slug;
+    window.Tatap.getProgress(reqSlug, ep).then(function(r){
+      if(cur.playToken !== fetchToken || cur.slug !== reqSlug) return;
+      if(r && r.success && r.data && r.data.should_resume && r.data.progress >= 15){
+        var p = r.data.progress;
+        var dur = r.data.duration || 0;
+        var fTime = r.data.formatted || formatTimeSec(p);
+        var fDur = (dur > 0) ? formatTimeSec(dur) : "--:--";
+        var pct = (dur > 0) ? Math.min(100, Math.max(1, Math.round((p / dur) * 100))) : 0;
+        var modal = $("resume-modal");
+        if(modal){
+          var animeTitle = cur.title || "Lanjutkan Menonton?";
+          var titleEl = $("rm-title");
+          if(titleEl){
+            titleEl.textContent = animeTitle;
+            titleEl.setAttribute("title", animeTitle);
+          }
+          $("rm-sub").innerHTML = "<span class='rm-badge-ep'>EP " + ep + "</span> Tersimpan pada " + fTime + (dur > 0 ? (" dari " + fDur) : "");
+          $("rm-time").textContent = fTime;
+          $("rm-resume-label").textContent = "Lanjutkan (" + fTime + ")";
+
+          var fillEl = $("rm-progress-fill");
+          if(fillEl) fillEl.style.width = pct + "%";
+          var curEl = $("rm-time-current");
+          if(curEl) curEl.textContent = fTime;
+          var totEl = $("rm-time-total");
+          if(totEl) totEl.textContent = (dur > 0) ? fDur : "";
+          var badgeEl = $("rm-percent-badge");
+          if(badgeEl){
+            badgeEl.textContent = (pct > 0) ? (pct + "% selesai") : "Tersimpan";
+          }
+
+          var bResume = $("rm-btn-resume");
+          var bRestart = $("rm-btn-restart");
+          var bCancel = $("rm-btn-cancel");
+          var bClose = $("rm-close");
+
+          var btns = [bResume, bRestart, bCancel].filter(Boolean);
+          var keyHandler = function(e){
+            if(modal.classList.contains("hidden")) return;
+            if(e.key === "ArrowLeft" || e.key === "ArrowUp"){
+              e.preventDefault();
+              var idx = btns.indexOf(document.activeElement);
+              var prevIdx = (idx <= 0) ? btns.length - 1 : idx - 1;
+              if(btns[prevIdx]) btns[prevIdx].focus();
+            } else if(e.key === "ArrowRight" || e.key === "ArrowDown"){
+              e.preventDefault();
+              var idx = btns.indexOf(document.activeElement);
+              var nextIdx = (idx >= btns.length - 1 || idx === -1) ? 0 : idx + 1;
+              if(btns[nextIdx]) btns[nextIdx].focus();
+            } else if(e.key === "Escape"){
+              e.preventDefault();
+              dismissResumeModal();
+            }
+          };
+
+          var cleanupModal = function(){
+            modal.classList.add("hidden");
+            window.removeEventListener("keydown", keyHandler);
+            if(bResume) bResume.onclick = null;
+            if(bRestart) bRestart.onclick = null;
+            if(bCancel) bCancel.onclick = null;
+            if(bClose) bClose.onclick = null;
+            _activeResumeCleanup = null;
+          };
+          _activeResumeCleanup = cleanupModal;
+
+          if(bResume){
+            bResume.onclick = function(){
+              cleanupModal();
+              openPlayer(ep, p);
+            };
+          }
+
+          if(bRestart){
+            bRestart.onclick = function(){
+              cleanupModal();
+              window.Tatap.saveProgress(reqSlug, ep, 0, dur).catch(function(){});
+              openPlayer(ep, 0);
+            };
+          }
+
+          if(bCancel){
+            bCancel.onclick = function(e){
+              if(e) e.stopPropagation();
+              dismissResumeModal();
+            };
+          }
+
+          if(bClose){
+            bClose.onclick = function(e){
+              if(e) e.stopPropagation();
+              dismissResumeModal();
+            };
+          }
+
+          window.addEventListener("keydown", keyHandler);
+          modal.classList.remove("hidden");
+          setTimeout(function(){
+            if(bResume) bResume.focus();
+          }, 50);
+          return;
+        }
+      }
+      if(cur.playToken === fetchToken && cur.slug === reqSlug) openPlayer(ep, 0);
+    }).catch(function(){
+      if(cur.playToken === fetchToken && cur.slug === reqSlug) openPlayer(ep, 0);
+    });
+    return;
+  }
+
   cur.ep=ep;
   cur.playerOpenedAt=Date.now();
+  var token = ++_playTokenCounter;
+  cur.playToken = token;
+  var reqSlug = cur.slug;
+  recordEpisodeWatched(cur.slug, ep);
   closeTitle();
+  closeResumeModal();
   $("player-modal").classList.remove("hidden");
   $("pm-title").textContent=cur.title;
   $("pm-meta").textContent="ep "+ep+" · "+cur.mode.toUpperCase();
@@ -218,6 +761,7 @@ function openPlayer(ep, resumeTime){
   var t0=Date.now();
   var src=cur.source||"";
   window.Tatap.resolve(cur.slug,ep,cur.mode,cur.quality,src).then(function(r){
+    if(cur.playToken !== token || cur.slug !== reqSlug || $("player-modal").classList.contains("hidden")) return;
     if(!r || !r.success){
       $("pm-spinner").classList.add("hidden");
       $("pm-status").textContent="ERROR: "+(r && r.error ? r.error : "gagal resolve stream");
@@ -225,6 +769,9 @@ function openPlayer(ep, resumeTime){
       return;
     }
     cur.res=r.data;
+    cur.intro=(r.data&&r.data.intro)||{start:0,end:0};
+    cur.outro=(r.data&&r.data.outro)||{start:0,end:0};
+    cur.activeSkipTarget=0;
     cur.source=r.data.source||"hianime";
     var picked=r.data.picked||(r.data.variants&&r.data.variants[0])||{q:"HD",url:r.data.master||""};
     var srvText=r.data.server||"";
@@ -237,18 +784,16 @@ function openPlayer(ep, resumeTime){
       };
     }
     renderVariants();
-    // Render dropdown subtitle: pilih track yang cocok dengan preferensi user
-    // (cur.subLang) atau default: true. Simpan URL track yang aktif.
     cur.activeSub = pickSubtitleUrl(r.data.subtitles || [], cur.subLang);
     renderSubtitles(r.data.subtitles || [], cur.activeSub);
-    // Prefetch subtitle segera secara paralel sebelum video selesai buffering
     if(cur.activeSub){
       prefetchSubtitleTrack(cur.activeSub, r.data.referer);
     }
     var streamUrl = (r.data.master && (r.data.master.indexOf(".m3u8") >= 0 || r.data.master.indexOf("/hls") >= 0)) ? r.data.master : (picked ? picked.url : "");
-    playUrl(streamUrl,r.data.referer,cur.activeSub,r.data.referer,resumeTime);
-    window.Tatap.saveHist({slug:cur.slug,title:cur.title,episode:ep,mode:cur.mode}).then(function(){renderContinue();});
+    playUrl(streamUrl,r.data.referer,cur.activeSub,r.data.referer,resumeTime,token);
+    window.Tatap.saveHist({slug:cur.slug,title:cur.title,episode:ep,mode:cur.mode,progress:resumeTime||0}).then(function(){renderContinue();});
   }).catch(function(err){
+    if(cur.playToken !== token || cur.slug !== reqSlug || $("player-modal").classList.contains("hidden")) return;
     $("pm-spinner").classList.add("hidden");
     $("pm-status").textContent="KONEKSI GAGAL: "+(err&&err.message||err);
     toast("Koneksi gagal saat resolve: "+(err&&err.message||err));
@@ -318,7 +863,10 @@ function pickSubtitleUrl(subtitles, preferLang){
     // Match kode bahasa (English → en/id/ja).
     var langMap={"english":"en","indonesian":"id","japanese":"ja","spanish":"es","portuguese":"pt",
                  "french":"fr","german":"de","italian":"it","korean":"ko","chinese":"zh","arabic":"ar",
-                 "russian":"ru","thai":"th","vietnamese":"vi","turkish":"tr","hindi":"hi"};
+                 "russian":"ru","thai":"th","vietnamese":"vi","turkish":"tr","hindi":"hi",
+                 "czech":"cs","danish":"da","dutch":"nl","finnish":"fi","greek":"el","hungarian":"hu",
+                 "norwegian":"no","polish":"pl","romanian":"ro","slovak":"sk","swedish":"sv",
+                 "malay":"ms","tagalog":"tl"};
     var code=langMap[low];
     if(code){
       for(var k=0;k<subtitles.length;k++){
@@ -330,10 +878,15 @@ function pickSubtitleUrl(subtitles, preferLang){
     if((low==="indonesian"||low==="id"||low==="indonesian (gtx+)"||low==="indonesian (aigtx)"||low==="indonesian (ai)"||low==="indonesian (gtx)"||cur.translate)){
       var enTrack=null;
       for(var e=0;e<subtitles.length;e++){
-        var elab=(subtitles[e].label||"").toLowerCase();
-        var elang=(subtitles[e].lang||"").toLowerCase();
-        if(elang==="en"||elab.indexOf("english")===0||elab==="en"){
+        if(isExactEnglishSubTrack(subtitles[e])){
           enTrack=subtitles[e];break;
+        }
+      }
+      if(!enTrack){
+        for(var e2=0;e2<subtitles.length;e2++){
+          if(isPureEnglishSubTrack(subtitles[e2])){
+            enTrack=subtitles[e2];break;
+          }
         }
       }
       if(enTrack&&enTrack.url){
@@ -343,11 +896,13 @@ function pickSubtitleUrl(subtitles, preferLang){
       }
     }
   }
-  // Prioritaskan English jika ada
+  // Prioritaskan exact English jika ada
+  for(var nx=0;nx<subtitles.length;nx++){
+    if(isExactEnglishSubTrack(subtitles[nx]))return subtitles[nx].url;
+  }
+  // Prioritaskan varian English jika ada
   for(var n=0;n<subtitles.length;n++){
-    var nlab=(subtitles[n].label||"").toLowerCase();
-    var nlang=(subtitles[n].lang||"").toLowerCase();
-    if(nlang==="en"||nlab.indexOf("english")===0||nlab.indexOf("eng")===0)return subtitles[n].url;
+    if(isPureEnglishSubTrack(subtitles[n]))return subtitles[n].url;
   }
   // Fallback: default:true (selama bukan Arabic)
   for(var m=0;m<subtitles.length;m++){
@@ -364,17 +919,35 @@ function pickSubtitleUrl(subtitles, preferLang){
   return subtitles[0].url;
 }
 
+var _NON_EN_SUB_KEYWORDS = [
+  "arabic", "arab", "indonesia", "bahasa", "spanish", "espanol", "español",
+  "portuguese", "french", "francais", "german", "deutsch", "italian", "korean",
+  "chinese", "russian", "thai", "vietnamese", "turkish", "hindi", "czech",
+  "danish", "dutch", "finnish", "greek", "hungarian", "norwegian", "polish",
+  "romanian", "slovak", "swedish", "malay", "tagalog", "filipino", "japanese"
+];
+
+function isPureEnglishSubTrack(s){
+  if(!s)return false;
+  var lab=((s.label||"")+"").toLowerCase().trim();
+  var l=((s.lang||"")+"").toLowerCase().trim();
+  for(var k=0;k<_NON_EN_SUB_KEYWORDS.length;k++){
+    if(lab.indexOf(_NON_EN_SUB_KEYWORDS[k])!==-1)return false;
+  }
+  return l==="en"||lab.indexOf("english")===0||lab.indexOf("eng")===0;
+}
+
+function isExactEnglishSubTrack(s){
+  if(!s)return false;
+  var lab=((s.label||"")+"").toLowerCase().trim();
+  return isPureEnglishSubTrack(s)&&(lab==="english"||lab==="english [full]"||lab==="eng");
+}
+
 function renderSubtitles(subtitles, activeUrl){
   var wrap=$("pm-subs-wrap");
   var sel=$("pm-subs");
   if(!wrap||!sel)return;
-  // Dropdown hanya tampil kalau ada minimal 1 track subtitle.
-  // Kalau 0 → sembunyikan wrap (UI tetap clean).
-  if(!subtitles||!subtitles.length){
-    wrap.classList.add("hidden");
-    sel.innerHTML="";
-    return;
-  }
+  subtitles = subtitles || [];
   wrap.classList.remove("hidden");
   sel.innerHTML="";
   // Opsi pertama: "Off" (matikan subtitle).
@@ -383,7 +956,8 @@ function renderSubtitles(subtitles, activeUrl){
   offOpt.textContent="Off";
   sel.appendChild(offOpt);
   // Tambah opsi "Indonesian (AI)", "Indonesian (GTX+)", dan "Indonesian (Google GTX)" kalau ada track English.
-  var englishTrack=null;
+  var exactEnTrack=null;
+  var anyEnTrack=null;
   for(var i=0;i<subtitles.length;i++){
     (function(s){
       var o=document.createElement("option");
@@ -393,15 +967,14 @@ function renderSubtitles(subtitles, activeUrl){
       if(activeUrl&&s.url===activeUrl)o.selected=true;
       sel.appendChild(o);
       // deteksi track English untuk AI-translate source
-      if(!englishTrack){
-        var lab=(s.label||"").toLowerCase();
-        var lcode=(s.lang||"").toLowerCase();
-        if(lcode==="en"||lab.indexOf("english")===0||lab==="en"){
-          englishTrack=s;
-        }
+      if(!exactEnTrack && isExactEnglishSubTrack(s)){
+        exactEnTrack=s;
+      } else if(!anyEnTrack && isPureEnglishSubTrack(s)){
+        anyEnTrack=s;
       }
     })(subtitles[i]);
   }
+  var englishTrack=exactEnTrack||anyEnTrack;
   if(englishTrack&&englishTrack.url){
     var gtxOpt=document.createElement("option");
     gtxOpt.value="gtx:"+englishTrack.url;
@@ -430,6 +1003,18 @@ function renderSubtitles(subtitles, activeUrl){
     }
     sel.appendChild(aiOpt);
   }
+
+  // Opsi custom subtitle eksternal
+  var optCustomFile=document.createElement("option");
+  optCustomFile.value="__custom_file__";
+  optCustomFile.textContent="📁 [+] Muat File Subtitle (.srt / .vtt)...";
+  sel.appendChild(optCustomFile);
+
+  var optCustomUrl=document.createElement("option");
+  optCustomUrl.value="__custom_url__";
+  optCustomUrl.textContent="🌐 [+] Masukkan URL Subtitle Kustom...";
+  sel.appendChild(optCustomUrl);
+
   // Set value juga kalau match dari default tidak ketemu (URL di pickSubtitleUrl).
   if(activeUrl){
     sel.value=activeUrl;
@@ -439,6 +1024,63 @@ function renderSubtitles(subtitles, activeUrl){
   // Event listener: ganti track aktif seketika + simpan preferensi.
   sel.onchange=function(){
     var url=sel.value;
+    if(url==="__custom_file__"){
+      sel.value=activeUrl||"";
+      var fi=$("pm-custom-sub-file");
+      if(fi){
+        fi.value="";
+        fi.onchange=function(){
+          var file=fi.files&&fi.files[0];
+          if(!file)return;
+          var reader=new FileReader();
+          reader.onload=function(e){
+            var text=e.target.result;
+            toast("Memproses file subtitle...");
+            window.Tatap.uploadCustomSub({text:text,filename:file.name,lang:"en"}).then(function(res){
+              if(res&&res.success&&res.data){
+                toast("Subtitle dimuat: "+res.data.cues_count+" cue");
+                var newTrack={label:res.data.label,url:res.data.url,lang:res.data.lang};
+                subtitles.push(newTrack);
+                cur.activeSub=res.data.url;
+                renderSubtitles(subtitles,res.data.url);
+                switchSubtitleTrack(res.data.url);
+              }else{
+                toast("Gagal memuat subtitle: "+((res&&res.error)||"Format tidak valid"));
+              }
+            }).catch(function(err){
+              toast("Gagal upload subtitle: "+err);
+            });
+          };
+          reader.readAsText(file);
+        };
+        fi.click();
+      }
+      return;
+    }
+    if(url==="__custom_url__"){
+      sel.value=activeUrl||"";
+      var inUrl=prompt("Masukkan URL Subtitle (.srt / .vtt):");
+      if(inUrl&&inUrl.trim()){
+        inUrl=inUrl.trim();
+        toast("Mengunduh subtitle dari URL...");
+        window.Tatap.uploadCustomSub({url:inUrl,filename:"URL Kustom",lang:"en"}).then(function(res){
+          if(res&&res.success&&res.data){
+            toast("Subtitle URL berhasil dimuat");
+            var newTrack={label:res.data.label,url:res.data.url,lang:res.data.lang};
+            subtitles.push(newTrack);
+            cur.activeSub=res.data.url;
+            renderSubtitles(subtitles,res.data.url);
+            switchSubtitleTrack(res.data.url);
+          }else{
+            toast("Gagal memuat subtitle: "+((res&&res.error)||"Gagal mengambil URL"));
+          }
+        }).catch(function(err){
+          toast("Gagal mengunduh subtitle: "+err);
+        });
+      }
+      return;
+    }
+
     cur.activeSub=url||null;
     // Track GTX+: synthetic URL "gtx+:<url>" (atau legacy "aigtx:<url>").
     if(url&&(url.indexOf("gtx+:")===0||url.indexOf("aigtx:")===0)){
@@ -571,8 +1213,14 @@ function syncNativeTextTrack(vttText, cues, langCode){
 
   if(v.textTracks){
     for(var j=0;j<v.textTracks.length;j++){
-      if(v.textTracks[j].label&&v.textTracks[j].label.indexOf("Tatap")>=0){
-        v.textTracks[j].mode="disabled";
+      var tt = v.textTracks[j];
+      if(tt.label&&tt.label.indexOf("Tatap")>=0){
+        tt.mode="disabled";
+        if(tt.cues){
+          for(var ci=tt.cues.length-1;ci>=0;ci--){
+            try{tt.removeCue(tt.cues[ci]);}catch(_){}
+          }
+        }
       }
     }
   }
@@ -585,7 +1233,7 @@ function syncNativeTextTrack(vttText, cues, langCode){
     trackEl.kind="subtitles";
     trackEl.label="Tatap Subtitle";
     trackEl.srclang=langCode||"id";
-    trackEl.default=true;
+    trackEl.default=false;
 
     if(vttText&&window.Blob&&window.URL&&window.URL.createObjectURL){
       var blob=new Blob([vttText],{type:"text/vtt"});
@@ -699,11 +1347,64 @@ function paintCue(){
   if(!s)return;
   if($("player-modal").classList.contains("hidden")){s.innerHTML="";return;}
   var t=v.currentTime||0;
-  var html="";
-  for(var i=0;i<cur.cues.length;i++){
-    if(t>=cur.cues[i].start&&t<=cur.cues[i].end){html=cur.cues[i].html;break;}
+  if(isVideoFullscreen()){
+    if(s._last!==""){s.innerHTML="";s._last="";}
+    box.style.display="none";
+  }else{
+    box.style.display="";
+    var html="";
+    for(var i=0;i<cur.cues.length;i++){
+      if(t>=cur.cues[i].start&&t<=cur.cues[i].end){html=cur.cues[i].html;break;}
+    }
+    if(s._last!==html){s.innerHTML=html;s._last=html;}
   }
-  if(s._last!==html){s.innerHTML=html;s._last=html;}
+  checkSkipTimes(t);
+}
+
+function checkSkipTimes(currentTime){
+  var btn=$("pm-skip-btn");
+  var label=$("pm-skip-label");
+  if(!btn||!cur.res){return;}
+  var intro=cur.intro||(cur.res&&cur.res.intro)||{start:0,end:0};
+  var outro=cur.outro||(cur.res&&cur.res.outro)||{start:0,end:0};
+
+  var inIntro=(intro.end>intro.start&&(intro.end-intro.start)>=10&&currentTime>=intro.start&&currentTime<intro.end);
+  var inOutro=(outro.end>outro.start&&(outro.end-outro.start)>=10&&currentTime>=outro.start&&currentTime<outro.end);
+
+  if(inIntro){
+    cur.activeSkipTarget=intro.end+0.5;
+    if(label)label.textContent="Lewati Opening (S)";
+    btn.classList.remove("hidden");
+  }else if(inOutro){
+    cur.activeSkipTarget=outro.end+0.5;
+    if(label)label.textContent="Lewati Ending (S)";
+    btn.classList.remove("hidden");
+  }else{
+    cur.activeSkipTarget=0;
+    btn.classList.add("hidden");
+  }
+}
+
+function doSkip(){
+  if(cur.activeSkipTarget&&cur.activeSkipTarget>0){
+    var v=$("vid");
+    if(v){
+      v.currentTime=cur.activeSkipTarget;
+      var btn=$("pm-skip-btn");
+      if(btn)btn.classList.add("hidden");
+      toast("⏩ Melompat ke "+formatTime(v.currentTime),1500);
+      cur.activeSkipTarget=0;
+      return true;
+    }
+  }
+  return false;
+}
+
+function formatTime(sec){
+  var s=Math.floor(sec||0);
+  var m=Math.floor(s/60);
+  s=s%60;
+  return (m<10?"0"+m:m)+":"+(s<10?"0"+s:s);
 }
 function prefetchSubtitleTrack(url, ref, langCode){
   if(!url)return null;
@@ -759,6 +1460,7 @@ function switchSubtitleTrack(url, langCode){
   // langCode opsional ("id", "ja", dst.) — backend akan translate kalau beda.
   var v=$("vid");
   if(!v)return;
+  var token = cur.playToken;
   // Bersihkan track lama lalu kosongkan overlay.
   syncNativeTextTrack("", [], "");
   cur.cues=[];
@@ -804,6 +1506,7 @@ function switchSubtitleTrack(url, langCode){
   var ref=cur.res&&cur.res.referer||"";
   var subPromise = prefetchSubtitleTrack(originalUrl, ref, langCode);
   subPromise.then(function(res){
+    if(cur.playToken !== token) return;
     clearOverlay();
     cur.cues=parseVtt(res.text);
     paintCue();
@@ -834,14 +1537,18 @@ function switchSubtitleTrack(url, langCode){
         // Jika mode AI Fansub dan disajikan instan via GTX+ / MT, upgrade di background saat AI selesai:
         if(trackMode === "ai" && (res.bg === "llm-translating" || res.tier === "tier2" || res.tier === "gtx+" || res.tier === "cached-gtx+" || res.tier === "aigtx" || res.tier === "cached-aigtx" || res.tier === "cached-mt")){
           var checkUpgrade = function(attempt){
+            if(cur.playToken !== token) return;
             if(attempt > 20) return; // Maksimal ~5 menit
             cur._subUpgradeTimer = setTimeout(function(){
+              if(cur.playToken !== token) return;
               var qs = "url=" + encodeURIComponent(url) + "&referer=" + encodeURIComponent(ref || "") + "&lang=id";
               fetch("/api/player/sub?" + qs).then(function(ur){
+                if(cur.playToken !== token) return;
                 var uTier = ur.headers.get("X-Translate-Tier") || "";
                 var uModel = ur.headers.get("X-Translate-Model") || "";
                 if(uTier === "cached" || uTier === "tier1"){
                   ur.text().then(function(uText){
+                    if(cur.playToken !== token) return;
                     cur.cues = parseVtt(uText);
                     paintCue();
                     syncNativeTextTrack(uText, cur.cues, "id");
@@ -859,6 +1566,7 @@ function switchSubtitleTrack(url, langCode){
       }
     }
   }).catch(function(err){
+    if(cur.playToken !== token) return;
     cur.cues=[];
     clearOverlay();
     syncNativeTextTrack("", [], "");
@@ -884,7 +1592,12 @@ var TouchGestures = {
   showOSD: function(icon, pct, text){
     var el = $("pm-gesture-osd");
     if(!el) return;
-    $("pm-osd-icon").textContent = icon;
+    var iconEl = $("pm-osd-icon");
+    if(icon && (icon.indexOf("<svg") >= 0 || icon.indexOf("<") >= 0)){
+      iconEl.innerHTML = icon;
+    } else {
+      iconEl.textContent = icon;
+    }
     $("pm-osd-bar").style.width = Math.max(0, Math.min(100, pct)) + "%";
     $("pm-osd-val").textContent = text != null ? text : Math.round(pct) + "%";
     el.classList.remove("hidden");
@@ -957,14 +1670,14 @@ var TouchGestures = {
         var min = Math.floor(target / 60);
         var sec = Math.floor(target % 60);
         var timeStr = min + ":" + (sec < 10 ? "0" : "") + sec;
-        self.showOSD("⏩", (target / dur) * 100, timeStr + " (" + sign + diff + "s)");
+        self.showOSD('<svg class="ui-icon"><use href="#icon-forward"/></svg>', (target / dur) * 100, timeStr + " (" + sign + diff + "s)");
         self._targetSeek = target;
       } else if(self.mode === "volume"){
         var deltaV = (-dy / rect.height) * 1.5;
         var nv = Math.max(0, Math.min(1, self.initVol + deltaV));
         v.volume = nv;
         v.muted = (nv === 0);
-        var ic = nv === 0 ? "🔇" : (nv < 0.5 ? "🔉" : "🔊");
+        var ic = nv === 0 ? '<svg class="ui-icon"><use href="#icon-volume-mute"/></svg>' : (nv < 0.5 ? '<svg class="ui-icon"><use href="#icon-volume-mid"/></svg>' : '<svg class="ui-icon"><use href="#icon-volume-high"/></svg>');
         self.showOSD(ic, nv * 100);
       } else if(self.mode === "brightness"){
         var deltaB = (-dy / rect.height) * 120;
@@ -974,7 +1687,7 @@ var TouchGestures = {
         if(window.TatapNative && window.TatapNative.setBrightness){
           window.TatapNative.setBrightness(nb / 100);
         }
-        self.showOSD("☀️", (nb / 150) * 100, Math.round(nb) + "%");
+        self.showOSD('<svg class="ui-icon"><use href="#icon-sun"/></svg>', (nb / 150) * 100, Math.round(nb) + "%");
       }
     }, {passive: true});
 
@@ -1044,8 +1757,14 @@ function armAutohide(){
   v.addEventListener("seeking",show);
   show();
 }
-function playUrl(url,referrer,sub,subRef,resumeTime){
+function playUrl(url,referrer,sub,subRef,resumeTime,token){
+  var pm = $("player-modal");
   var v=$("vid");
+  if(!pm || pm.classList.contains("hidden") || (token && cur.playToken !== token)){
+    if(window._hls){try{window._hls.destroy();window._hls=null;}catch(e){}}
+    if(v){try{v.pause();v.removeAttribute("src");v.load();}catch(e){}}
+    return;
+  }
   if(v){
     v.muted=false;
     if(v.volume===0) v.volume=1.0;
@@ -1093,6 +1812,10 @@ function playUrl(url,referrer,sub,subRef,resumeTime){
       backBufferLength:30,
       liveSyncDurationCount:2,
       maxFragLookUpTolerance:0.5,
+      nudgeOffset:0.1,
+      nudgeMaxRetry:5,
+      maxStarvationDelay:4,
+      highBufferWatchdogPeriod:2,
       testBandwidth:false,
       progressive:true,
       lowLatencyMode:false,
@@ -1100,6 +1823,12 @@ function playUrl(url,referrer,sub,subRef,resumeTime){
       enableWorker:true
     });
     window._hls=h;
+    h._networkRetryCount = 0;
+    h._mediaRetryCount = 0;
+    h.on(Hls.Events.FRAG_LOADED, function(){
+      h._networkRetryCount = 0;
+      h._mediaRetryCount = 0;
+    });
     h.on(Hls.Events.AUDIO_TRACKS_UPDATED,function(ev,data){
       if(data&&data.audioTracks&&data.audioTracks.length){
         var isDub = (cur.mode === "dub");
@@ -1140,7 +1869,11 @@ function playUrl(url,referrer,sub,subRef,resumeTime){
           for(var fi=0;fi<fr.length;fi++){if(!fr[fi].loaded){nxt=fr[fi];break;}}
         }
         if(nxt&&nxt.url){
-          fetch("/api/player/video?url="+encodeURIComponent(nxt.url)+"&referer="+encodeURIComponent(referrer||""),{mode:"no-cors",priority:"low"}).catch(function(){});
+          var fetchTarget = nxt.url;
+          if(!fetchTarget.startsWith("/api/player/video") && !fetchTarget.startsWith("/api/")){
+            fetchTarget = "/api/player/video?url="+encodeURIComponent(nxt.url)+"&referer="+encodeURIComponent(referrer||"");
+          }
+          fetch(fetchTarget,{mode:"no-cors",priority:"low"}).catch(function(){});
         }
       }catch(e){}
     });
@@ -1197,20 +1930,28 @@ function playUrl(url,referrer,sub,subRef,resumeTime){
     h.attachMedia(v);
     h.on(Hls.Events.ERROR,function(ev,d){
       if(!d)return;
+      if(d.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR || d.details === "bufferStalledError"){
+        try{
+          if(!v.paused && v.readyState >= 2){
+            v.currentTime += 0.08;
+          }
+          h.startLoad();
+        }catch(_){}
+        return;
+      }
       if(d.fatal){
         if(d.type===Hls.ErrorTypes.NETWORK_ERROR){
-          // Coba pulihkan koneksi network sekali sebelum menyerah
-          if(!h._networkRetried){
-            h._networkRetried=true;
-            $("pm-status").textContent="mencoba memulihkan koneksi stream...";
-            h.startLoad();
+          h._networkRetryCount = (h._networkRetryCount || 0) + 1;
+          if(h._networkRetryCount <= 4){
+            $("pm-status").textContent="mencoba memulihkan koneksi stream ("+h._networkRetryCount+"/4)...";
+            setTimeout(function(){ try{h.startLoad();}catch(_){} }, 600);
             return;
           }
         }else if(d.type===Hls.ErrorTypes.MEDIA_ERROR){
-          if(!h._mediaRetried){
-            h._mediaRetried=true;
-            $("pm-status").textContent="mencoba memulihkan codec media...";
-            h.recoverMediaError();
+          h._mediaRetryCount = (h._mediaRetryCount || 0) + 1;
+          if(h._mediaRetryCount <= 3){
+            $("pm-status").textContent="mencoba memulihkan codec media ("+h._mediaRetryCount+"/3)...";
+            setTimeout(function(){ try{h.recoverMediaError();}catch(_){} }, 500);
             return;
           }
         }
@@ -1228,6 +1969,11 @@ function playUrl(url,referrer,sub,subRef,resumeTime){
     });
   }else{
     v.src=isHls?prox:url;
+  }
+  if(pm.classList.contains("hidden") || (token && cur.playToken !== token)){
+    if(window._hls){try{window._hls.destroy();window._hls=null;}catch(e){}}
+    if(v){try{v.pause();v.removeAttribute("src");v.load();}catch(e){}}
+    return;
   }
   v.play().catch(function(err){
     $("pm-spinner").classList.add("hidden");
@@ -1284,20 +2030,54 @@ function stepEp(d){
   var idx=-1;
   for(var i=0;i<cur.eps.length;i++)if(cur.eps[i].ep===cur.ep)idx=i;
   var nxt=cur.eps[idx+d];
-  if(nxt)openPlayer(nxt.ep);
+  if(nxt){
+    cur.ep=nxt.ep;
+    updatePrevNext();
+    openPlayer(nxt.ep);
+  }
   else toast(d>0?"Sudah episode terakhir":"Sudah episode pertama");
 }
 function closePlayer(){
+  // 1. Invalidate all pending async playback tokens immediately
+  cur.playToken = ++_playTokenCounter;
+
+  // 2. Safely stop and destroy video & HLS stream
   var v=$("vid");
-  try{v.pause();}catch(e){}
+  try{recordWatchProgress(true);}catch(e){}
+  if(v){
+    try{v.pause();}catch(e){}
+    v.removeAttribute("src");
+    try{v.load();}catch(e){}
+  }
   if(window._hls){try{window._hls.destroy();window._hls=null;}catch(e){}}
   cur.cues=[];
   clearOverlay();
   syncNativeTextTrack("", [], "");
-  v.removeAttribute("src");
-  try{v.load();}catch(e){}
+
+  // 3. Hide modal & spinner
   $("player-modal").classList.add("hidden");
   $("pm-spinner").classList.add("hidden");
+
+  // 4. Exit fullscreen safely if active
+  if(document.fullscreenElement || document.webkitFullscreenElement){
+    try{
+      if(document.exitFullscreen) document.exitFullscreen();
+      else if(document.webkitExitFullscreen) document.webkitExitFullscreen();
+    }catch(e){}
+  }
+
+  // 5. Perilaku post-watch: kembalikan user ke list episode anime dengan marker last watch yang aktif
+  var savedSlug = cur.slug;
+  if(savedSlug){
+    var tm = $("title-modal");
+    if(cur.eps && cur.eps.length > 0){
+      if(tm) tm.classList.remove("hidden");
+      renderEpRanges();
+      renderEpGrid();
+    } else {
+      openTitle(savedSlug, cur.title, cur.poster, cur.type, cur.eps_counter);
+    }
+  }
 }
 function playMPV(){
   window.Tatap.playMPV({slug:cur.slug,title:cur.title,ep:cur.ep||1,mode:cur.mode,quality:cur.quality}).then(function(r){
@@ -1316,7 +2096,10 @@ function renderContinue(){
       (function(x){
         var d=document.createElement("div");d.className="hist-card";
         var b=document.createElement("b");b.textContent=x.title;d.appendChild(b);
-        var s=document.createElement("span");s.textContent="ep "+x.episode+" · "+x.mode+" · lanjutkan ▶";d.appendChild(s);
+        var s=document.createElement("span");
+        var progStr = (x.progress && x.progress >= 15) ? (" · " + formatTimeSec(x.progress)) : "";
+        s.textContent="ep "+x.episode+progStr+" · "+x.mode+" · lanjutkan ▶";
+        d.appendChild(s);
         d.addEventListener("click",function(){
           cur.slug=x.slug;cur.title=x.title;cur.mode=x.mode||"sub";syncSeg();
           openTitle(x.slug,x.title);openPlayer(x.episode);
@@ -1341,9 +2124,11 @@ function startAmbient(){
   var tctx=null;
   try{tctx=tmp.getContext("2d",{willReadFrequently:true});}catch(e){tctx=tmp.getContext("2d");}
   setInterval(function(){
+    if(document.hidden)return;
     if(document.body.classList.contains("no-ambient"))return;
     if($("player-modal").classList.contains("hidden"))return;
     if(v.paused||v.ended||v.readyState<2||v.videoWidth===0)return;
+    if(isVideoFullscreen())return;
     try{
       tctx.drawImage(v,0,0,48,27);
       var px;
@@ -1364,7 +2149,7 @@ function startAmbient(){
       ctx.fillRect(0,0,96,54);
       setFallback(r,g,b);
     }catch(e){}
-  },500);
+  },1200);
 }
 function onKeyPlayer(e){
   var t=(e.target.tagName||"");
@@ -1377,6 +2162,7 @@ function onKeyPlayer(e){
       // Fullscreen will be closed natively by browser, keep player modal open
       return;
     }
+    if($("resume-modal") && !$("resume-modal").classList.contains("hidden")){dismissResumeModal();return;}
     if($("drawer-panel") && !$("drawer-panel").classList.contains("hidden")){closeDrawer();return;}
     if($("update-modal") && !$("update-modal").classList.contains("hidden")){closeUpdateModal();return;}
     if(!$("player-modal").classList.contains("hidden"))closePlayer();
@@ -1388,8 +2174,17 @@ function onKeyPlayer(e){
   else if(e.key==="f"||e.key==="F"){e.preventDefault();toggleFullscreen();}
   else if(e.key==="n")stepEp(1);
   else if(e.key==="p")stepEp(-1);
-  else if(e.key==="m")v.muted=!v.muted;
-  else if(e.key==="s"||e.key==="S")switchSource();
+  else if(e.key==="["||e.key==="{"){e.preventDefault();adjustPlaySpeed(-1);}
+  else if(e.key==="]"||e.key==="}"){e.preventDefault();adjustPlaySpeed(1);}
+  else if(e.key==="m"||e.key==="M"){e.preventDefault();v.muted=!v.muted;}
+  else if(e.key==="s"||e.key==="S"){
+    if(cur.activeSkipTarget&&cur.activeSkipTarget>0){
+      e.preventDefault();
+      doSkip();
+    }else{
+      switchSource();
+    }
+  }
   else if(e.key==="ArrowRight"){e.preventDefault();v.currentTime+=5;}
   else if(e.key==="ArrowLeft"){e.preventDefault();v.currentTime-=5;}
 }
@@ -1577,9 +2372,11 @@ App = {
   openTitle:openTitle, openPlayer:openPlayer, playMPV:playMPV,
   renderContinue:renderContinue, onKeyPlayer:onKeyPlayer,
   switchSource:switchSource,
+  setPlaySpeed:setPlaySpeed, adjustPlaySpeed:adjustPlaySpeed,
   openDrawer:openDrawer, closeDrawer:closeDrawer,
   openUpdateModal:openUpdateModal, closeUpdateModal:closeUpdateModal,
   checkForUpdate:checkForUpdate,
+  closeResumeModal:closeResumeModal, dismissResumeModal:dismissResumeModal,
   openGenreModal:function(){
     if(typeof window.Tui!=="undefined"&&window.Tui.openGenreModal){
       window.Tui.openGenreModal();
@@ -1607,8 +2404,36 @@ function init(){
   });
   var v=$("vid");
   if(v){
-    v.addEventListener("timeupdate",paintCue);
+    v.addEventListener("timeupdate",function(){
+      paintCue();
+      recordWatchProgress(false);
+    });
+    v.addEventListener("pause",function(){
+      recordWatchProgress(true);
+    });
+    v.addEventListener("ended",function(){
+      var endedSlug = cur.slug;
+      var endedEp = cur.ep;
+
+      if(endedSlug && endedEp){
+        window.Tatap.saveProgress(endedSlug, endedEp, 0, Math.floor(v.duration||0)).catch(function(){});
+        recordEpisodeWatched(endedSlug, endedEp);
+      }
+
+      closePlayer();
+      toast("Episode " + endedEp + " selesai diputar");
+    });
     v.addEventListener("seeked",paintCue);
+    v.addEventListener("loadedmetadata",function(){
+      if(currentPlaybackSpeed && v.playbackRate !== currentPlaybackSpeed){
+        try{ v.playbackRate = currentPlaybackSpeed; }catch(e){}
+      }
+    });
+    v.addEventListener("play",function(){
+      if(currentPlaybackSpeed && v.playbackRate !== currentPlaybackSpeed){
+        try{ v.playbackRate = currentPlaybackSpeed; }catch(e){}
+      }
+    });
     v.addEventListener("fullscreenchange",syncFullscreenSubtitles);
     v.addEventListener("webkitfullscreenchange",syncFullscreenSubtitles);
     v.addEventListener("webkitbeginfullscreen",syncFullscreenSubtitles);
@@ -1654,6 +2479,8 @@ function init(){
   document.addEventListener("MSFullscreenChange",syncFullscreenSubtitles);
   var pmFs=$("pm-fs");
   if(pmFs)pmFs.addEventListener("click",toggleFullscreen);
+  var skipBtn=$("pm-skip-btn");
+  if(skipBtn)skipBtn.addEventListener("click",doSkip);
   renderSourceUI();
   var sbSrc=$("sb-source");
   if(sbSrc) sbSrc.addEventListener("click",function(){switchSource();});
@@ -1683,9 +2510,18 @@ function init(){
       b.classList.add("active");cur.quality=b.getAttribute("data-q");
     });
   });
-  $("ep-filter").addEventListener("input",renderEpGrid);
-  $("tm-close").addEventListener("click",closeTitle);
-  $("title-modal").addEventListener("click",function(e){if(e.target===this)closeTitle();});
+  $("tm-close").addEventListener("click",function(){
+    cur.playToken = ++_playTokenCounter;
+    closeTitle();
+  });
+  var tmBmBtn=$("tm-bookmark-btn");
+  if(tmBmBtn) tmBmBtn.addEventListener("click",toggleModalBookmark);
+  $("title-modal").addEventListener("click",function(e){
+    if(e.target===this){
+      cur.playToken = ++_playTokenCounter;
+      closeTitle();
+    }
+  });
   $("pm-close").addEventListener("click",closePlayer);
   $("player-modal").addEventListener("click",function(e){
     if(Date.now() - (cur.playerOpenedAt || 0) < 500) return;
@@ -1698,6 +2534,12 @@ function init(){
   if(qSel){
     qSel.addEventListener("change",function(){
       switchQ(this.value);
+    });
+  }
+  var spdSel=$("pm-speed-select");
+  if(spdSel){
+    spdSel.addEventListener("change",function(){
+      setPlaySpeed(parseFloat(this.value), true);
     });
   }
   startAmbient();
@@ -1730,6 +2572,12 @@ function init(){
     if(window.Tui && window.Tui.openGenreModal) window.Tui.openGenreModal();
   });
 
+  var drawerCatFilter = $("drawer-catalog-filter");
+  if(drawerCatFilter) drawerCatFilter.addEventListener("click", function(){
+    closeDrawer();
+    if(window.Tui && window.Tui.openCatalogFilterModal) window.Tui.openCatalogFilterModal();
+  });
+
   var drawerSrc = $("drawer-switch-source");
   if(drawerSrc) drawerSrc.addEventListener("click", function(){
     switchSource();
@@ -1757,6 +2605,16 @@ function init(){
   var um = $("update-modal");
   if(um) um.addEventListener("click", function(e){
     if(e.target === um) closeUpdateModal();
+  });
+
+  var rmClose = $("rm-close");
+  if(rmClose) rmClose.addEventListener("click", dismissResumeModal);
+  var rm = $("resume-modal");
+  if(rm) rm.addEventListener("click", function(e){
+    if(e.target === rm) dismissResumeModal();
+  });
+  window.addEventListener("beforeunload", function(){
+    recordWatchProgress(true);
   });
 
   window.Tui.boot();

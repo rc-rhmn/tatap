@@ -688,12 +688,113 @@ def _restore_line(text: str) -> str:
 # Post-Processing Lexicon Sanitizer (Normalisasi Diksi Fansub Indonesia)
 # ---------------------------------------------------------------------------
 
-_FORMAL_INDICATORS_RE = _re.compile(
-    r"\b(paduka|yang mulia|baginda|hamba|tuan putri|pangeran|yang terhormat|jenderal|komandan|"
-    r"nona besar|tuan muda|tuanku|saya mohon|letnan|kapten|mayor|kolonel|sersan|kopral|markas besar|"
-    r"kekaisaran|pasukan|prajurit|panglima|inspektur)\b",
+# ---------------------------------------------------------------------------
+# Smart Scene Subtitle Detection (Multi-Domain Context Classifier)
+# ---------------------------------------------------------------------------
+
+_SCENE_MILITARY_RE = _re.compile(
+    r"\b(jenderal|komandan|panglima|marsekal|laksamana|letnan|kapten|mayor|kolonel|sersan|kopral|"
+    r"ajudan|perwira|inspektur|batalyon|batalion|regimen|divisi|peleton|brigade|skuadron|armada|"
+    r"infantri|kavaleri|artileri|markas besar|pos komando|pos terdepan|garis depan|garis belakang|"
+    r"garis pertahanan|benteng pertahanan|koordinat|radar|evakuasi|gencatan senjata|penyerahan tanpa syarat|"
+    r"serangan udara|serangan fajar|manuver tempur|formasi tempur|protokol darurat|protokol keamanan|"
+    r"pengadilan militer|dewan militer|otoritas militer|pasukan pengintai|pasukan pertahanan|pasukan penyerang|"
+    r"baret|peluru kendali|rudal|peluncur roket|amunisi|senjata api|siap laksanakan|lapor, komandan)\b",
     _re.I
 )
+
+_SCENE_ROYAL_RE = _re.compile(
+    r"\b(paduka|yang mulia|baginda|hamba|tuan putri|putri mahkota|pangeran|pangeran mahkota|"
+    r"kaisar|permaisuri|ratu|raja|nobilitas|kaum bangsawan|bangsawan|adipati|duke|duchess|baron|"
+    r"baroness|marquis|marquess|count|viscount|lord|lady|nona besar|tuan muda|tuanku|takhta|"
+    r"istana kekaisaran|dewan kekaisaran|titah baginda|titah kaisar|uskup agung|paus|kardinal|"
+    r"pendeta agung|santo|santa|kuil suci|ksatria suci|kesatria kekaisaran|sihir terlarang|sihir agung)\b",
+    _re.I
+)
+
+_SCENE_GAMING_RE = _re.compile(
+    r"\b(dungeon|guild|party|quest|raid|boss raid|monster bos|buff|debuff|hp|mp|mana|mana pool|"
+    r"skill point|level up|drop rate|drop item|aggro|spawn|respawn|cooldown|magic circle|lingkaran sihir|"
+    r"potion|ramuan penyembuh|guild master|petualang peringkat|status window|jendela status|papan peringkat)\b",
+    _re.I
+)
+
+_FORMAL_INDICATORS_RE = _re.compile(
+    _SCENE_MILITARY_RE.pattern + "|" + _SCENE_ROYAL_RE.pattern,
+    _re.I
+)
+
+# ---------------------------------------------------------------------------
+# Pre-GTX English Slang & Idiom Disambiguation (Stage 1 Normalizer)
+# ---------------------------------------------------------------------------
+
+_PRE_GTX_EN_SLANG_RULES = [
+    (r"\bgotta bounce\b", "gotta go now"),
+    (r"\bhave to bounce\b", "have to go now"),
+    (r"\bno cap\b", "seriously, no lie"),
+    (r"\bthat'?s cap\b", "that is a lie"),
+    (r"\b(i'm|im|i am) down for that\b", "I agree to that"),
+    (r"\b(i'm|im|i am) down\b", "I will join in"),
+    (r"\bchill out\b", "calm down and relax"),
+    (r"\bspill the tea\b", "reveal the secret"),
+    (r"\bspill the beans\b", "reveal the secret"),
+    (r"\bmy bad\b", "my mistake"),
+    (r"\bcall it a day\b", "finish for today"),
+    (r"\bbite the bullet\b", "endure the hardship"),
+    (r"\bcold feet\b", "nervous hesitation"),
+    (r"\bbreak a leg\b", "good luck"),
+    (r"\bsaved by the bell\b", "saved at the critical moment"),
+    (r"\btake a rain check\b", "reschedule for next time"),
+    (r"\bspit it out\b", "say it right now"),
+    (r"\bdon't sweat it\b", "do not worry about it"),
+    (r"\bhold your horses\b", "wait a minute and be patient"),
+    (r"\bcut to the chase\b", "get straight to the point"),
+    (r"\bbeat around the bush\b", "talk evasively"),
+    (r"\bzip your lip\b", "be quiet"),
+    (r"\bthrow (?:someone )?under the bus\b", "betray a teammate"),
+    (r"\bunder the weather\b", "feeling unwell"),
+    (r"\bpiece of cake\b", "very easy task"),
+    (r"\bon the house\b", "free from the shop"),
+    (r"\bhit the sack\b", "go to sleep"),
+    (r"\bzero rizz\b", "zero charisma"),
+    (r"\bno rizz\b", "no charisma"),
+    (r"\btouch grass\b", "face reality"),
+    (r"\bdeadass\b", "completely serious"),
+    (r"\bliving rent[- ]free in (?:my|your|his|her) head\b", "constantly on my mind"),
+    (r"\bcaught in 4k\b", "caught red-handed with clear proof"),
+    (r"\bdown bad\b", "desperately lovesick"),
+    (r"\bmain character energy\b", "protagonist presence"),
+    (r"\bplot armor\b", "invulnerable by script"),
+    (r"\bvibe check\b", "mood check"),
+    (r"\btake the (?:W|w)\b", "win the victory"),
+    (r"\btake the (?:L|l)\b", "take the loss"),
+    (r"\bcross the line\b", "go too far"),
+    (r"\bface the music\b", "accept the consequences"),
+    (r"\bcost an arm and a leg\b", "be extremely expensive"),
+    (r"\bout of the blue\b", "out of nowhere unexpectedly"),
+    (r"\bthrough thick and thin\b", "through good and bad times"),
+    (r"\bjump the gun\b", "act too prematurely"),
+    (r"\bshoot the breeze\b", "chat casually"),
+    (r"\bburn bridges\b", "destroy relationships"),
+    (r"\bblessing in disguise\b", "hidden blessing"),
+    (r"\brule of thumb\b", "general guideline"),
+    (r"\bin a nutshell\b", "in summary"),
+    (r"\bsee eye to eye\b", "agree completely"),
+    (r"\bwater under the bridge\b", "thing of the past"),
+    (r"\bbreak the ice\b", "warm up the atmosphere"),
+    (r"\bhit the nail on the head\b", "be completely accurate"),
+]
+_COMPILED_PRE_GTX_EN_SLANG = [(_re.compile(pat, _re.IGNORECASE), repl) for pat, repl in _PRE_GTX_EN_SLANG_RULES]
+
+def _pre_normalize_en_slang(text: str) -> str:
+    """Pra-pemrosesan teks sumber bahasa Inggris sebelum masuk ke Google Translate (GTX).
+    Menggantikan idiom dan slang bahasa Inggris ambigu yang sering rusak saat diterjemahkan mesin."""
+    if not text:
+        return text
+    result = text
+    for rx, repl in _COMPILED_PRE_GTX_EN_SLANG:
+        result = rx.sub(repl, result)
+    return result
 
 # Aturan universal: selalu dikoreksi (karena merupakan blunder/calque harfiah).
 _UNIVERSAL_FANSUB_RULES = [
@@ -1013,10 +1114,84 @@ _UNIVERSAL_FANSUB_RULES = [
     (r"\bhal pertama di pagi hari\b", "pagi-pagi buta"),
     (r"\btidur di atasnya\b", "pikirkan matang-matang besok"),
     (r"\bkembali ke kotak satu\b", "mulai dari awal lagi"),
+    # Kamus Idiom & Slang Calque (Hasil Terjemahan Harfiah Google Translate)
+    (r"\bharus memantul\b", "harus cabut"),
+    (r"\btidak ada batasan,\s*itu\b", "beneran, itu"),
+    (r"\btidak ada topi,\s*itu\b", "beneran, itu"),
+    (r"\btidak ada topi\b", "beneran"),
+    (r"\bbukan topi\b", "beneran"),
+    (r"\baku turun untuk itu\b", "aku ikut"),
+    (r"\baku turun untuk\b", "aku mau"),
+    (r"\bsaya kecewa karena itu\b", "aku setuju dengan itu"),
+    (r"\bmendingin keluar\b", "santai dulu"),
+    (r"\bdisimpan oleh belnya\b", "selamat di saat kritis"),
+    (r"\bdisimpan oleh bel\b", "selamat di saat kritis"),
+    (r"\bdiselamatkan oleh bel\b", "selamat di saat kritis"),
+    (r"\bsudah dimuntahkan\b", "cepat katakan"),
+    (r"\bkeluarkan ludahmu\b", "cepat katakan"),
+    (r"\bludahkan itu\b", "cepat katakan"),
+    (r"\bpegang kudamu\b", "sabar dulu"),
+    (r"\btahan kudamu\b", "tunggu sebentar"),
+    (r"\bambil cek hujan\b", "lain kali saja"),
+    (r"\btidak mendapat rimpang\b", "tidak punya pesona"),
+    (r"\btanpa rimpang\b", "tidak punya pesona"),
+    (r"\bnol rizz\b", "tidak punya karisma"),
+    (r"\bsentuh rumput\b", "sadar realita"),
+    (r"\bhubungi kenyataan\b", "sadar realita"),
+    (r"\bkeluar dari biru\b", "tiba-tiba"),
+    (r"\bmelalui tebal dan tipis\b", "dalam suka dan duka"),
+    (r"\bmembakar jembatan\b", "memutus hubungan"),
+    (r"\bmenembak angin\b", "mengobrol santai"),
+    (r"\blempar ke bawah bus\b", "mengorbankan kawan"),
+    (r"\bmelempar ke bawah bus\b", "mengorbankan kawan"),
+    (r"\bdalam kulit kacang\b", "singkatnya"),
+    (r"\bpotong untuk mengejar\b", "langsung ke intinya"),
+    (r"\bberkah dalam penyamaran\b", "berkah tersembunyi"),
+    (r"\bmelihat mata ke mata\b", "sependapat"),
+    (r"\bair di bawah jembatan\b", "yang lalu biarlah berlalu"),
+    (r"\bmemecahkan es\b", "mencairkan suasana"),
+    (r"\bbaju besi plot\b", "kebal berkat skenario"),
+    (r"\benergi karakter utama\b", "aura protagonis"),
+    (r"\bhidup bebas sewa di kepalaku\b", "selalu terngiang di kepalaku"),
+    (r"\bhidup bebas sewa\b", "selalu terngiang-ngiang"),
+    (r"\bpantat mati\b", "bener-bener serius"),
+    (r"\btertangkap di 4k\b", "tertangkap basah ada buktinya"),
+    (r"\bturun buruk\b", "ngenes banget"),
+    (r"\bpemeriksaan getaran\b", "cek suasana"),
+    (r"\bmengambil w\b", "meraih kemenangan"),
+    (r"\bambil w\b", "raih kemenangan"),
+    (r"\bmengambil l\b", "menelan kekalahan"),
+    (r"\bambil l\b", "telan kekalahan"),
+    (r"\bbos penjara bawah tanah\b", "bos dungeon"),
+    (r"\btuan serikat\b", "ketua guild"),
+    (r"\bbersihkan pesta\b", "seluruh party gugur"),
+    (r"\btingkat penurunan\b", "drop rate"),
+    (r"\bkolam mana\b", "cadangan mana"),
+    (r"\bperiode pendinginan\b", "waktu cooldown"),
+    (r"\bsatu tembakan mati\b", "sekali serang tewas"),
+    (r"\bsebut itu hari\b", "sudahi dulu hari ini"),
+    (r"\bsebut itu sehari\b", "sudahi dulu hari ini"),
+    (r"\bpanggil itu sehari\b", "sudahi dulu hari ini"),
+    (r"\bpukul karung\b", "pergi tidur"),
+    (r"\bmemukul karung\b", "pergi tidur"),
+    (r"\bjangan berkeringat\b", "jangan dipikirkan"),
+    (r"\bburukku\b", "salahku"),
 ]
 
 # Aturan khusus adegan kasual/santai (tidak diterapkan jika konteks formal/kerajaan).
 _CASUAL_FANSUB_RULES = [
+    (r"\bsaya tidak tahu anda ada di sana\b", "aku nggak tahu kamu ada di sana"),
+    (r"\bsaya nggak tahu anda ada di sana\b", "aku nggak tahu kamu ada di sana"),
+    (r"\baku tidak tahu anda ada di sana\b", "aku nggak tahu kamu ada di sana"),
+    (r"\baku nggak tahu anda ada di sana\b", "aku nggak tahu kamu ada di sana"),
+    (r"\bsaya tidak tahu kamu ada di sana\b", "aku nggak tahu kamu ada di sana"),
+    (r"\bsaya nggak tahu kamu ada di sana\b", "aku nggak tahu kamu ada di sana"),
+    (r"\baku tidak melakukan apa pun\b", "aku nggak ngelakuin apa-apa"),
+    (r"\btidak melakukan apa pun\b", "nggak ngelakuin apa-apa"),
+    (r"\bingin saya mengajari anda\b", "mau kuajari"),
+    (r"\banda perlu baju ganti\b", "kamu butuh baju ganti"),
+    (r"\bapa yang kamu bicarakan\b", "ngomong apa sih kamu"),
+    (r"\bapa yang kau bicarakan\b", "ngomong apa sih kamu"),
     (r"\bkoleksi hotnya\b", "cewek-cewek cakepnya"),
     (r"\bkoleksi hot\b", "cewek-cewek cakep"),
     (r"\bkalau dengerin saya\b", "kalau menurutku sih"),
@@ -1050,9 +1225,10 @@ _CASUAL_FANSUB_RULES = [
     (r"\btak boleh\b", "nggak boleh"),
     (r"\btidak ada\b", "nggak ada"),
     (r"\btak ada\b", "nggak ada"),
+    (r"\b(?:emang\s+)?(?:sudah|udah)\s+kuduga\b", "emang udah kuduga"),
+    (r"\bhanya saja\b", "cuma"),
     (r"\bsudah\b", "udah"),
     (r"\bsaja\b", "aja"),
-    (r"\bhanya saja\b", "cuma"),
     (r"\bhanya\b", "cuma"),
     (r"\bmengapa kamu\b", "kenapa kamu"),
     (r"\bmengapa kau\b", "kenapa kamu"),
@@ -1080,13 +1256,6 @@ _CASUAL_FANSUB_RULES = [
     (r"\bapa yang kau bicarakan\b", "ngomong apa sih kamu"),
     (r"\bbodoh sekali\b", "bodoh banget"),
     (r"\bbagus sekali\b", "hebat banget"),
-    (r"\baku tidak melakukan apa pun\b", "aku nggak ngelakuin apa-apa"),
-    (r"\btidak melakukan apa pun\b", "nggak ngelakuin apa-apa"),
-    (r"\bingin saya mengajari anda\b", "mau kuajari"),
-    (r"\banda perlu baju ganti\b", "kamu butuh baju ganti"),
-    (r"\bsaya tidak tahu anda ada di sana\b", "aku nggak tahu kamu ada di sana"),
-    (r"\baku tidak tahu anda ada di sana\b", "aku nggak tahu kamu ada di sana"),
-    (r"\bsaya tidak tahu kamu ada di sana\b", "aku nggak tahu kamu ada di sana"),
     (r"\bdi sini untuk mengambil\b", "mau mengambil"),
     (r"\banda berpikir\b", "kamu rasa"),
     (r"\bmau bagaimana lagi\b", "mau gimana lagi"),
@@ -1099,7 +1268,6 @@ _CASUAL_FANSUB_RULES = [
     (r"\btidak akan kumaafkan\b", "nggak bakal kumaafkan"),
     (r"\btak akan kumaafkan\b", "nggak bakal kumaafkan"),
     (r"\bsungguh merepotkan\b", "merepotkan banget"),
-    (r"\bsudah kuduga\b", "emang udah kuduga"),
     (r"\bapa yang kamu maksud\b", "maksudmu apa"),
     (r"\bapa maksudmu\b", "maksudmu apa"),
     (r"\bmana aku tahu\b", "mana kutahu"),
@@ -1610,7 +1778,13 @@ async def call_gtx_translate(cues, src="en", tgt="id", timeout=20.0, mode="gtx+"
         return batch_lines, False
 
     loop = _asyncio.get_running_loop()
-    batch_lines_list = [[cue["text"].replace("\n", " ").strip() for cue in b] for b in batches]
+    def _prep_line(text: str) -> str:
+        clean = (text or "").replace("\n", " ").strip()
+        if (src or "").lower() == "en" and (tgt or "").lower() == "id" and mode not in ("pure", "pure_gtx", "gtx"):
+            clean = _pre_normalize_en_slang(clean)
+        return clean
+
+    batch_lines_list = [[_prep_line(cue["text"]) for cue in b] for b in batches]
     with ThreadPoolExecutor(max_workers=3) as executor:
         tasks = [loop.run_in_executor(executor, lambda b=bl: _fetch_batch_sync(b)) for bl in batch_lines_list]
         batch_results = await _asyncio.gather(*tasks)
@@ -1655,6 +1829,8 @@ async def call_mymemory_translate(cues, src, tgt, timeout=30.0):
     async with _httpx.AsyncClient(timeout=timeout) as c:
         for cue in cues:
             text = cue["text"]
+            if (src or "").lower() == "en" and (tgt or "").lower() == "id":
+                text = _pre_normalize_en_slang(text)
             try:
                 r = await c.get(
                     "https://api.mymemory.translated.net/get",

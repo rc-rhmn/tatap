@@ -27,18 +27,19 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Clean up any stale process occupying port 8767 before startup
+# Clean up any stale Tatap process occupying port 8767 before startup
+"${HERE}/usr/bin/python3" -c "import urllib.request; req = urllib.request.Request('http://127.0.0.1:8767/api/shutdown', data=b'', method='POST'); urllib.request.urlopen(req, timeout=0.5)" >/dev/null 2>&1 || true
 fuser -k 8767/tcp >/dev/null 2>&1 || true
 
 # Start backend server
 "${HERE}/usr/bin/python3" "${HERE}/backend/main.py" &
 SERVER_PID=$!
 
-# Wait for server ready (max 10 seconds) using Python internal or curl
+# Wait for server ready (max 10 seconds) using lightweight local ping
 READY=0
 for i in {1..20}; do
-    if "${HERE}/usr/bin/python3" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/api/health', timeout=1)" >/dev/null 2>&1 || \
-       (command -v curl >/dev/null 2>&1 && curl -s --max-time 1 http://127.0.0.1:8767/api/health >/dev/null 2>&1); then
+    if "${HERE}/usr/bin/python3" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/api/ping', timeout=1)" >/dev/null 2>&1 || \
+       (command -v curl >/dev/null 2>&1 && curl -s --max-time 1 http://127.0.0.1:8767/api/ping >/dev/null 2>&1); then
         READY=1
         break
     fi
@@ -62,10 +63,33 @@ for candidate in google-chrome google-chrome-stable chromium chromium-browser br
 done
 
 if [ -n "$BROWSER_CMD" ]; then
-    # Run in isolated application window mode
+    # Run in isolated application window mode with hardware acceleration & minimal CPU overhead
     CHROME_DATA_DIR="${DATA_DIR}/browser-profile"
     mkdir -p "$CHROME_DATA_DIR"
-    "$BROWSER_CMD" --user-data-dir="$CHROME_DATA_DIR" --app="$APP_URL" --window-size=1280,720 --class=tatap >/dev/null 2>&1 &
+    CHROME_FLAGS=(
+        --user-data-dir="$CHROME_DATA_DIR"
+        --app="$APP_URL"
+        --window-size=1280,720
+        --class=tatap
+        # Hardware acceleration & GPU decoding (Mesa VAAPI / NVDEC / Vulkan)
+        --enable-features=VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,CanvasOopRasterization
+        --enable-gpu-rasterization
+        --enable-zero-copy
+        --ignore-gpu-blocklist
+        # Wayland native integration (prevents heavy Xwayland CPU copy overhead)
+        --ozone-platform-hint=auto
+        # Disable background bloat & telemetry that consume CPU
+        --disable-background-networking
+        --disable-component-update
+        --disable-sync
+        --disable-default-apps
+        --no-default-browser-check
+        --no-first-run
+        --disable-breakpad
+        --disable-features=Translate,OptimizationHints,MediaRouter
+        --audio-buffer-size=2048
+    )
+    "$BROWSER_CMD" "${CHROME_FLAGS[@]}" >/dev/null 2>&1 &
     BROWSER_PID=$!
 
     # Fail-safe monitoring: check if browser process is still alive or delegated

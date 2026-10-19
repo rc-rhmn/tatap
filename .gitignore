@@ -19,3 +19,6 @@ build/
 *.jks
 *.keystore
 signing.properties
+local.properties
+*.properties
+!gradle/wrapper/gradle-wrapper.properties

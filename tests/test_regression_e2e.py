@@ -80,15 +80,15 @@ def test_e2e_player_subtitles_episodes_and_recovery(local_server):
         # Tombol next aktif
         assert next_btn.is_disabled() is False
 
-        # 5. Simulasi ganti episode ke Ep 2 via stepEp(+1)
+        # 5. Simulasi ganti episode via stepEp(+1) dengan stubbing openPlayer
+        page.evaluate("() => { window.openPlayer = function(ep) { window.cur.ep = ep; updatePrevNext(); }; }")
         page.evaluate("() => { stepEp(1); }")
         # Di Episode 2, tombol prev sekarang harus aktif
-        page.evaluate("() => { window.cur.ep = 2; updatePrevNext(); }")
         assert prev_btn.is_disabled() is False
         assert next_btn.is_disabled() is False
 
         # Di Episode 3 (terakhir), tombol next WAJIB disabled
-        page.evaluate("() => { window.cur.ep = 3; updatePrevNext(); }")
+        page.evaluate("() => { stepEp(1); }")
         assert next_btn.is_disabled() is True
 
         # 6. Uji Subtitle Dual-Layer Rendering (DOM Overlay & Native Cue)

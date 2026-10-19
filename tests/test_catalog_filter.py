@@ -20,7 +20,8 @@ async def test_browse_cross_filter_params():
     assert data["page"] == 1
     # params dictionary harus menangkap resolusi sy/ey dan sm/em
     params = data.get("params", {})
-    assert params.get("sort") == "score"
+    # Upstream menormalisasi alias sort (score -> avg_score) sebelum query
+    assert params.get("sort") == "avg_score"
     assert params.get("sy") == "2024"
     assert params.get("ey") == "2024"
     assert params.get("sm") == "10"

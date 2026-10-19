@@ -188,7 +188,7 @@ public class AppUpdateManager {
         String currentVer = data.optString("current_version", "2.9.2");
         String latestVer = data.optString("latest_version", currentVer);
         String notes = data.optString("notes", data.optString("body", ""));
-        String releaseUrl = data.optString("release_url", "https://github.com/asfaraguest/tatap/releases/latest");
+        String releaseUrl = data.optString("release_url", "https://github.com/rc-rhmn/tatap/releases/latest");
 
         if (tvBadge != null) {
             tvBadge.setText("v" + currentVer + " ➔ v" + latestVer);
@@ -473,7 +473,7 @@ public class AppUpdateManager {
             conn.setInstanceFollowRedirects(true);
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(30000);
-            conn.setRequestProperty("User-Agent", "Tatap-Android (https://github.com/asfaraguest/tatap)");
+            conn.setRequestProperty("User-Agent", "Tatap-Android (https://github.com/rc-rhmn/tatap)");
 
             int status = conn.getResponseCode();
             if (status == HttpURLConnection.HTTP_MOVED_PERM ||

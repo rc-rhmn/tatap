@@ -18,9 +18,9 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="Log Translasi AI"
-            android:textColor="#F1F5F9"
-            android:textSize="15sp"
-            android:textStyle="bold" />
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_title_large"
+            android:fontFamily="sans-serif-medium" />
 
         <Button
             android:id="@+id/btn_close_logs_dialog"
@@ -44,8 +44,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Memuat log translasi..."
-            android:textColor="#8892B0"
-            android:textSize="11.5sp"
+            android:textColor="@color/text_muted"
+            android:textSize="@dimen/text_code"
             android:fontFamily="monospace" />
     </ScrollView>
 
@@ -60,9 +60,10 @@
             android:layout_width="wrap_content"
             android:layout_height="34dp"
             android:text="Segarkan"
-            android:textColor="#38BDF8"
+            android:textColor="@color/text_accent"
             android:backgroundTint="#161A24"
-            android:textSize="11.5sp"
+            android:textSize="@dimen/text_caption"
+            android:fontFamily="sans-serif-medium"
             android:layout_marginEnd="8dp" />
 
         <Button
@@ -70,8 +71,9 @@
             android:layout_width="wrap_content"
             android:layout_height="34dp"
             android:text="Tutup"
-            android:textColor="#8892B0"
+            android:textColor="@color/text_muted"
             android:backgroundTint="#161A24"
-            android:textSize="11.5sp" />
+            android:textSize="@dimen/text_caption"
+            android:fontFamily="sans-serif-medium" />
     </LinearLayout>
 </LinearLayout>

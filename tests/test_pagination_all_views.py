@@ -58,3 +58,16 @@ async def test_schedule_days_navigation():
         data = res.get("data", {})
         assert data.get("day") == d
         assert "items" in data
+
+
+@pytest.mark.asyncio
+async def test_search_pagination():
+    """Memastikan endpoint search mendukung navigasi halaman berikutnya dan menyertakan total_pages."""
+    res1 = await main.search(q="one piece", page=1, limit=12)
+    assert res1.get("success") is True
+    d1 = res1.get("data", {})
+    assert d1.get("page") == 1
+    assert "results" in d1
+    assert d1.get("total_pages", 1) >= 1
+    assert "has_next" in d1
+

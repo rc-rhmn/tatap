@@ -32,9 +32,9 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Mengunduh Pembaruan Tatap"
-                android:textColor="#F1F5F9"
-                android:textSize="15sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_primary"
+                android:textSize="@dimen/text_title_large"
+                android:fontFamily="sans-serif-medium" />
 
             <TextView
                 android:id="@+id/tv_download_target_version"
@@ -42,8 +42,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:text="Versi Target: v2.9.2"
-                android:textColor="#94A3B8"
-                android:textSize="11.5sp" />
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif" />
         </LinearLayout>
     </LinearLayout>
 
@@ -72,17 +73,18 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="Menghubungkan ke server rilis..."
-            android:textColor="#CBD5E1"
-            android:textSize="11.5sp" />
+            android:textColor="@color/text_secondary"
+            android:textSize="@dimen/text_caption"
+            android:fontFamily="sans-serif" />
 
         <TextView
             android:id="@+id/tv_download_percent"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="0%"
-            android:textColor="#38BDF8"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            android:textColor="@color/text_accent"
+            android:textSize="@dimen/text_body_medium"
+            android:fontFamily="sans-serif-medium" />
     </LinearLayout>
 
     <!-- Cancel Button -->
@@ -97,8 +99,9 @@
             android:layout_width="wrap_content"
             android:layout_height="38dp"
             android:text="Batal"
-            android:textColor="#94A3B8"
-            android:textSize="12sp"
+            android:textColor="@color/text_muted"
+            android:textSize="@dimen/text_subhead"
+            android:fontFamily="sans-serif-medium"
             android:textAllCaps="false"
             android:backgroundTint="#161C28"
             app:strokeColor="#2A3347"

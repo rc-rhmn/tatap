@@ -28,9 +28,9 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="TATAP"
-            android:textColor="#FFFFFF"
-            android:textSize="17sp"
-            android:textStyle="bold"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_headline"
+            android:fontFamily="sans-serif-medium"
             android:letterSpacing="0.04"
             android:layout_marginEnd="10dp" />
 
@@ -56,9 +56,10 @@
                 android:drawableTint="#64748B"
                 android:paddingStart="2dp"
                 android:hint="Cari anime atau :command..."
-                android:textColorHint="#4B5563"
-                android:textColor="#F1F5F9"
-                android:textSize="12sp"
+                android:textColorHint="@color/text_hint"
+                android:textColor="@color/text_primary"
+                android:textSize="@dimen/text_body_medium"
+                android:fontFamily="sans-serif"
                 android:imeOptions="actionSearch"
                 android:inputType="text"
                 android:singleLine="true" />
@@ -109,9 +110,9 @@
             android:drawablePadding="4dp"
             android:drawableTint="#CBD5E1"
             android:text="Menu"
-            android:textColor="#CBD5E1"
-            android:textSize="11.5sp"
-            android:textStyle="bold" />
+            android:textColor="@color/text_secondary"
+            android:textSize="@dimen/text_caption"
+            android:fontFamily="sans-serif-medium" />
     </LinearLayout>
 
     <!-- Command Execution Feedback Banner -->
@@ -134,8 +135,9 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="Command OK"
-            android:textColor="#38BDF8"
-            android:textSize="12sp" />
+            android:textColor="@color/text_accent"
+            android:textSize="@dimen/text_code"
+            android:fontFamily="monospace" />
 
         <Button
             android:id="@+id/btn_close_command_banner"
@@ -172,9 +174,9 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Genre: Action"
-                android:textColor="#38BDF8"
-                android:textSize="11.5sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_accent"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif-medium" />
 
             <Button
                 android:id="@+id/btn_clear_filter"
@@ -204,9 +206,9 @@
             android:gravity="center"
             android:paddingHorizontal="10dp"
             android:text="Hapus Semua"
-            android:textColor="#EF4444"
-            android:textSize="10.5sp"
-            android:textStyle="bold"
+            android:textColor="@color/text_danger"
+            android:textSize="@dimen/text_badge"
+            android:fontFamily="sans-serif-medium"
             android:visibility="gone" />
     </LinearLayout>
 
@@ -248,9 +250,9 @@
                 android:drawablePadding="5dp"
                 android:drawableTint="#FFFFFF"
                 android:text="Musim Ini"
-                android:textColor="#FFFFFF"
-                android:textSize="11.5sp"
-                android:textStyle="bold"
+                android:textColor="@color/text_primary"
+                android:textSize="@dimen/text_subhead"
+                android:fontFamily="sans-serif-medium"
                 android:layout_marginEnd="6dp" />
 
             <!-- 2. Tab Masih Tayang -->
@@ -271,9 +273,9 @@
                 android:drawablePadding="5dp"
                 android:drawableTint="#8892B0"
                 android:text="Masih Tayang"
-                android:textColor="#8892B0"
-                android:textSize="11.5sp"
-                android:textStyle="bold"
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_subhead"
+                android:fontFamily="sans-serif-medium"
                 android:layout_marginEnd="6dp" />
 
             <!-- 3. Tab Jadwal -->
@@ -294,9 +296,9 @@
                 android:drawablePadding="5dp"
                 android:drawableTint="#8892B0"
                 android:text="Jadwal"
-                android:textColor="#8892B0"
-                android:textSize="11.5sp"
-                android:textStyle="bold"
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_subhead"
+                android:fontFamily="sans-serif-medium"
                 android:layout_marginEnd="6dp" />
 
             <!-- 4. Tab Riwayat -->
@@ -317,9 +319,9 @@
                 android:drawablePadding="5dp"
                 android:drawableTint="#8892B0"
                 android:text="Riwayat"
-                android:textColor="#8892B0"
-                android:textSize="11.5sp"
-                android:textStyle="bold"
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_subhead"
+                android:fontFamily="sans-serif-medium"
                 android:layout_marginEnd="6dp" />
 
             <!-- 5. Tab Favorit -->
@@ -340,9 +342,9 @@
                 android:drawablePadding="5dp"
                 android:drawableTint="#8892B0"
                 android:text="Favorit"
-                android:textColor="#8892B0"
-                android:textSize="11.5sp"
-                android:textStyle="bold"
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_subhead"
+                android:fontFamily="sans-serif-medium"
                 android:layout_marginEnd="6dp" />
 
             <!-- 6. Tab Katalog -->
@@ -363,9 +365,9 @@
                 android:drawablePadding="5dp"
                 android:drawableTint="#8892B0"
                 android:text="Katalog"
-                android:textColor="#8892B0"
-                android:textSize="11.5sp"
-                android:textStyle="bold"
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_subhead"
+                android:fontFamily="sans-serif-medium"
                 android:layout_marginEnd="6dp" />
 
             <!-- 7. Tab Genre -->
@@ -386,9 +388,9 @@
                 android:drawablePadding="5dp"
                 android:drawableTint="#8892B0"
                 android:text="Genre"
-                android:textColor="#8892B0"
-                android:textSize="11.5sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_subhead"
+                android:fontFamily="sans-serif-medium" />
         </LinearLayout>
     </HorizontalScrollView>
 
@@ -422,9 +424,9 @@
                 android:gravity="center"
                 android:paddingHorizontal="10dp"
                 android:text="Senin"
-                android:textColor="#8892B0"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif-medium" />
 
             <TextView
                 android:id="@+id/btn_day_selasa"
@@ -438,9 +440,9 @@
                 android:gravity="center"
                 android:paddingHorizontal="10dp"
                 android:text="Selasa"
-                android:textColor="#8892B0"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif-medium" />
 
             <TextView
                 android:id="@+id/btn_day_rabu"
@@ -454,9 +456,9 @@
                 android:gravity="center"
                 android:paddingHorizontal="10dp"
                 android:text="Rabu"
-                android:textColor="#8892B0"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif-medium" />
 
             <TextView
                 android:id="@+id/btn_day_kamis"
@@ -470,9 +472,9 @@
                 android:gravity="center"
                 android:paddingHorizontal="10dp"
                 android:text="Kamis"
-                android:textColor="#8892B0"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif-medium" />
 
             <TextView
                 android:id="@+id/btn_day_jumat"
@@ -486,9 +488,9 @@
                 android:gravity="center"
                 android:paddingHorizontal="10dp"
                 android:text="Jumat"
-                android:textColor="#8892B0"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif-medium" />
 
             <TextView
                 android:id="@+id/btn_day_sabtu"
@@ -502,9 +504,9 @@
                 android:gravity="center"
                 android:paddingHorizontal="10dp"
                 android:text="Sabtu"
-                android:textColor="#8892B0"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif-medium" />
 
             <TextView
                 android:id="@+id/btn_day_minggu"
@@ -517,9 +519,9 @@
                 android:gravity="center"
                 android:paddingHorizontal="10dp"
                 android:text="Minggu"
-                android:textColor="#8892B0"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif-medium" />
         </LinearLayout>
     </HorizontalScrollView>
 
@@ -538,9 +540,10 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="Tayang Musim Ini"
-            android:textColor="#F1F5F9"
-            android:textSize="14sp"
-            android:textStyle="bold" />
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_title_large"
+            android:fontFamily="sans-serif-medium"
+            android:letterSpacing="-0.01" />
 
         <TextView
             android:id="@+id/btn_filter_catalog"
@@ -557,9 +560,9 @@
             android:drawablePadding="5dp"
             android:drawableTint="#38BDF8"
             android:text="Filter"
-            android:textColor="#38BDF8"
-            android:textSize="11sp"
-            android:textStyle="bold"
+            android:textColor="@color/text_accent"
+            android:textSize="@dimen/text_subhead"
+            android:fontFamily="sans-serif-medium"
             android:visibility="gone" />
 
         <TextView
@@ -567,8 +570,9 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text=""
-            android:textColor="#64748B"
-            android:textSize="11.5sp" />
+            android:textColor="@color/text_dim"
+            android:textSize="@dimen/text_caption"
+            android:fontFamily="sans-serif" />
     </LinearLayout>
 
     <!-- Content Area with Floating Overlay -->
@@ -625,8 +629,9 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
                         android:text="Memuat data anime..."
-                        android:textColor="#64748B"
-                        android:textSize="12sp"
+                        android:textColor="@color/text_dim"
+                        android:textSize="@dimen/text_body_medium"
+                        android:fontFamily="sans-serif"
                         android:letterSpacing="0.02" />
                 </LinearLayout>
 
@@ -645,9 +650,9 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="Tidak Ada Anime Ditemukan"
-                        android:textColor="#F1F5F9"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
+                        android:textColor="@color/text_primary"
+                        android:textSize="@dimen/text_title_large"
+                        android:fontFamily="sans-serif-medium" />
 
                     <TextView
                         android:id="@+id/tv_empty_desc"
@@ -656,8 +661,9 @@
                         android:layout_marginTop="6dp"
                         android:gravity="center"
                         android:text="Coba gunakan kata kunci lain atau periksa koneksi backend."
-                        android:textColor="#64748B"
-                        android:textSize="12sp" />
+                        android:textColor="@color/text_dim"
+                        android:textSize="@dimen/text_body_medium"
+                        android:fontFamily="sans-serif" />
 
                     <TextView
                         android:id="@+id/btn_empty_retry"
@@ -671,9 +677,9 @@
                         android:gravity="center"
                         android:paddingHorizontal="18dp"
                         android:text="Coba Lagi"
-                        android:textColor="#38BDF8"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
+                        android:textColor="@color/text_accent"
+                        android:textSize="@dimen/text_subhead"
+                        android:fontFamily="sans-serif-medium" />
                 </LinearLayout>
             </FrameLayout>
         </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
@@ -705,9 +711,9 @@
                 android:gravity="center"
                 android:paddingHorizontal="14dp"
                 android:text="Sebelumnya"
-                android:textColor="#E2E8F0"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_secondary"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif-medium" />
 
             <TextView
                 android:id="@+id/tv_page_indicator"
@@ -718,9 +724,9 @@
                 android:gravity="center"
                 android:paddingHorizontal="12dp"
                 android:text="Hal 1"
-                android:textColor="#38BDF8"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_accent"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif-medium" />
 
             <TextView
                 android:id="@+id/btn_next_page"
@@ -735,9 +741,9 @@
                 android:gravity="center"
                 android:paddingHorizontal="14dp"
                 android:text="Berikutnya"
-                android:textColor="#E2E8F0"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_secondary"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif-medium" />
         </LinearLayout>
     </FrameLayout>
 </LinearLayout>

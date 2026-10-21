@@ -1,11 +1,32 @@
 """Ambil daftar anime per-season dari AniList GraphQL."""
-import os, sys
+import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import HI_UA
 import httpx
 
 ANILIST_URL = "https://graphql.anilist.co"
 UA = HI_UA
+
+# Pelacak backoff rate-limit AniList (HTTP 429) in-memory
+_al_rate_limit_until = 0.0
+
+def _is_rate_limited() -> bool:
+    """Mengembalikan True jika sedang dalam masa cooldown rate limit 429 AniList."""
+    global _al_rate_limit_until
+    return time.time() < _al_rate_limit_until
+
+def _record_rate_limit(resp) -> None:
+    """Mencatat waktu penalti 429 dari header Retry-After atau default 60 detik."""
+    global _al_rate_limit_until
+    if resp is not None and getattr(resp, "status_code", 0) == 429:
+        retry = resp.headers.get("Retry-After") if hasattr(resp, "headers") else None
+        wait_sec = 60.0
+        if retry:
+            try:
+                wait_sec = max(5.0, min(float(retry), 300.0))
+            except Exception:
+                pass
+        _al_rate_limit_until = time.time() + wait_sec
 
 QUERY = """
 query ($season: MediaSeason, $year: Int, $page: Int, $perPage: Int, $statusIn: [MediaStatus]) {
@@ -128,8 +149,21 @@ def _get_al_client():
         )
     return _al_client
 
+def close_al_client():
+    """Tutup persistent client AniList saat aplikasi shutdown."""
+    global _al_client
+    if _al_client is not None:
+        try:
+            _al_client.close()
+        except Exception:
+            pass
+        _al_client = None
+
 def season_page(name, year, page=1, per_page=25, status_in=None):
     """Fetch satu halaman AniList untuk season/year tertentu. Return {pageInfo, media:[]}."""
+    if _is_rate_limited():
+        return {"pageInfo": {"total": 0, "perPage": per_page, "currentPage": page,
+                             "lastPage": 1, "hasNextPage": False}, "media": []}
     try:
         c = _get_al_client()
         variables = {
@@ -145,6 +179,7 @@ def season_page(name, year, page=1, per_page=25, status_in=None):
             "variables": variables
         })
         if r.status_code != 200:
+            _record_rate_limit(r)
             return {"pageInfo": {"total": 0, "perPage": per_page, "currentPage": page,
                                  "lastPage": 1, "hasNextPage": False}, "media": []}
         d = r.json().get("data", {}).get("Page", {})
@@ -171,6 +206,9 @@ def season_page(name, year, page=1, per_page=25, status_in=None):
 
 def recently_finished_page(page=1, per_page=20):
     """Fetch anime musiman yang baru saja tamat dari AniList, diurutkan dari yang paling baru tamat."""
+    if _is_rate_limited():
+        return {"pageInfo": {"total": 0, "perPage": per_page, "currentPage": page,
+                             "lastPage": 1, "hasNextPage": False}, "media": []}
     try:
         c = _get_al_client()
         r = c.post(ANILIST_URL, json={
@@ -178,6 +216,7 @@ def recently_finished_page(page=1, per_page=20):
             "variables": {"page": page, "perPage": per_page}
         })
         if r.status_code != 200:
+            _record_rate_limit(r)
             return {"pageInfo": {"total": 0, "perPage": per_page, "currentPage": page,
                                  "lastPage": 1, "hasNextPage": False}, "media": []}
         d = r.json().get("data", {}).get("Page", {})
@@ -237,6 +276,8 @@ query GetSchedule($page: Int, $now: Int, $end: Int, $perPage: Int) {
 def anilist_schedules(now_ts, end_ts, per_page=50):
     """Episode yang tayang antara now_ts..end_ts (unix detik). Return list schedule.
     Longgar: anime apapun, tidak difilter by season. Caller yang filter matched."""
+    if _is_rate_limited():
+        return []
     try:
         c = _get_al_client()
         r = c.post(ANILIST_URL, json={
@@ -244,6 +285,7 @@ def anilist_schedules(now_ts, end_ts, per_page=50):
             "variables": {"now": now_ts, "end": end_ts, "perPage": per_page}
         })
         if r.status_code != 200:
+            _record_rate_limit(r)
             return []
         return r.json().get("data", {}).get("Page", {}).get("airingSchedules", []) or []
     except Exception:
@@ -251,15 +293,20 @@ def anilist_schedules(now_ts, end_ts, per_page=50):
 
 def anilist_schedules_range(start_ts: int, end_ts: int, max_pages: int = 6):
     """Episode yang tayang dalam rentang waktu (start_ts..end_ts) dengan pagination."""
+    if _is_rate_limited():
+        return []
     all_schedules = []
     c = _get_al_client()
     for page in range(1, max_pages + 1):
+        if _is_rate_limited():
+            break
         try:
             r = c.post(ANILIST_URL, json={
                 "query": SCHEDULE_PAGED_QUERY,
                 "variables": {"page": page, "now": start_ts, "end": end_ts, "perPage": 50}
             })
             if r.status_code != 200:
+                _record_rate_limit(r)
                 break
             d = r.json().get("data", {}).get("Page", {})
             schedules = d.get("airingSchedules") or []
@@ -328,6 +375,8 @@ def anime_relations(search_query: str):
     termasuk menelusuri rantai prekuel ke belakang untuk menemukan karya awal (Season 1)."""
     if not search_query or not search_query.strip():
         return []
+    if _is_rate_limited():
+        return []
     try:
         c = _get_al_client()
         r = c.post(ANILIST_URL, json={
@@ -335,6 +384,7 @@ def anime_relations(search_query: str):
             "variables": {"search": search_query.strip()}
         })
         if r.status_code != 200:
+            _record_rate_limit(r)
             return []
         data = r.json().get("data", {}).get("Media", {})
         if not data or not data.get("id"):
@@ -374,11 +424,13 @@ def anime_relations(search_query: str):
                     if rel in ("PREQUEL", "PARENT") and direct_prequel_node is None:
                         direct_prequel_node = node
 
-        # 2. Telusuri rantai prekuel ke belakang (hingga 5 langkah) untuk menemukan Season 1 / Origin
+        # 2. Telusuri rantai prekuel ke belakang (hingga 3 langkah) untuk menemukan Season 1 / Origin
         curr_prequel = direct_prequel_node
         deepest_prequel = None
-        for _ in range(5):
+        for _ in range(3):
             if not curr_prequel or not curr_prequel.get("id"):
+                break
+            if _is_rate_limited():
                 break
             # Query node prekuel ini untuk melihat prekuel sebelumnya
             r_prev = c.post(ANILIST_URL, json={
@@ -386,6 +438,7 @@ def anime_relations(search_query: str):
                 "variables": {"id": curr_prequel.get("id")}
             })
             if r_prev.status_code != 200:
+                _record_rate_limit(r_prev)
                 break
             prev_data = r_prev.json().get("data", {}).get("Media", {})
             prev_edges = prev_data.get("relations", {}).get("edges", []) or []

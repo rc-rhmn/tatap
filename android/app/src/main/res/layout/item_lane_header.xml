@@ -28,9 +28,8 @@
             android:fontFamily="sans-serif-medium"
             android:letterSpacing="0.04"
             android:text="ANIME MUSIMAN (BARU TAMAT / BERJALAN)"
-            android:textColor="#38BDF8"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            android:textColor="@color/text_accent"
+            android:textSize="@dimen/text_subhead" />
 
         <TextView
             android:id="@+id/tv_lane_subtitle"
@@ -38,8 +37,8 @@
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
             android:text="[LANE]"
-            android:textColor="#64748B"
-            android:textSize="10sp" />
+            android:textColor="@color/text_dim"
+            android:textSize="@dimen/text_badge" />
     </LinearLayout>
 
     <View

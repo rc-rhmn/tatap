@@ -96,8 +96,8 @@ public class AppUpdateManager {
             try {
                 URL url = new URL("http://127.0.0.1:8767/api/update/check?force=true");
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(8000);
-                conn.setReadTimeout(10000);
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(12000);
 
                 int code = conn.getResponseCode();
                 if (code != 200) {
@@ -116,11 +116,8 @@ public class AppUpdateManager {
                 JSONObject res = new JSONObject(sb.toString());
                 if (!res.optBoolean("success", false)) {
                     String msg = res.optString("error", "Gagal memeriksa pembaruan");
-                    activity.runOnUiThread(() -> {
-                        isChecking = false;
-                        if (listener != null) listener.onStatus("> tatap$ Gagal memeriksa pembaruan: " + msg, true);
-                        Toast.makeText(activity, msg, Toast.LENGTH_SHORT).show();
-                    });
+                    // Fallback langsung ke GitHub jika server lokal mengembalikan error
+                    checkUpdateDirectGitHub(activity, listener, msg);
                     return;
                 }
 
@@ -147,17 +144,174 @@ public class AppUpdateManager {
                 });
 
             } catch (Exception e) {
-                final String err = e.getMessage() != null ? e.getMessage() : "Koneksi gagal";
+                final String err = e.getMessage() != null ? e.getMessage() : "Koneksi lokal gagal";
+                // Fallback langsung ke GitHub via HTTPS jika koneksi localhost terputus / timeout
+                checkUpdateDirectGitHub(activity, listener, err);
+            }
+        }).start();
+    }
+
+    /**
+     * Fallback native Java langsung ke GitHub (API -> Web Redirect -> Raw CDN)
+     * jika server backend lokal Python sedang sibuk, tertunda, atau tidak dapat dihubungi.
+     */
+    private void checkUpdateDirectGitHub(Activity activity, UpdateCheckListener listener, String prevErr) {
+        new Thread(() -> {
+            try {
+                JSONObject data = null;
+
+                // 1. Direct Tier 1: GitHub REST API
+                try {
+                    URL u = new URL("https://api.github.com/repos/rc-rhmn/tatap/releases/latest");
+                    HttpURLConnection c = (HttpURLConnection) u.openConnection();
+                    c.setRequestProperty("User-Agent", "Tatap-App/Android");
+                    c.setRequestProperty("Accept", "application/vnd.github.v3+json");
+                    c.setConnectTimeout(10000);
+                    c.setReadTimeout(12000);
+                    if (c.getResponseCode() == 200) {
+                        BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream()));
+                        StringBuilder sb = new StringBuilder();
+                        String l;
+                        while ((l = r.readLine()) != null) sb.append(l);
+                        r.close();
+                        JSONObject rel = new JSONObject(sb.toString());
+                        String tag = rel.optString("tag_name", "").trim();
+                        String latestClean = tag.replaceFirst("^v", "");
+                        data = buildReleasePayload(latestClean, tag, rel.optString("name", tag), rel.optString("body", ""), rel.optString("html_url", ""));
+                    }
+                    c.disconnect();
+                } catch (Exception ignored) {}
+
+                // 2. Direct Tier 2: GitHub Web Releases Redirect (Bebas Rate-Limit 403)
+                if (data == null) {
+                    try {
+                        URL u = new URL("https://github.com/rc-rhmn/tatap/releases/latest");
+                        HttpURLConnection c = (HttpURLConnection) u.openConnection();
+                        c.setInstanceFollowRedirects(false);
+                        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)");
+                        c.setConnectTimeout(10000);
+                        c.setReadTimeout(12000);
+                        String loc = c.getHeaderField("Location");
+                        c.disconnect();
+                        if (loc != null && loc.contains("/tag/")) {
+                            String tag = loc.substring(loc.lastIndexOf('/') + 1).trim();
+                            String latestClean = tag.replaceFirst("^v", "");
+                            data = buildReleasePayload(latestClean, tag, "Tatap " + tag, "Pembaruan rilis " + tag + " tersedia di GitHub.", loc);
+                        }
+                    } catch (Exception ignored) {}
+                }
+
+                // 3. Direct Tier 3: GitHub Raw Fastly CDN (VERSION)
+                if (data == null) {
+                    try {
+                        URL u = new URL("https://raw.githubusercontent.com/rc-rhmn/tatap/main/VERSION");
+                        HttpURLConnection c = (HttpURLConnection) u.openConnection();
+                        c.setRequestProperty("User-Agent", "Tatap-App/Android");
+                        c.setConnectTimeout(8000);
+                        c.setReadTimeout(10000);
+                        if (c.getResponseCode() == 200) {
+                            BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream()));
+                            String latestClean = r.readLine();
+                            r.close();
+                            if (latestClean != null) {
+                                latestClean = latestClean.trim().replaceFirst("^v", "");
+                                String tag = "v" + latestClean;
+                                data = buildReleasePayload(latestClean, tag, "Tatap " + tag, "Pembaruan rilis " + tag + " terdeteksi dari repositori resmi.", "https://github.com/rc-rhmn/tatap/releases/tag/" + tag);
+                            }
+                        }
+                        c.disconnect();
+                    } catch (Exception ignored) {}
+                }
+
+                if (data != null) {
+                    final JSONObject finalData = data;
+                    final boolean hasUpdate = finalData.optBoolean("has_update", false);
+                    final String latestVer = finalData.optString("latest_version", "2.9.2");
+                    activity.runOnUiThread(() -> {
+                        isChecking = false;
+                        if (activity.isFinishing()) return;
+                        if (hasUpdate) {
+                            if (listener != null) listener.onStatus("> tatap$ Pembaruan rilis v" + latestVer + " tersedia!", false);
+                            showUpdateDialog(activity, finalData);
+                        } else {
+                            if (listener != null) listener.onStatus("> tatap$ Tatap v2.9.2 adalah versi terbaru.", false);
+                            Toast.makeText(activity, "✓ Tatap v2.9.2 sudah versi terbaru!", Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                    return;
+                }
+
+                // Jika seluruh fallback jaringan lokal & langsung gagal
                 activity.runOnUiThread(() -> {
                     isChecking = false;
                     if (activity.isFinishing()) return;
                     if (listener != null) {
-                        listener.onStatus("> tatap$ Gagal memeriksa pembaruan: " + err, true);
+                        listener.onStatus("> tatap$ Gagal memeriksa pembaruan: Periksa koneksi internet Anda.", true);
                     }
-                    Toast.makeText(activity, "Koneksi pembaruan gagal: " + err, Toast.LENGTH_SHORT).show();
+                    Toast.makeText(activity, "Tidak dapat memeriksa pembaruan. Periksa koneksi internet Anda.", Toast.LENGTH_SHORT).show();
+                });
+
+            } catch (Exception e) {
+                activity.runOnUiThread(() -> {
+                    isChecking = false;
+                    if (activity.isFinishing()) return;
+                    if (listener != null) {
+                        listener.onStatus("> tatap$ Gagal memeriksa pembaruan: Periksa koneksi internet Anda.", true);
+                    }
+                    Toast.makeText(activity, "Tidak dapat memeriksa pembaruan. Periksa koneksi internet Anda.", Toast.LENGTH_SHORT).show();
                 });
             }
         }).start();
+    }
+
+    private JSONObject buildReleasePayload(String latestVer, String tag, String name, String notes, String htmlUrl) {
+        try {
+            JSONObject data = new JSONObject();
+            data.put("current_version", "2.9.2");
+            data.put("latest_version", latestVer);
+            data.put("tag_name", tag);
+            data.put("release_name", name);
+            data.put("notes", notes != null ? notes : "");
+            data.put("body", notes != null ? notes : "");
+            data.put("release_url", htmlUrl != null ? htmlUrl : ("https://github.com/rc-rhmn/tatap/releases/tag/" + tag));
+
+            boolean hasUpdate = compareSemVer(latestVer, "2.9.2") > 0;
+            data.put("has_update", hasUpdate);
+
+            JSONObject assets = new JSONObject();
+            String base = "https://github.com/rc-rhmn/tatap/releases/download/" + tag;
+            assets.put("android", base + "/tatap-release-" + tag + ".apk");
+            assets.put("android_tv", base + "/tatap-tv-release-" + tag + ".apk");
+            assets.put("windows", base + "/tatap-windows-x64-portable.zip");
+            assets.put("linux", base + "/Tatap-x86_64.AppImage");
+            data.put("assets", assets);
+            return data;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static int compareSemVer(String v1, String v2) {
+        if (v1 == null) v1 = "";
+        if (v2 == null) v2 = "";
+        v1 = v1.replaceFirst("^v", "").trim();
+        v2 = v2.replaceFirst("^v", "").trim();
+        String[] p1 = v1.split("\\.");
+        String[] p2 = v2.split("\\.");
+        int len = Math.max(p1.length, p2.length);
+        for (int i = 0; i < len; i++) {
+            int n1 = 0, n2 = 0;
+            if (i < p1.length) {
+                try { n1 = Integer.parseInt(p1[i].replaceAll("\\D+", "")); } catch (Exception ignored) {}
+            }
+            if (i < p2.length) {
+                try { n2 = Integer.parseInt(p2[i].replaceAll("\\D+", "")); } catch (Exception ignored) {}
+            }
+            if (n1 != n2) {
+                return Integer.compare(n1, n2);
+            }
+        }
+        return 0;
     }
 
     /**

@@ -11,7 +11,7 @@
     app:cardElevation="0dp"
     app:cardBackgroundColor="#161B26"
     app:strokeColor="#2A3347"
-    app:strokeWidth="1dp">
+    app:strokeWidth="1.5dp">
 
     <LinearLayout
         android:layout_width="wrap_content"
@@ -25,9 +25,10 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="S1"
-            android:textColor="#38BDF8"
-            android:textSize="11sp"
-            android:textStyle="bold" />
+            android:textColor="@color/text_accent"
+            android:textSize="@dimen/text_subhead"
+            android:fontFamily="sans-serif-medium"
+            android:letterSpacing="0.02" />
 
         <TextView
             android:id="@+id/tv_season_title"
@@ -35,8 +36,9 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="6dp"
             android:text="Judul Season"
-            android:textColor="#F1F5F9"
-            android:textSize="11.5sp"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_subhead"
+            android:fontFamily="sans-serif-medium"
             android:singleLine="true"
             android:ellipsize="end" />
     </LinearLayout>

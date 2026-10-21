@@ -287,6 +287,9 @@ def test_smart_scene_royal_protection():
     royal2 = "Tuan Putri menolak lamaran dari adipati utara."
     assert T._sanitize_gtxplus_id(royal2) == "Tuan Putri menolak lamaran dari adipati utara."
 
+    royal3 = "Yang Mulia, gerbang ruang bawah tanah tingkat S telah dibuka oleh pasukan iblis."
+    assert T._sanitize_gtxplus_id(royal3) == "Yang Mulia, gerbang dungeon tingkat S telah dibuka oleh pasukan iblis."
+
 
 def test_smart_scene_casual_fansub():
     # Dialog kasual sekolah / sehari-hari dihaluskan menjadi diksi lisan alami fansub
@@ -312,6 +315,72 @@ def test_slang_and_idioms_calque_sanitizer():
     assert T._sanitize_gtxplus_id("Tim kita berhasil mengambil w!") == "Tim kita berhasil meraih kemenangan!"
     assert T._sanitize_gtxplus_id("Bos penjara bawah tanah telah bangkit.") == "Bos dungeon telah bangkit."
     assert T._sanitize_gtxplus_id("Tuan serikat memanggil kita ke aula.") == "Ketua guild memanggil kita ke aula."
+
+
+def test_new_pre_gtx_slang_and_gaming():
+    # Pre-GTX normalizer untuk slang dan terminologi game
+    assert T._pre_normalize_en_slang("Are you for real right now?") == "seriously right now?"
+    assert T._pre_normalize_en_slang("You're dead meat if he finds out.") == "you are finished if he finds out."
+    assert T._pre_normalize_en_slang("Just cut the crap and tell me.") == "Just stop the nonsense and tell me."
+    assert T._pre_normalize_en_slang("There is no way in hell we win.") == "There is impossible we win."
+    assert T._pre_normalize_en_slang("Why are you freaking out?") == "Why are you panicking?"
+    assert T._pre_normalize_en_slang("Are you messing with me?") == "Are you tricking me?"
+    assert T._pre_normalize_en_slang("I am fed up with your excuses.") == "I am sick and tired of your excuses."
+    assert T._pre_normalize_en_slang("Go easy on me today.") == "be gentle with me today."
+    assert T._pre_normalize_en_slang("What on earth is that monster?") == "what exactly is that monster?"
+    assert T._pre_normalize_en_slang("Are you kidding me?") == "are you joking?"
+    assert T._pre_normalize_en_slang("Please make yourself at home.") == "Please feel comfortable as at home."
+    assert T._pre_normalize_en_slang("Tank, pull aggro from the boss!") == "Tank, attracting enemy attention from the boss!"
+    assert T._pre_normalize_en_slang("The monster returned to the spawn point.") == "The monster returned to the appearance location."
+    assert T._pre_normalize_en_slang("A dungeon break occurred in city center.") == "A dungeon outbreak occurred in city center."
+    assert T._pre_normalize_en_slang("Prepare to fight the raid boss.") == "Prepare to fight the large-scale boss."
+    assert T._pre_normalize_en_slang("Talk to our party leader.") == "Talk to our group leader."
+
+
+def test_new_gaming_and_dungeon_universal_rules():
+    # 1. Dungeon & Ruang Bawah Tanah
+    assert T._sanitize_gtxplus_id("Kita harus menghancurkan inti ruang bawah tanah itu.") == "Kita harus menghancurkan inti dungeon itu."
+    assert T._sanitize_gtxplus_id("Hati-hati dengan jebakan ruang bawah tanah di depan.") == "Hati-hati dengan jebakan dungeon di depan."
+    assert T._sanitize_gtxplus_id("Gerbang ruang bawah tanah tingkat A terbuka!") == "Gerbang dungeon tingkat A terbuka!"
+    assert T._sanitize_gtxplus_id("Ini ledakan ruang bawah tanah, monster bermunculan!") == "Ini dungeon break, monster bermunculan!"
+    assert T._sanitize_gtxplus_id("Para penjelajah ruang bawah tanah berkumpul di ruang bos.") == "Para penjelajah dungeon berkumpul di boss room."
+
+    # 2. Party & Serikat/Guild
+    assert T._sanitize_gtxplus_id("Semua anggota pesta siap memasuki lantai dungeon.") == "Semua anggota party siap memasuki lantai dungeon."
+    assert T._sanitize_gtxplus_id("Pemimpin pesta kita memutuskan untuk membubarkan pesta.") == "Party leader kita memutuskan untuk membubarkan party."
+    assert T._sanitize_gtxplus_id("Tunjukkan kartu serikat milikmu kepada staf serikat.") == "Tunjukkan kartu guild milikmu kepada resepsionis guild."
+    assert T._sanitize_gtxplus_id("Kita harus membentuk pesta penyerbuan untuk melawan monster itu.") == "Kita harus membentuk party raid untuk melawan monster itu."
+
+    # 3. Game Combat Mechanics & Stats
+    assert T._sanitize_gtxplus_id("Tanker, segera menarik kebencian monster itu!") == "Tanker, segera menarik aggro monster itu!"
+    assert T._sanitize_gtxplus_id("Monster itu muncul di titik bertelur.") == "Monster itu muncul di titik spawn."
+    assert T._sanitize_gtxplus_id("Keahlian ini memiliki waktu pendinginan yang lama.") == "Keahlian ini memiliki waktu cooldown yang lama."
+    assert T._sanitize_gtxplus_id("Tingkat drop item langka ini sangat rendah.") == "Drop rate item langka ini sangat rendah."
+    assert T._sanitize_gtxplus_id("Bilah kesehatan dan bilah mana musuh sudah menipis.") == "Bar HP dan bar MP musuh udah menipis."
+    assert T._sanitize_gtxplus_id("Bos serbuan telah dikalahkan oleh pemain tunggal itu.") == "Raid boss telah dikalahkan oleh pemain solo itu."
+    assert T._sanitize_gtxplus_id("Dia adalah pemburu peringkat S yang terkenal.") == "Dia adalah hunter rank S yang terkenal."
+    assert T._sanitize_gtxplus_id("Mage itu memberi penggemar status kepada seluruh tim.") == "Mage itu memberi buff status kepada seluruh tim."
+
+    # 4. Calque MT Harfiah
+    assert T._sanitize_gtxplus_id("Apakah kamu nyata? Kamu daging mati kalau bos melihatmu.") == "Kamu serius? Mampus kau kalau bos melihatmu."
+    assert T._sanitize_gtxplus_id("Tidak ada cara di neraka kita bisa menang.") == "Mana mungkin kita bisa menang."
+    assert T._sanitize_gtxplus_id("Potong omong kosong itu dan lawan aku!") == "Hentikan omong kosongmu itu dan lawan aku!"
+    assert T._sanitize_gtxplus_id("Jangan ketakutan keluar, tenang saja.") == "Jangan panik banget, tenang aja."
+    assert T._sanitize_gtxplus_id("Pergi mudah padaku, aku pemula.") == "Jangan kejam-kejam ya, aku pemula."
+    assert T._sanitize_gtxplus_id("Silakan buat dirimu di rumah.") == "Silakan anggap aja rumah sendiri."
+
+
+def test_new_casual_slang_smoothing():
+    # Verifikasi penghalusan diksi lisan casual fansub
+    assert T._sanitize_gtxplus_id("Kamu bercanda kan?") == "Kamu bercanda ya?"
+    assert T._sanitize_gtxplus_id("Jangan macam-macam di depanku.") == "Jangan macam-macam deh di depanku."
+    assert T._sanitize_gtxplus_id("Ada apa sebenarnya di sini?") == "Ada apa sih sebenarnya di sini?"
+    assert T._sanitize_gtxplus_id("Kan sudah kubilang jangan ke sana.") == "Kan udah kubilang jangan ke sana."
+    assert T._sanitize_gtxplus_id("Apa yang salah denganmu?") == "Kamu kenapa sih?"
+    assert T._sanitize_gtxplus_id("Apa maumu datang ke mari?") == "Mau apa sih kamu datang ke mari?"
+    assert T._sanitize_gtxplus_id("Aku tidak peduli dengan rumor itu.") == "Aku nggak peduli dengan rumor itu."
+    assert T._sanitize_gtxplus_id("Tenanglah sedikit, jangan terburu-buru.") == "Santai dikit dong, jangan terburu-buru."
+
 
 
 

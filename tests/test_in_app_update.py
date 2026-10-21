@@ -1,10 +1,16 @@
 import os
+import sys
 import re
 import xml.etree.ElementTree as ET
 import pytest
 from starlette.testclient import TestClient
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+backend_dir = os.path.join(ROOT_DIR, "backend")
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
 
 def test_chaquopy_parity_backend_main():
     """Memverifikasi bahwa backend/main.py dan android/app/src/main/python/backend/main.py 100% identik."""
@@ -121,3 +127,53 @@ def test_main_activity_update_integration():
     on_create_block = code[on_create_idx:on_create_idx + 8000]
     assert "checkForUpdates(" not in on_create_block
     assert "checkUpdate(" not in on_create_block
+
+
+def test_backend_update_tier2_web_fallback(monkeypatch):
+    """Memverifikasi bahwa jika GitHub REST API mengembalikan HTTP 403 (Rate Limit), backend otomatis fallback ke Tier 2 (Web Redirect)."""
+    import httpx
+    from backend.main import check_update
+
+    orig_get = httpx.AsyncClient.get
+
+    async def mock_get(self, url, *args, **kwargs):
+        if "api.github.com" in str(url):
+            return httpx.Response(403, json={"message": "API rate limit exceeded"})
+        return await orig_get(self, url, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+
+    import asyncio
+    res = asyncio.run(check_update(force=True))
+    assert res["success"] is True
+    data = res["data"]
+    assert "latest_version" in data
+    assert "assets" in data
+    assert data["assets"]["android"].endswith(".apk")
+
+
+def test_backend_update_tier3_raw_fallback(monkeypatch):
+    """Memverifikasi bahwa jika GitHub REST API dan Web sama-sama gagal, backend otomatis fallback ke Tier 3 (Fastly Raw CDN)."""
+    import httpx
+    from backend.main import check_update
+
+    orig_get = httpx.AsyncClient.get
+
+    async def mock_get(self, url, *args, **kwargs):
+        url_s = str(url)
+        if "api.github.com" in url_s:
+            return httpx.Response(403, json={"message": "API rate limit exceeded"})
+        if "github.com/rc-rhmn/tatap/releases/latest" in url_s:
+            raise httpx.ConnectError("Simulated DNS failure")
+        return await orig_get(self, url, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+
+    import asyncio
+    res = asyncio.run(check_update(force=True))
+    assert res["success"] is True
+    data = res["data"]
+    assert "latest_version" in data
+    assert "assets" in data
+    assert data["assets"]["android"].endswith(".apk")
+

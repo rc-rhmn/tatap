@@ -46,8 +46,8 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="⚡"
-            android:textColor="#38BDF8"
-            android:textSize="14sp" />
+            android:textColor="@color/text_accent"
+            android:textSize="@dimen/text_title_large" />
 
         <TextView
             android:id="@+id/tv_hold_speed_text"
@@ -55,9 +55,9 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
             android:text="2X Cepat >>"
-            android:textColor="#FFFFFF"
-            android:textSize="13sp"
-            android:textStyle="bold" />
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_title_medium"
+            android:fontFamily="sans-serif-medium" />
     </LinearLayout>
 
     <!-- Gesture HUD OSD (Volume, Brightness, Seek) -->
@@ -78,9 +78,10 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="VOL"
-            android:textColor="#38BDF8"
-            android:textSize="14sp"
-            android:textStyle="bold" />
+            android:textColor="@color/text_accent"
+            android:textSize="@dimen/text_subhead"
+            android:fontFamily="sans-serif-medium"
+            android:letterSpacing="0.04" />
 
         <ProgressBar
             android:id="@+id/pb_osd_bar"
@@ -90,7 +91,7 @@
             android:layout_marginStart="12dp"
             android:max="100"
             android:progress="50"
-            android:progressTint="#38BDF8" />
+            android:progressTint="@color/text_accent" />
 
         <TextView
             android:id="@+id/tv_osd_val"
@@ -98,9 +99,9 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="12dp"
             android:text="50%"
-            android:textColor="#FFFFFF"
-            android:textSize="13sp"
-            android:textStyle="bold" />
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_title_medium"
+            android:fontFamily="sans-serif-medium" />
     </LinearLayout>
 
     <!-- Double Tap Ripple Indicators -->
@@ -111,9 +112,10 @@
         android:layout_gravity="start"
         android:gravity="center"
         android:text="-5s"
-        android:textColor="#FFFFFF"
-        android:textSize="17sp"
-        android:textStyle="bold"
+        android:textColor="@color/text_primary"
+        android:textSize="@dimen/text_headline"
+        android:fontFamily="sans-serif-medium"
+        android:letterSpacing="0.04"
         android:background="#1AFFFFFF"
         android:visibility="gone" />
 
@@ -124,36 +126,49 @@
         android:layout_gravity="end"
         android:gravity="center"
         android:text="+5s"
-        android:textColor="#FFFFFF"
-        android:textSize="17sp"
-        android:textStyle="bold"
+        android:textColor="@color/text_primary"
+        android:textSize="@dimen/text_headline"
+        android:fontFamily="sans-serif-medium"
+        android:letterSpacing="0.04"
         android:background="#1AFFFFFF"
         android:visibility="gone" />
 
-    <!-- Minimalist Buffering Spinner HUD -->
+    <!-- Minimalist Buffering & Stream Preparation HUD -->
     <LinearLayout
         android:id="@+id/layout_buffering"
-        android:layout_width="64dp"
-        android:layout_height="64dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:minWidth="120dp"
+        android:maxWidth="260dp"
         android:layout_gravity="center"
         android:gravity="center"
         android:orientation="vertical"
+        android:paddingHorizontal="20dp"
+        android:paddingVertical="14dp"
         android:background="@drawable/bg_buffering_hud"
         android:visibility="gone">
 
         <ProgressBar
             android:id="@+id/pb_buffering"
             style="?android:attr/progressBarStyleLarge"
-            android:layout_width="38dp"
-            android:layout_height="38dp"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
             android:indeterminate="true"
-            android:indeterminateTint="#38BDF8" />
+            android:indeterminateTint="@color/text_accent" />
 
         <TextView
             android:id="@+id/tv_buffering_text"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text=""
+            android:layout_marginTop="9dp"
+            android:text="MENYIAPKAN STREAM..."
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_caption"
+            android:fontFamily="sans-serif-medium"
+            android:letterSpacing="0.04"
+            android:gravity="center"
+            android:singleLine="true"
+            android:ellipsize="end"
             android:visibility="gone" />
     </LinearLayout>
 
@@ -199,10 +214,10 @@
         app:iconSize="15dp"
         android:paddingHorizontal="14dp"
         android:text="Lewati Opening"
-        android:textColor="#38BDF8"
-        android:textSize="12sp"
-        android:textStyle="bold"
-        android:letterSpacing="0.02"
+        android:textColor="@color/text_accent"
+        android:textSize="@dimen/text_subhead"
+        android:fontFamily="sans-serif-medium"
+        android:letterSpacing="0.03"
         android:focusable="true"
         android:clickable="true"
         android:nextFocusUp="@+id/btn_sub_selector"
@@ -231,7 +246,7 @@
             android:src="@drawable/ic_arrow_back"
             android:focusable="true"
             android:nextFocusRight="@+id/btn_aspect"
-            app:tint="#FFFFFF"
+            app:tint="@color/text_primary"
             android:contentDescription="Kembali" />
 
         <LinearLayout
@@ -248,9 +263,9 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Memuat Video..."
-                android:textColor="#FFFFFF"
-                android:textSize="14.5sp"
-                android:textStyle="bold"
+                android:textColor="@color/text_primary"
+                android:textSize="@dimen/player_title_text_size"
+                android:fontFamily="sans-serif-medium"
                 android:singleLine="true"
                 android:ellipsize="end" />
 
@@ -260,8 +275,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="1dp"
                 android:text="Subtitle: Auto (Indonesia)"
-                android:textColor="#94A3B8"
-                android:textSize="11sp" />
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/tv_card_meta_text_size"
+                android:fontFamily="sans-serif" />
         </LinearLayout>
 
         <!-- Tombol Skala Layar / Mode Fullscreen (Fit, Zoom, Fill) -->
@@ -272,9 +288,9 @@
             android:layout_marginEnd="8dp"
             android:paddingHorizontal="12dp"
             android:text="Fit"
-            android:textSize="11.5sp"
-            android:textStyle="bold"
-            android:textColor="#FFFFFF"
+            android:textSize="@dimen/text_caption"
+            android:fontFamily="sans-serif-medium"
+            android:textColor="@color/text_primary"
             android:focusable="true"
             android:nextFocusLeft="@+id/btn_player_back"
             android:nextFocusRight="@+id/btn_quality"
@@ -291,9 +307,9 @@
             android:layout_marginEnd="8dp"
             android:paddingHorizontal="12dp"
             android:text="HD"
-            android:textSize="11.5sp"
-            android:textStyle="bold"
-            android:textColor="#FFFFFF"
+            android:textSize="@dimen/text_caption"
+            android:fontFamily="sans-serif-medium"
+            android:textColor="@color/text_primary"
             android:focusable="true"
             android:nextFocusLeft="@+id/btn_aspect"
             android:nextFocusRight="@+id/btn_speed"
@@ -310,9 +326,9 @@
             android:layout_marginEnd="8dp"
             android:paddingHorizontal="12dp"
             android:text="1.0x"
-            android:textSize="11.5sp"
-            android:textStyle="bold"
-            android:textColor="#FFFFFF"
+            android:textSize="@dimen/text_caption"
+            android:fontFamily="sans-serif-medium"
+            android:textColor="@color/text_primary"
             android:focusable="true"
             android:nextFocusLeft="@+id/btn_quality"
             android:nextFocusRight="@+id/btn_sub_style"
@@ -329,8 +345,9 @@
             android:layout_marginEnd="8dp"
             android:paddingHorizontal="12dp"
             android:text="Gaya Sub"
-            android:textSize="11.5sp"
-            android:textColor="#FFFFFF"
+            android:textSize="@dimen/text_caption"
+            android:fontFamily="sans-serif-medium"
+            android:textColor="@color/text_primary"
             android:focusable="true"
             android:nextFocusLeft="@+id/btn_speed"
             android:nextFocusRight="@+id/btn_sub_selector"
@@ -346,9 +363,9 @@
             android:layout_height="36dp"
             android:paddingHorizontal="14dp"
             android:text="Subtitle"
-            android:textSize="11.5sp"
-            android:textStyle="bold"
-            android:textColor="#FFFFFF"
+            android:textSize="@dimen/text_caption"
+            android:fontFamily="sans-serif-medium"
+            android:textColor="@color/text_primary"
             android:focusable="true"
             android:nextFocusLeft="@+id/btn_sub_style"
             app:strokeColor="#33FFFFFF"
@@ -387,9 +404,9 @@
         app:iconSize="15dp"
         android:paddingHorizontal="16dp"
         android:text="Buka Kunci"
-        android:textColor="#38BDF8"
-        android:textSize="12sp"
-        android:textStyle="bold"
+        android:textColor="@color/text_accent"
+        android:textSize="@dimen/text_body_medium"
+        android:fontFamily="sans-serif-medium"
         android:letterSpacing="0.02" />
     </FrameLayout>
 
@@ -428,7 +445,7 @@
                     android:background="?android:attr/selectableItemBackgroundBorderless"
                     android:src="@drawable/ic_arrow_back"
                     android:contentDescription="Kembali"
-                    app:tint="#FFFFFF" />
+                    app:tint="@color/text_primary" />
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -441,9 +458,9 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="Judul Anime"
-                        android:textColor="#FFFFFF"
-                        android:textSize="15sp"
-                        android:textStyle="bold"
+                        android:textColor="@color/text_primary"
+                        android:textSize="@dimen/text_title_large"
+                        android:fontFamily="sans-serif-medium"
                         android:maxLines="1"
                         android:ellipsize="end" />
 
@@ -453,9 +470,9 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
                         android:text="Memutar Episode 1"
-                        android:textColor="#38BDF8"
-                        android:textSize="11.5sp"
-                        android:textStyle="bold" />
+                        android:textColor="@color/text_accent"
+                        android:textSize="@dimen/text_caption"
+                        android:fontFamily="sans-serif-medium" />
                 </LinearLayout>
             </LinearLayout>
 
@@ -474,8 +491,9 @@
                     android:layout_weight="1"
                     android:layout_marginEnd="6dp"
                     android:text="Subtitle"
-                    android:textSize="10.5sp"
-                    android:textColor="#FFFFFF"
+                    android:textSize="@dimen/text_badge"
+                    android:fontFamily="sans-serif-medium"
+                    android:textColor="@color/text_primary"
                     android:backgroundTint="#1A202C"
                     app:cornerRadius="6dp"
                     app:strokeColor="#2D3748"
@@ -488,8 +506,9 @@
                     android:layout_weight="1"
                     android:layout_marginEnd="6dp"
                     android:text="Kualitas"
-                    android:textSize="10.5sp"
-                    android:textColor="#FFFFFF"
+                    android:textSize="@dimen/text_badge"
+                    android:fontFamily="sans-serif-medium"
+                    android:textColor="@color/text_primary"
                     android:backgroundTint="#1A202C"
                     app:cornerRadius="6dp"
                     app:strokeColor="#2D3748"
@@ -502,8 +521,9 @@
                     android:layout_weight="1"
                     android:layout_marginEnd="6dp"
                     android:text="1.0x"
-                    android:textSize="10.5sp"
-                    android:textColor="#FFFFFF"
+                    android:textSize="@dimen/text_badge"
+                    android:fontFamily="sans-serif-medium"
+                    android:textColor="@color/text_primary"
                     android:backgroundTint="#1A202C"
                     app:cornerRadius="6dp"
                     app:strokeColor="#2D3748"
@@ -515,9 +535,9 @@
                     android:layout_height="32dp"
                     android:paddingHorizontal="12dp"
                     android:text="⛶ Full"
-                    android:textSize="11sp"
-                    android:textStyle="bold"
-                    android:textColor="#38BDF8"
+                    android:textSize="@dimen/text_caption"
+                    android:fontFamily="sans-serif-medium"
+                    android:textColor="@color/text_accent"
                     android:backgroundTint="#15233D"
                     app:cornerRadius="6dp"
                     app:strokeColor="#38BDF8"
@@ -540,18 +560,19 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="Daftar Episode"
-                android:textColor="#94A3B8"
-                android:textSize="12sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_subhead"
+                android:fontFamily="sans-serif-medium" />
 
             <Button
                 android:id="@+id/btn_portrait_sort"
                 android:layout_width="wrap_content"
                 android:layout_height="28dp"
                 android:text="Urutan: 1 - N"
-                android:textColor="#CBD5E1"
+                android:textColor="@color/text_secondary"
                 android:backgroundTint="#161B26"
-                android:textSize="10sp"
+                android:textSize="@dimen/text_badge"
+                android:fontFamily="sans-serif-medium"
                 app:cornerRadius="6dp"
                 app:strokeColor="#2A3347"
                 app:strokeWidth="1dp"

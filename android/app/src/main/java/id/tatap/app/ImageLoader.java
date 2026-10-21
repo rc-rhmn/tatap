@@ -13,10 +13,22 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class ImageLoader {
-    // Batasi 2 thread background agar tidak merebut CPU dari ExoPlayer dan backend
-    private static final ExecutorService executor = Executors.newFixedThreadPool(2);
+    // Batasi 2 thread background dengan THREAD_PRIORITY_BACKGROUND agar tidak merebut CPU dari UI thread dan ExoPlayer
+    private static final ExecutorService executor = Executors.newFixedThreadPool(2, new ThreadFactory() {
+        private final AtomicInteger count = new AtomicInteger(1);
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(() -> {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+                r.run();
+            }, "TatapImageLoader-" + count.getAndIncrement());
+            return t;
+        }
+    });
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
     private static final LruCache<String, Bitmap> memoryCache;
 
@@ -93,9 +105,16 @@ public class ImageLoader {
                         memoryCache.put(urlString, bitmap);
                         mainHandler.post(() -> {
                             if (urlString.equals(imageView.getTag())) {
-                                imageView.setAlpha(0f);
-                                imageView.setImageBitmap(bitmap);
-                                imageView.animate().alpha(1.0f).setDuration(160).start();
+                                if (isTv) {
+                                    // Di Android TV: direct bitmap assignment (zero property animation overhead di UI thread)
+                                    imageView.setAlpha(1.0f);
+                                    imageView.setImageBitmap(bitmap);
+                                } else {
+                                    imageView.animate().cancel();
+                                    imageView.setAlpha(0f);
+                                    imageView.setImageBitmap(bitmap);
+                                    imageView.animate().alpha(1.0f).setDuration(160).start();
+                                }
                             }
                         });
                     }

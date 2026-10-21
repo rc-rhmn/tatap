@@ -127,7 +127,8 @@
                                 android:ellipsize="end"
                                 android:text="Judul Anime"
                                 android:textColor="#FFFFFF"
-                                android:textSize="14sp"
+                                android:textSize="@dimen/detail_title_text_size"
+                                android:fontFamily="sans-serif-medium"
                                 android:textStyle="bold"
                                 android:lineSpacingExtra="1.5dp" />
 
@@ -149,7 +150,8 @@
                                     android:paddingVertical="2dp"
                                     android:text="TV SERIES"
                                     android:textColor="#E2E8F0"
-                                    android:textSize="9sp"
+                                    android:textSize="@dimen/tv_badge_text_size"
+                                    android:fontFamily="sans-serif-medium"
                                     android:textStyle="bold" />
 
                                 <TextView
@@ -161,7 +163,8 @@
                                     android:paddingHorizontal="6dp"
                                     android:paddingVertical="2dp"
                                     android:textColor="#F59E0B"
-                                    android:textSize="9sp"
+                                    android:textSize="@dimen/tv_badge_text_size"
+                                    android:fontFamily="sans-serif-medium"
                                     android:textStyle="bold"
                                     app:drawableStartCompat="@drawable/ic_star_filled"
                                     app:drawableTint="#F59E0B"
@@ -179,7 +182,8 @@
                                     android:paddingHorizontal="6dp"
                                     android:paddingVertical="2dp"
                                     android:textColor="#38BDF8"
-                                    android:textSize="9sp"
+                                    android:textSize="@dimen/tv_badge_text_size"
+                                    android:fontFamily="sans-serif-medium"
                                     android:textStyle="bold"
                                     android:visibility="gone"
                                     android:text="ONGOING" />
@@ -192,7 +196,8 @@
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="4dp"
                                 android:textColor="#94A3B8"
-                                android:textSize="10sp"
+                                android:textSize="@dimen/detail_meta_text_size"
+                                android:fontFamily="sans-serif"
                                 android:maxLines="2"
                                 android:ellipsize="end"
                                 android:visibility="gone"
@@ -205,7 +210,8 @@
                                 android:layout_marginTop="3dp"
                                 android:text="Memuat episode..."
                                 android:textColor="#8B95A5"
-                                android:textSize="10.5sp" />
+                                android:textSize="@dimen/detail_meta_text_size"
+                                android:fontFamily="sans-serif" />
                         </LinearLayout>
                     </LinearLayout>
 
@@ -309,7 +315,8 @@
                             android:layout_height="wrap_content"
                             android:text="SINOPSIS"
                             android:textColor="#38BDF8"
-                            android:textSize="9.5sp"
+                            android:textSize="@dimen/tv_badge_text_size"
+                            android:fontFamily="sans-serif-medium"
                             android:textStyle="bold"
                             android:letterSpacing="0.08"
                             android:layout_marginBottom="4dp" />
@@ -319,7 +326,8 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:textColor="#CBD5E1"
-                            android:textSize="11.5sp"
+                            android:textSize="@dimen/detail_synopsis_text_size"
+                            android:fontFamily="sans-serif"
                             android:lineSpacingExtra="2dp"
                             android:maxLines="3"
                             android:ellipsize="end"
@@ -335,7 +343,8 @@
                             android:paddingHorizontal="8dp"
                             android:text="Selengkapnya ▼"
                             android:textColor="#38BDF8"
-                            android:textSize="10.5sp"
+                            android:textSize="@dimen/tab_text_size"
+                            android:fontFamily="sans-serif-medium"
                             android:textStyle="bold"
                             android:background="@drawable/bg_btn_toggle_synopsis"
                             android:clickable="true"
@@ -398,7 +407,8 @@
                     android:layout_weight="1"
                     android:text="Daftar Episode"
                     android:textColor="#94A3B8"
-                    android:textSize="12sp"
+                    android:textSize="@dimen/section_title_text_size"
+                    android:fontFamily="sans-serif-medium"
                     android:textStyle="bold" />
 
                 <Button
@@ -408,7 +418,8 @@
                     android:text="Urutan: 1 - N"
                     android:textColor="#E2E8F0"
                     android:backgroundTint="#11141C"
-                    android:textSize="10.5sp"
+                    android:textSize="@dimen/tab_text_size"
+                    android:fontFamily="sans-serif-medium"
                     android:focusable="true"
                     android:nextFocusLeft="@+id/btn_quick_play"
                     android:nextFocusDown="@+id/rv_episodes"

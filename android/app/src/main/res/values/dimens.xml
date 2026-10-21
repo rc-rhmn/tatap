@@ -1,18 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- TV Overscan & Component Heights -->
     <dimen name="tv_overscan_horizontal">0dp</dimen>
     <dimen name="tv_overscan_vertical">0dp</dimen>
     <dimen name="tv_header_height">56dp</dimen>
     <dimen name="tv_search_height">38dp</dimen>
     <dimen name="tv_tab_height">34dp</dimen>
-    <dimen name="tv_card_poster_height">210dp</dimen>
+    <dimen name="tv_card_poster_height">205dp</dimen>
     <dimen name="tv_card_margin">5dp</dimen>
-    <dimen name="tv_card_corner_radius">12dp</dimen>
+    <dimen name="tv_card_corner_radius">8dp</dimen>
     <dimen name="tv_card_padding_horizontal">10dp</dimen>
-    <dimen name="tv_card_padding_top">9dp</dimen>
-    <dimen name="tv_card_padding_bottom">11dp</dimen>
-    <dimen name="tv_card_title_height">38dp</dimen>
-    <dimen name="tv_card_title_text_size">12.5sp</dimen>
+    <dimen name="tv_card_padding_top">8dp</dimen>
+    <dimen name="tv_card_padding_bottom">10dp</dimen>
+    <dimen name="tv_card_title_height">40dp</dimen>
+
+    <!-- Semantic Typography Scale (Material Design 3 & 10-Foot TV Harmonized) -->
+    <dimen name="text_display_large">20sp</dimen>
+    <dimen name="text_headline">17sp</dimen>
+    <dimen name="text_title_large">15sp</dimen>
+    <dimen name="text_title_medium">13sp</dimen>
+    <dimen name="text_body_large">13.5sp</dimen>
+    <dimen name="text_body_medium">12sp</dimen>
+    <dimen name="text_subhead">12sp</dimen>
+    <dimen name="text_caption">11sp</dimen>
+    <dimen name="text_badge">9.5sp</dimen>
+    <dimen name="text_code">11.5sp</dimen>
+
+    <!-- Backward Compatibility Legacy Tokens -->
+    <dimen name="tv_card_title_text_size">13sp</dimen>
     <dimen name="tv_card_meta_text_size">11sp</dimen>
     <dimen name="tv_badge_text_size">9.5sp</dimen>
+    <dimen name="section_title_text_size">15sp</dimen>
+    <dimen name="tab_text_size">12sp</dimen>
+    <dimen name="detail_title_text_size">17sp</dimen>
+    <dimen name="detail_synopsis_text_size">13.5sp</dimen>
+    <dimen name="detail_meta_text_size">11sp</dimen>
+    <dimen name="player_title_text_size">17sp</dimen>
 </resources>

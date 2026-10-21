@@ -1,9 +1,9 @@
 var Tui = (function () {
-  var S = {view:"cari",items:[],sel:-1,page:1,total:1,filter:{},promptFoc:false,seasonFilter:null};
+  var S = {view:"katalog",items:[],sel:-1,page:1,total:1,filter:{},promptFoc:false,seasonFilter:null};
   var MAXLOG = 200;
 
   function $(id){return document.getElementById(id);}
-  function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+  function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
   function isModalOpen(){
     return (!$("title-modal").classList.contains("hidden")) ||
            (!$("player-modal").classList.contains("hidden")) ||
@@ -11,6 +11,7 @@ var Tui = (function () {
            ($("genre-modal") && !$("genre-modal").classList.contains("hidden")) ||
            ($("catalog-filter-modal") && !$("catalog-filter-modal").classList.contains("hidden")) ||
            ($("drawer-panel") && !$("drawer-panel").classList.contains("hidden")) ||
+           ($("backend-error-overlay") && !$("backend-error-overlay").classList.contains("hidden")) ||
            ($("update-modal") && !$("update-modal").classList.contains("hidden"));
   }
 
@@ -61,18 +62,18 @@ var Tui = (function () {
     $("empty-state").style.display="none";
     $("results").innerHTML="";$("results-title").textContent="memuat...";$("results-meta").textContent="";
     $("pager").classList.add("hidden");
-    $("lane-season-sec").classList.toggle("hidden",v!=="musim");
-    $("lane-still-sec").classList.toggle("hidden",v!=="lanjutan");
+    var cSec = $("continue-sec");
+    if(cSec) cSec.classList.add("hidden");
     var sBar = $("schedule-days-bar");
     if(sBar) sBar.classList.toggle("hidden", v !== "terbaru");
     if(v === "terbaru") updateScheduleChips();
     var cfBtn = $("btn-catalog-filter");
     if(cfBtn) cfBtn.classList.toggle("hidden", v !== "katalog");
-    $("continue-sec").classList.add("hidden");
     switch(v){
       case "cari":$("results-title").textContent="cari judul";$("empty-state").style.display="";break;
       case "musim":$("results-title").textContent="Tayang musim ini";break;
       case "lanjutan":$("results-title").textContent="Masih tayang (lanjut)";break;
+      case "riwayat":$("results-title").textContent="Riwayat Menonton";break;
       case "favorit":$("results-title").textContent="Anime Favorit";break;
       case "katalog":$("results-title").textContent=getCatalogFilterTitle();break;
       case "terbaru":{
@@ -87,7 +88,17 @@ var Tui = (function () {
       }
     }
     $("sb-view").textContent="view: "+v;
+    updateNavTabs(v);
     loadView();
+  }
+
+  function updateNavTabs(v){
+    document.querySelectorAll(".nav-tab-btn").forEach(function(btn){
+      btn.classList.toggle("active", btn.getAttribute("data-view") === v);
+    });
+    document.querySelectorAll(".drawer-item[data-view]").forEach(function(item){
+      item.classList.toggle("active", item.getAttribute("data-view") === v);
+    });
   }
 
   var _genreList=null;
@@ -131,6 +142,7 @@ var Tui = (function () {
     switch(name){
       case "musim":return window.Tatap.seasonNow(S.page);
       case "lanjutan":return window.Tatap.stillAiring(S.page);
+      case "riwayat":return window.Tatap.history();
       case "favorit":return window.Tatap.bookmarks();
       case "katalog":{
         var f = S.catalogFilter || {};
@@ -150,8 +162,67 @@ var Tui = (function () {
     return null;
   }
 
+  function updateResultsTitle(d){
+    switch(S.view){
+      case "musim":{
+        var sName = (d && d.season) ? String(d.season).toUpperCase() : "";
+        $("results-title").textContent = sName ? ("Tayang musim ini · " + sName) : "Tayang musim ini";
+        break;
+      }
+      case "lanjutan":{
+        $("results-title").textContent = "Masih tayang (lanjut)";
+        break;
+      }
+      case "terbaru":{
+        var lblDay = SCHEDULE_LABELS[S.scheduleDay] || S.scheduleDay || "Hari Ini";
+        var isToday = d && (d.is_today || (d.current_day === S.scheduleDay));
+        if(lblDay === "Hari Ini" || S.scheduleDay === "today"){
+          $("results-title").textContent = "Jadwal rilis (Hari Ini)";
+        } else {
+          $("results-title").textContent = "Jadwal rilis (" + lblDay + (isToday ? " · Hari Ini" : "") + ")";
+        }
+        break;
+      }
+      case "katalog":{
+        $("results-title").textContent = getCatalogFilterTitle();
+        break;
+      }
+      case "riwayat":{
+        $("results-title").textContent = "Riwayat Menonton";
+        break;
+      }
+      case "favorit":{
+        $("results-title").textContent = "Anime Favorit";
+        break;
+      }
+      case "season-custom":{
+        var sf = S.seasonFilter || {season: "", year: ""};
+        var sUpper = String(sf.season || (d && d.season) || "").toUpperCase();
+        var yVal = sf.year || (d && d.year) || "";
+        $("results-title").textContent = "Season: " + (sUpper || "?") + (yVal ? (" " + yVal) : "");
+        break;
+      }
+      case "cari":{
+        break;
+      }
+      default:{
+        if(d && d.season){
+          $("results-title").textContent = S.view + " · " + String(d.season).toUpperCase();
+        }
+        break;
+      }
+    }
+  }
+
   async function loadView(){
-    if(S.view==="cari"){renderRecents();return;}
+    if(S.view==="cari"){
+      if(S.searchQuery){
+        doSearch(S.searchQuery, S.page);
+      } else {
+        renderRecents();
+      }
+      return;
+    }
     try{
       var r=await apiCall(S.view);
       if(!r){log("gagal load: response kosong","err");return;}
@@ -175,6 +246,14 @@ var Tui = (function () {
         var start = (S.page - 1) * pageSize;
         S.items = d.slice(start, start + pageSize);
         S.sel = -1;
+      }else if(S.view==="riwayat" && Array.isArray(d)){
+        S.rawHistory = d;
+        var pageSize = 24;
+        S.total = Math.max(1, Math.ceil(d.length / pageSize));
+        if(S.page > S.total) S.page = S.total;
+        var start = (S.page - 1) * pageSize;
+        S.items = d.slice(start, start + pageSize);
+        S.sel = -1;
       }else if(S.view==="terbaru"){
         var curDayKey = d.weekday || d.day || "";
         if(curDayKey && SCHEDULE_DAYS.indexOf(curDayKey) >= 0){
@@ -188,18 +267,34 @@ var Tui = (function () {
         S.sel = -1;
         if(d.current_day) updateScheduleChips(d.current_day);
         else updateScheduleChips();
-        var lblDay = SCHEDULE_LABELS[S.scheduleDay] || S.scheduleDay;
-        var isToday = d.is_today || (d.current_day === S.scheduleDay);
-        $("results-title").textContent = "Jadwal rilis (" + lblDay + (isToday ? " · Hari Ini" : "") + ")";
       }else if(Array.isArray(d)){
         S.items=d;S.page=1;S.total=1;S.sel=-1;
       }else{
         S.items=d.items||[];S.page=d.page||1;S.total=d.total_pages||1;S.sel=-1;
       }
-      var label=$("results-title").textContent;
-      if(d.season) label+=" · "+String(d.season).toUpperCase();
-      $("results-title").textContent=label;
-      $("results-meta").textContent=S.items.length+" item"+(d.cached?" · cached":"");
+      updateResultsTitle(d);
+      if(S.view === "riwayat"){
+        var totalHist = S.rawHistory ? S.rawHistory.length : S.items.length;
+        if(totalHist > 0){
+          $("results-meta").innerHTML = totalHist + " judul ditonton · <button class='link-btn' id='btn-clear-history-view'>hapus semua</button>";
+          var clrBtn = $("btn-clear-history-view");
+          if(clrBtn){
+            clrBtn.onclick = async function(e){
+              e.stopPropagation();
+              try{
+                await fetch("/api/history", {method: "DELETE"});
+                loadView();
+                if(window.App && App.renderContinue) App.renderContinue();
+                log("riwayat menonton berhasil dihapus", "ok");
+              }catch(err){ log("err: " + (err && err.message || err), "err"); }
+            };
+          }
+        } else {
+          $("results-meta").textContent = "0 judul ditonton";
+        }
+      } else {
+        $("results-meta").textContent=S.items.length+" item"+(d.cached?" · cached":"");
+      }
       renderResults();renderPager();
     }catch(e){log("err: "+(e&&e.message||e),"err");}
   }
@@ -230,12 +325,19 @@ var Tui = (function () {
   }
 
   function renderResults(){
-    var box=$("results");box.innerHTML="";
+    var box=$("results");
+    var savedIdx = (window.TvNavigationManager ? window.TvNavigationManager.saveFocusedIndex("#results", ".poster-card, .trow") : -1);
+    box.innerHTML="";
     var sBar = $("schedule-days-bar");
     if(sBar) sBar.classList.toggle("hidden", S.view !== "terbaru");
     var isTxt = S.view==="cari" || S.view==="terbaru";
     if(!S.items.length){
-      var emptyMsg = S.view==="favorit" ? "Belum ada anime favorit tersimpan. Ketuk tombol + FAVORIT pada detail anime untuk menyimpannya ke sini." : "Kosong.";
+      var emptyMsg = "Kosong.";
+      if(S.view==="favorit"){
+        emptyMsg = "Belum ada anime favorit tersimpan. Ketuk tombol + FAVORIT pada detail anime untuk menyimpannya ke sini.";
+      }else if(S.view==="riwayat"){
+        emptyMsg = "Belum ada riwayat menonton. Mulai tonton anime apa pun dan riwayat akan tercatat otomatis di sini.";
+      }
       box.innerHTML="<p class='dim'>"+emptyMsg+"</p>";
       return;
     }
@@ -311,6 +413,18 @@ var Tui = (function () {
             }
             d.appendChild(infoCol);
 
+            d.tabIndex=0;
+            d.setAttribute("data-idx",String(idx));
+            d.addEventListener("focus",function(){
+              if(S.sel!==idx){S.sel=idx;renderSel();}
+            });
+            d.addEventListener("keydown",function(e){
+              if(e.key==="Enter"||e.key===" "){
+                e.preventDefault();
+                if(typeof App==="undefined"){log("App belum siap, coba lagi","err");return;}
+                App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
+              }
+            });
             d.addEventListener("click",function(){
               if(typeof App==="undefined"){log("App belum siap, coba lagi","err");return;}
               App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
@@ -375,6 +489,18 @@ var Tui = (function () {
             infoCol2.appendChild(subMeta2);
             d2.appendChild(infoCol2);
 
+            d2.tabIndex=0;
+            d2.setAttribute("data-idx",String(idx));
+            d2.addEventListener("focus",function(){
+              if(S.sel!==idx){S.sel=idx;renderSel();}
+            });
+            d2.addEventListener("keydown",function(e){
+              if(e.key==="Enter"||e.key===" "){
+                e.preventDefault();
+                if(typeof App==="undefined"){log("App belum siap, coba lagi","err");return;}
+                App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
+              }
+            });
             d2.addEventListener("click",function(){
               if(typeof App==="undefined"){log("App belum siap, coba lagi","err");return;}
               App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
@@ -398,44 +524,129 @@ var Tui = (function () {
             grid.appendChild(h);
             return;
           }
+          if(S.view==="riwayat"){
+            if(!a.id) a.id = a.slug;
+            if(!a.badge && a.episode) a.badge = "EP " + a.episode;
+          }
           var isUnavail=!a.id;
           var d=document.createElement("div");
           d.className="poster-card"+(idx===S.sel?" sel":"")+(isUnavail?" unmapped":"");
           d.tabIndex=0;
-          var idxSpan=document.createElement("span");idxSpan.className="pc-idx";idxSpan.textContent=String(idx+1).padStart(2,"0");d.appendChild(idxSpan);
+          d.setAttribute("data-idx",String(idx));
+          d.addEventListener("focus",function(){
+            if(!isUnavail && S.sel!==idx){S.sel=idx;renderSel();}
+          });
+          d.addEventListener("keydown",function(e){
+            if(e.key==="Enter"||e.key===" "){
+              e.preventDefault();
+              if(!isUnavail){
+                App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
+              }
+            }
+          });
+
+          var media=document.createElement("div");
+          media.className="pc-media";
+
+          var ph=document.createElement("div");
+          ph.className="pc-thumb-ph";
+          ph.innerHTML='<svg class="ui-icon pc-ph-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>TATAP</span>';
+
+          if(a.poster){
+            var im=document.createElement("img");
+            im.loading="lazy";
+            im.decoding="async";
+            im.alt=a.title||"";
+            im.src=a.poster;
+            im.onerror=function(){
+              this.style.display="none";
+              ph.style.display="flex";
+            };
+            ph.style.display="none";
+            media.appendChild(im);
+            media.appendChild(ph);
+          } else {
+            media.appendChild(ph);
+          }
+
+          var idxSpan=document.createElement("span");
+          idxSpan.className="pc-idx";
+          idxSpan.textContent=String(idx+1).padStart(2,"0");
+          media.appendChild(idxSpan);
+
+          if(isUnavail){
+            var bad=document.createElement("span");
+            bad.className="pc-bad";
+            bad.textContent="?";
+            bad.title="Tidak ada di hianime";
+            media.appendChild(bad);
+          }else if(a.score&&a.score>0){
+            var sc=document.createElement("span");
+            sc.className="pc-score";
+            sc.textContent="★ "+a.score.toFixed(1);
+            media.appendChild(sc);
+          }
+
           if(a.badge){
             var bgTag=document.createElement("span");
-            var isTam = a.badge === "TAMAT" || a.is_finished;
-            var isLongB = a.badge === "SERIAL PANJANG" || a.is_long_running;
-            var bgCol = isTam ? "rgba(5,150,105,0.92)" : (isLongB ? "rgba(217,119,6,0.92)" : "rgba(15,23,42,0.85)");
-            bgTag.className="pc-badge-tag";
-            bgTag.style.cssText="position:absolute;bottom:6px;left:6px;font-size:10px;font-weight:bold;padding:2px 5px;border-radius:3px;background:"+bgCol+";color:#fff;z-index:2;pointer-events:none;";
-            var bText = a.badge;
-            if(a.badge === "ONGOING" && a.eps_counter){
-              bText = "EP " + a.eps_counter;
+            var isTam=a.badge==="TAMAT"||a.is_finished;
+            var isLongB=a.badge==="SERIAL PANJANG"||a.is_long_running;
+            var bCls=isTam?" pc-badge-tamat":(isLongB?" pc-badge-long":" pc-badge-ep");
+            bgTag.className="pc-badge-tag"+bCls;
+            var bText=a.badge;
+            if(a.badge==="ONGOING"&&a.eps_counter){
+              bText="EP "+a.eps_counter;
             }
             bgTag.textContent=bText;
-            d.appendChild(bgTag);
+            media.appendChild(bgTag);
           }
-          if(isUnavail){var bad=document.createElement("span");bad.className="pc-bad";bad.textContent="?";bad.title="Tidak ada di hianime";d.appendChild(bad);}
-          if(a.poster){var im=document.createElement("img");im.loading="lazy";im.decoding="async";im.alt=a.title;im.src=a.poster;im.onerror=function(){this.style.display="none";};d.appendChild(im);}
-          var body=document.createElement("div");body.className="poster-body";
-          var b=document.createElement("b");b.textContent=a.title;body.appendChild(b);
-          var meta=document.createElement("div");meta.className="poster-meta";
+
+          if(a.type){
+            var tp=document.createElement("span");
+            tp.className="pc-badge-type";
+            tp.textContent=String(a.type).toUpperCase();
+            media.appendChild(tp);
+          }
+
+          if(S.view==="riwayat"&&a.progress&&a.progress>=15){
+            var progTrack=document.createElement("div");
+            progTrack.className="pc-progress-track";
+            var progFill=document.createElement("div");
+            progFill.className="pc-progress-fill";
+            var pct=Math.min(100,Math.max(5,Math.round((a.progress/1440)*100)));
+            progFill.style.width=pct+"%";
+            progTrack.appendChild(progFill);
+            media.appendChild(progTrack);
+          }
+
+          d.appendChild(media);
+
+          var body=document.createElement("div");
+          body.className="poster-body";
+          var b=document.createElement("b");
+          b.textContent=a.title||"";
+          b.title=a.title||"";
+          body.appendChild(b);
+
+          var meta=document.createElement("div");
+          meta.className="poster-meta";
           var m=[];
-          if(a.type)m.push(a.type);
-          if(a.eps_counter){
-            m.push("Ep "+a.eps_counter);
+          if(S.view==="riwayat"){
+            if(a.episode)m.push("Ep "+a.episode);
+            if(a.mode)m.push(String(a.mode).toUpperCase());
+            if(a.progress&&a.progress>=15&&window.App&&App.formatTimeSec)m.push(App.formatTimeSec(a.progress));
           }else{
-            if(a.eps)m.push(a.eps+" ep");
-            if(a.sub)m.push("SUB "+a.sub);
-            if(a.dub)m.push("DUB "+a.dub);
+            if(a.eps_counter){
+              m.push("Ep "+a.eps_counter);
+            }else if(a.eps){
+              m.push(a.eps+" ep");
+            }
+            if(a.duration)m.push(a.duration);
           }
-          if(a.duration)m.push(a.duration);
-          if(a.score)m.push(a.score.toFixed(1));
-          meta.textContent=m.join(" · ");
+          meta.textContent=m.join(" · ")||"Anime";
           body.appendChild(meta);
           d.appendChild(body);
+
           if(!isUnavail){
             d.addEventListener("click",function(){App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);});
           }
@@ -444,14 +655,15 @@ var Tui = (function () {
       }
       box.appendChild(grid);
     }
+    if(window.TvNavigationManager){
+      window.TvNavigationManager.restoreFocusedIndex("#results", ".poster-card, .trow", savedIdx, S.sel >= 0 ? S.sel : 0);
+    }
   }
 
   function renderPager(){
     var hasPagination = false;
     if(S.view === "terbaru"){
       hasPagination = !!(SCHEDULE_DAYS && SCHEDULE_DAYS.length > 1);
-    } else if(S.view === "cari"){
-      hasPagination = false;
     } else {
       hasPagination = (S.total > 1);
     }
@@ -482,27 +694,98 @@ var Tui = (function () {
     }
   }
 
+  function getGridCols(){
+    var box=$("results");
+    if(!box)return 1;
+    var cards=box.querySelectorAll(".poster-card");
+    if(cards.length<2)return 1;
+    var firstTop=cards[0].offsetTop;
+    for(var c=1;c<cards.length;c++){
+      if(cards[c].offsetTop > firstTop + 8){
+        return c;
+      }
+    }
+    return cards.length;
+  }
+
   function moveSel(d){
     if(!S.items.length)return;
     var count=S.items.length;
-    var next=S.sel;
+    var next;
+    if(S.sel < 0){
+      next = (d > 0) ? 0 : count - 1;
+    } else {
+      if(Math.abs(d) > 1){
+        if(d > 0){
+          if(S.sel + d >= count){
+            if(S.sel >= count - getGridCols()){
+              if(window.TvNavigationManager){
+                window.TvNavigationManager.setFocus($("search-input-wrap"), "search");
+                return;
+              }
+            }
+            next = count - 1;
+          } else {
+            next = S.sel + d;
+          }
+        } else {
+          if(S.sel + d < 0){
+            if(window.TvNavigationManager){
+              var sched = $("schedule-days-bar");
+              if(sched && !sched.classList.contains("hidden")){
+                var firstChip = sched.querySelector(".ep-range-chip");
+                if(firstChip){
+                  window.TvNavigationManager.setFocus(firstChip, "chips");
+                  return;
+                }
+              }
+              var actTab = document.querySelector(".nav-tab-btn.active") || document.querySelector(".nav-tab-btn");
+              if(actTab){
+                window.TvNavigationManager.setFocus(actTab, "tabs");
+                return;
+              }
+            }
+            next = 0;
+          } else {
+            next = S.sel + d;
+          }
+        }
+      } else {
+        next = (S.sel + d + count) % count;
+      }
+    }
     for(var step=0;step<count;step++){
-      next=(next+d+count)%count;
-      if(!S.items[next]||!S.items[next].is_header){
+      if(S.items[next] && !S.items[next].is_header){
         S.sel=next;
         renderSel();
         return;
       }
+      next = (next + (d > 0 ? 1 : -1) + count) % count;
     }
   }
+
   function renderSel(){
     var box=$("results");
-    var all=box.querySelectorAll(".trow");
+    if(!box)return;
+    var all=box.querySelectorAll(".poster-card, .trow");
     for(var i=0;i<all.length;i++){
+      var itemIdx = parseInt(all[i].getAttribute("data-idx"), 10);
       var isUnm=all[i].classList.contains("unmapped");
-      all[i].classList.toggle("sel",i===S.sel&&!isUnm);
+      var isThis = (itemIdx === S.sel && !isUnm);
+      all[i].classList.toggle("sel", isThis);
+      all[i].classList.toggle("tv-focus", isThis);
     }
-    if(all[S.sel])all[S.sel].scrollIntoView({block:"nearest"});
+    if(S.sel < 0) return;
+    var selEl = box.querySelector('[data-idx="' + S.sel + '"]');
+    if(selEl){
+      selEl.scrollIntoView({block:"nearest", inline:"nearest"});
+      if(window.TvNavigationManager){
+        window.TvNavigationManager.setFocus(selEl, "grid", { scroll: true });
+      }
+      if(document.activeElement !== selEl){
+        try{selEl.focus({preventScroll:true});}catch(_){}
+      }
+    }
   }
   function openSelected(){
     if(!S.items.length||S.sel<0)return;
@@ -522,7 +805,10 @@ var Tui = (function () {
     doSearch(q);
   }
 
-  async function doSearch(q){
+  async function doSearch(q, page){
+    var p = page || 1;
+    S.searchQuery = q;
+    S.page = p;
     var t0=Date.now();
     var qlow=(q||"").trim().toLowerCase();
     if(qlow==="hentai"||qlow.indexOf("hentai")>=0){
@@ -535,11 +821,16 @@ var Tui = (function () {
     }
     try{
       var src = (window.cur && window.cur.source) || "";
-      var r = await window.Tatap.search(q, src);
+      var r = await window.Tatap.search(q, src, p);
       if(!r||!r.success){log("search error: "+(r&&r.error||"??"),"err");return;}
-      S.items=r.data.results||[];S.sel=-1;S.total=1;
-      $("results-title").textContent=S.items.length?"Hasil untuk \""+q+"\"":"Tidak ketemu \""+q+"\"";
-      $("results-meta").textContent=S.items.length+" judul · "+(Date.now()-t0)+"ms"+(r.data.cached?" · cached":"");
+      var d = r.data || {};
+      S.items=d.results||[];
+      S.sel=-1;
+      S.page=d.page||p;
+      S.total=d.total_pages||1;
+      var pageSuffix = S.page > 1 ? (" (Hal " + S.page + ")") : "";
+      $("results-title").textContent=S.items.length?("Hasil untuk \""+q+"\""+pageSuffix):("Tidak ketemu \""+q+"\"");
+      $("results-meta").textContent=S.items.length+" judul · "+(Date.now()-t0)+"ms"+(d.cached?" · cached":"");
       renderResults();renderPager();
     }catch(e){log("err: "+e.message,"err");}
   }
@@ -547,11 +838,11 @@ var Tui = (function () {
   function setViewSilent(v){
     S.view=v;S.page=1;
     $("pager").classList.add("hidden");
-    $("continue-sec").classList.add("hidden");
-    $("lane-season-sec").classList.add("hidden");
-    $("lane-still-sec").classList.add("hidden");
+    var cSec = $("continue-sec");
+    if(cSec) cSec.classList.add("hidden");
     var sBar = $("schedule-days-bar");
     if(sBar) sBar.classList.toggle("hidden", v !== "terbaru");
+    updateNavTabs(v);
   }
 
   // ==== :filter (Catalog Cross-Filter) ====
@@ -948,8 +1239,18 @@ var Tui = (function () {
         try{localStorage.setItem("tatap_ambient",nxt2);}catch(e){}
         document.body.classList.toggle("no-ambient",nxt2==="off");
         log("ambient "+(nxt2==="on"?"ON":"OFF"),"ok");break;
-      case "riwayat":
-        try{await fetch("/api/history",{method:"DELETE"});log("riwayat dihapus","ok");}catch(e){log("err: "+e.message,"err");}break;
+      case "riwayat":case "history":
+        if(args === "hapus" || args === "clear" || args === "delete"){
+          try{
+            await fetch("/api/history",{method:"DELETE"});
+            log("riwayat menonton berhasil dihapus","ok");
+            if(S.view === "riwayat"){ loadView(); }
+            if(window.App && App.renderContinue){ App.renderContinue(); }
+          }catch(e){log("err: "+(e&&e.message||e),"err");}
+        }else{
+          setView("riwayat");
+        }
+        break;
       case "favorit":case "bookmark":case "bookmarks":
         setView("favorit");break;
       case "logs":case "translog":
@@ -985,7 +1286,7 @@ var Tui = (function () {
           window.App.checkForUpdate(true);
         } else {
           try{
-            var ures = await window.Tatap.checkUpdate();
+            var ures = await window.Tatap.checkUpdate(true);
             if(ures && ures.success && ures.data){
               if(ures.data.has_update){
                 log("pembaruan tersedia: v" + ures.data.latest_version + " — " + ures.data.release_name,"ok");
@@ -1016,30 +1317,58 @@ var Tui = (function () {
   function onKey(e){
     var t=(e.target.tagName||"");
     var typing = t==="INPUT"||t==="SELECT"||t==="TEXTAREA";
-    if(e.key==="Escape"){
+    if(e.key==="Escape" || e.key==="Backspace"){
+      if(!typing && window.TvNavigationManager && window.TvNavigationManager.handleBack(e)){return;}
       if(isModalOpen()){App.onKeyPlayer(e);return;}
       if(typing){$("cmd").blur();S.promptFoc=false;return;}
+      if(S.sel>=0){S.sel=-1;renderSel();return;}
       $("cmd").value="";clearLog();e.preventDefault();return;
     }
     if(isModalOpen()){App.onKeyPlayer(e);return;}
     if(e.key==="/"){e.preventDefault();focusPrompt();return;}
-    if(typing){if(e.key==="Escape"){$("cmd").blur();S.promptFoc=false;}return;}
-    if(e.key==="Escape"){$("cmd").value="";clearLog();e.preventDefault();return;}
-    if(e.key==="Tab"){e.preventDefault();cycleView();return;}
-    if(e.key==="ArrowUp"){
+    if(typing){return;}
+    if(e.key==="Tab"){e.preventDefault();cycleView(e.shiftKey ? -1 : 1);return;}
+
+    var isTxt = S.view==="cari" || S.view==="terbaru";
+    var cols = isTxt ? 1 : getGridCols();
+
+    if(e.key==="ArrowRight"){
       e.preventDefault();
-      if(!S.items.length){cmdHistory(-1);}else{moveSel(-1);}
+      if(S.items.length){moveSel(1);}
+      return;
+    }
+    if(e.key==="ArrowLeft"){
+      e.preventDefault();
+      if(S.items.length){moveSel(-1);}
       return;
     }
     if(e.key==="ArrowDown"){
       e.preventDefault();
-      if(!S.items.length){cmdHistory(1);}else{moveSel(1);}
+      if(!S.items.length){cmdHistory(1);}else{moveSel(cols);}
+      return;
+    }
+    if(e.key==="ArrowUp"){
+      e.preventDefault();
+      if(!S.items.length){cmdHistory(-1);}else{moveSel(-cols);}
       return;
     }
     if(e.key==="Enter"){
       e.preventDefault();
-      if(S.promptFoc){submitPrompt();}else{focusPrompt();}
+      if(S.sel>=0){
+        openSelected();
+      }else if(S.promptFoc){
+        submitPrompt();
+      }else{
+        focusPrompt();
+      }
       return;
+    }
+    if(e.key===" "){
+      if(S.sel>=0){
+        e.preventDefault();
+        openSelected();
+        return;
+      }
     }
     if(e.key==="["||e.key===","){e.preventDefault();pagePrev();return;}
     if(e.key==="]"||e.key==="."){e.preventDefault();pageNext();return;}
@@ -1067,9 +1396,13 @@ var Tui = (function () {
     $("cmd").value=h[_hPos]||"";
     var inp=$("cmd");inp.selectionStart=inp.selectionEnd=inp.value.length;
   }
-  function cycleView(){
-    var ord=["cari","musim","terbaru","lanjutan","katalog"];
-    var idx=ord.indexOf(S.view);setView(ord[(idx+1)%ord.length]);
+  function cycleView(dir){
+    if(typeof dir !== "number") dir = 1;
+    var ord=["cari","musim","terbaru","lanjutan","riwayat","favorit","katalog"];
+    var idx=ord.indexOf(S.view);
+    if(idx < 0) idx = 0;
+    var nextIdx = (idx + dir + ord.length) % ord.length;
+    setView(ord[nextIdx]);
   }
   function pagePrev(){
     if(S.view==="terbaru"){
@@ -1077,14 +1410,25 @@ var Tui = (function () {
       if(curIdx < 0) curIdx = 0;
       if(curIdx > 0){
         S.scheduleDay = SCHEDULE_DAYS[curIdx - 1];
+        S.sel = -1;
         updateScheduleChips();
         loadView();
+      }
+      return;
+    }
+    if(S.view==="cari" && S.searchQuery){
+      if(S.page > 1){
+        S.page--;
+        S.sel = -1;
+        doSearch(S.searchQuery, S.page);
+        try{window.scrollTo({top:0,behavior:"smooth"});}catch(_){}
       }
       return;
     }
     if(S.view==="favorit" && S.rawBookmarks){
       if(S.page>1){
         S.page--;
+        S.sel = -1;
         var pageSize=24;
         var start=(S.page-1)*pageSize;
         S.items=S.rawBookmarks.slice(start,start+pageSize);
@@ -1093,8 +1437,21 @@ var Tui = (function () {
       }
       return;
     }
+    if(S.view==="riwayat" && S.rawHistory){
+      if(S.page>1){
+        S.page--;
+        S.sel = -1;
+        var pageSize=24;
+        var start=(S.page-1)*pageSize;
+        S.items=S.rawHistory.slice(start,start+pageSize);
+        renderResults();renderPager();
+        try{window.scrollTo({top:0,behavior:"smooth"});}catch(_){}
+      }
+      return;
+    }
     if(S.page>1){
       S.page--;
+      S.sel = -1;
       loadView();
       try{window.scrollTo({top:0,behavior:"smooth"});}catch(_){}
     }
@@ -1106,14 +1463,25 @@ var Tui = (function () {
       if(curIdx < 0) curIdx = 0;
       if(curIdx < SCHEDULE_DAYS.length - 1){
         S.scheduleDay = SCHEDULE_DAYS[curIdx + 1];
+        S.sel = -1;
         updateScheduleChips();
         loadView();
+      }
+      return;
+    }
+    if(S.view==="cari" && S.searchQuery){
+      if(S.page < S.total){
+        S.page++;
+        S.sel = -1;
+        doSearch(S.searchQuery, S.page);
+        try{window.scrollTo({top:0,behavior:"smooth"});}catch(_){}
       }
       return;
     }
     if(S.view==="favorit" && S.rawBookmarks){
       if(S.page<S.total){
         S.page++;
+        S.sel = -1;
         var pageSize=24;
         var start=(S.page-1)*pageSize;
         S.items=S.rawBookmarks.slice(start,start+pageSize);
@@ -1122,8 +1490,21 @@ var Tui = (function () {
       }
       return;
     }
+    if(S.view==="riwayat" && S.rawHistory){
+      if(S.page<S.total){
+        S.page++;
+        S.sel = -1;
+        var pageSize=24;
+        var start=(S.page-1)*pageSize;
+        S.items=S.rawHistory.slice(start,start+pageSize);
+        renderResults();renderPager();
+        try{window.scrollTo({top:0,behavior:"smooth"});}catch(_){}
+      }
+      return;
+    }
     if(S.page<S.total){
       S.page++;
+      S.sel = -1;
       loadView();
       try{window.scrollTo({top:0,behavior:"smooth"});}catch(_){}
     }
@@ -1136,15 +1517,139 @@ var Tui = (function () {
     var inp=$("cmd");
     inp.addEventListener("keydown",function(e){
       if(e.key==="Enter"){e.preventDefault();_hPos=loadCmdHist().length;submitPrompt();}
-      else if(e.key==="Escape"){inp.blur();}
-      else if(e.key==="ArrowUp"&&!S.items.length){e.preventDefault();cmdHistory(-1);}
-      else if(e.key==="ArrowDown"&&!S.items.length){e.preventDefault();cmdHistory(1);}
-      else if(e.key==="Tab"){e.preventDefault();cycleView();}
+      else if(e.key==="Escape"){inp.blur();S.promptFoc=false;}
+      else if(e.key==="ArrowDown"){
+        if(S.items.length){
+          e.preventDefault();
+          inp.blur();
+          S.promptFoc=false;
+          moveSel(1);
+        } else {
+          e.preventDefault();cmdHistory(1);
+        }
+      }
+      else if(e.key==="ArrowUp"){
+        if(S.items.length && S.sel > 0){
+          e.preventDefault();
+          inp.blur();
+          S.promptFoc=false;
+          moveSel(-1);
+        } else if(!S.items.length){
+          e.preventDefault();cmdHistory(-1);
+        }
+      }
+      else if(e.key==="Tab"){e.preventDefault();cycleView(e.shiftKey ? -1 : 1);}
     });
     inp.addEventListener("focus",onPromptFocus);
     inp.addEventListener("blur",onPromptBlur);
     inp.addEventListener("input",function(){if(inp.value.indexOf(":")===0){/* could show command hints */}});
     document.addEventListener("keydown",onKey);
+
+    var searchWrap = $("search-input-wrap");
+    if(searchWrap){
+      searchWrap.addEventListener("click", function(){
+        if(window.TvNavigationManager) window.TvNavigationManager.enterSearchTypingMode();
+        else focusPrompt();
+      });
+      searchWrap.addEventListener("keydown", function(e){
+        if(e.key === "Enter" || e.key === " "){
+          e.preventDefault();
+          if(window.TvNavigationManager) window.TvNavigationManager.enterSearchTypingMode();
+          else focusPrompt();
+        } else if(e.key === "ArrowUp"){
+          e.preventDefault();
+          if(S.items.length){
+            if(window.TvNavigationManager){
+              window.TvNavigationManager.restoreFocusedIndex("#results", ".poster-card, .trow", S.items.length - 1, S.items.length - 1);
+            } else {
+              moveSel(1);
+            }
+          }
+        }
+      });
+    }
+
+    var tabsBar = $("nav-tabs-bar");
+    if(tabsBar){
+      tabsBar.addEventListener("keydown", function(e){
+        var tabBtns = Array.prototype.slice.call(tabsBar.querySelectorAll(".nav-tab-btn"));
+        var curIdx = tabBtns.indexOf(document.activeElement);
+        if(curIdx < 0){
+          for(var t = 0; t < tabBtns.length; t++){
+            if(tabBtns[t].classList.contains("tv-focus")){ curIdx = t; break; }
+          }
+        }
+        if(e.key === "ArrowRight"){
+          e.preventDefault();
+          var nextIdx = (curIdx >= tabBtns.length - 1 || curIdx < 0) ? 0 : curIdx + 1;
+          if(window.TvNavigationManager) window.TvNavigationManager.setFocus(tabBtns[nextIdx], "tabs");
+          else tabBtns[nextIdx].focus();
+        } else if(e.key === "ArrowLeft"){
+          e.preventDefault();
+          var prevIdx = (curIdx <= 0) ? tabBtns.length - 1 : curIdx - 1;
+          if(window.TvNavigationManager) window.TvNavigationManager.setFocus(tabBtns[prevIdx], "tabs");
+          else tabBtns[prevIdx].focus();
+        } else if(e.key === "ArrowDown"){
+          e.preventDefault();
+          var sched = $("schedule-days-bar");
+          if(sched && !sched.classList.contains("hidden")){
+            var firstChip = sched.querySelector(".ep-range-chip");
+            if(firstChip){
+              if(window.TvNavigationManager) window.TvNavigationManager.setFocus(firstChip, "chips");
+              else firstChip.focus();
+              return;
+            }
+          }
+          if(S.items.length){
+            if(window.TvNavigationManager){
+              window.TvNavigationManager.restoreFocusedIndex("#results", ".poster-card, .trow", 0, 0);
+            } else {
+              moveSel(1);
+            }
+          }
+        }
+      });
+    }
+
+    var schedBar = $("schedule-days-bar");
+    if(schedBar){
+      schedBar.addEventListener("keydown", function(e){
+        var chips = Array.prototype.slice.call(schedBar.querySelectorAll(".ep-range-chip"));
+        var curIdx = chips.indexOf(document.activeElement);
+        if(curIdx < 0){
+          for(var c = 0; c < chips.length; c++){
+            if(chips[c].classList.contains("tv-focus")){ curIdx = c; break; }
+          }
+        }
+        if(e.key === "ArrowRight"){
+          e.preventDefault();
+          var nextIdx = (curIdx >= chips.length - 1 || curIdx < 0) ? 0 : curIdx + 1;
+          if(window.TvNavigationManager) window.TvNavigationManager.setFocus(chips[nextIdx], "chips");
+          else chips[nextIdx].focus();
+        } else if(e.key === "ArrowLeft"){
+          e.preventDefault();
+          var prevIdx = (curIdx <= 0) ? chips.length - 1 : curIdx - 1;
+          if(window.TvNavigationManager) window.TvNavigationManager.setFocus(chips[prevIdx], "chips");
+          else chips[prevIdx].focus();
+        } else if(e.key === "ArrowUp"){
+          e.preventDefault();
+          var actTab = document.querySelector(".nav-tab-btn.active") || document.querySelector(".nav-tab-btn");
+          if(actTab){
+            if(window.TvNavigationManager) window.TvNavigationManager.setFocus(actTab, "tabs");
+            else actTab.focus();
+          }
+        } else if(e.key === "ArrowDown"){
+          e.preventDefault();
+          if(S.items.length){
+            if(window.TvNavigationManager){
+              window.TvNavigationManager.restoreFocusedIndex("#results", ".poster-card, .trow", 0, 0);
+            } else {
+              moveSel(1);
+            }
+          }
+        }
+      });
+    }
     $("help-close").addEventListener("click",function(){$("help-overlay").classList.add("hidden");});
     $("help-overlay").addEventListener("click",function(e){if(e.target===$("help-overlay"))$("help-overlay").classList.add("hidden");});
     // Genre modal listeners
@@ -1261,9 +1766,8 @@ var Tui = (function () {
     var btnPgNext = $("pg-next");
     if(btnPgNext) btnPgNext.addEventListener("click", function(e){ e.preventDefault(); pageNext(); });
     $("sb-view").textContent="view: "+S.view;
-    renderRecents();
-    renderPager();
+    setView("katalog");
   }
 
-  return {boot:boot,log:log,clearLog:clearLog,setView:setView,loadView:loadView,moveSel:moveSel,renderSel:renderSel,openSelected:openSelected,startSearch:startSearch,doSearch:doSearch,renderResults:renderResults,renderPager:renderPager,renderRecents:renderRecents,cmdUsage:cmdUsage,openGenreModal:openGenreModal,openCatalogFilterModal:openCatalogFilterModal,closeCatalogFilterModal:closeCatalogFilterModal,applyGenreFilter:function(genreOrSlug){applyGenreFilter(slugifyGenre(genreOrSlug));},slugifyGenre:slugifyGenre,view:function(){return S.view;},state:function(){return S;}};
+  return {boot:boot,log:log,clearLog:clearLog,setView:setView,loadView:loadView,moveSel:moveSel,renderSel:renderSel,openSelected:openSelected,startSearch:startSearch,doSearch:doSearch,renderResults:renderResults,renderPager:renderPager,renderRecents:renderRecents,cmdUsage:cmdUsage,openGenreModal:openGenreModal,closeGenreModal:closeGenreModal,openCatalogFilterModal:openCatalogFilterModal,closeCatalogFilterModal:closeCatalogFilterModal,getGridCols:getGridCols,applyGenreFilter:function(genreOrSlug){applyGenreFilter(slugifyGenre(genreOrSlug));},slugifyGenre:slugifyGenre,view:function(){return S.view;},state:function(){return S;}};
 })();

@@ -1,16 +1,21 @@
 <!DOCTYPE html>
-<html lang="id" style="background:#08090c;color:#d6dae2;">
+<html lang="id" style="background:#000000;color:#f0f3f6;">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#08090c">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000">
 <title>Tatap — nonton santai di lokal</title>
 <link rel="stylesheet" href="/css/style.css">
 <link rel="icon" type="image/x-icon" href="/favicon.ico">
 <link rel="icon" type="image/png" sizes="192x192" href="/assets/icon-192.png">
 <link rel="apple-touch-icon" href="/assets/icon-512.png">
 </head>
-<body class="no-crt" style="background:#08090c;color:#d6dae2;">
+<body class="no-crt" style="background:#000000;color:#f0f3f6;">
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none" id="tatap-icons">
   <defs>
+    <!-- Brand Mark: Sleek Geometric Viewfinder Eye (Tatap) -->
+    <symbol id="icon-brand-mark" viewBox="0 0 24 24">
+      <path d="M2 12C4.5 6.5 8 4 12 4s7.5 2.5 10 8c-2.5 5.5-6 8-10 8s-7.5-2.5-10-8z" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <circle cx="12" cy="12" r="3.5" fill="currentColor"/>
+    </symbol>
     <!-- Menu: 3 sleek horizontal bars -->
     <symbol id="icon-menu" viewBox="0 0 24 24">
       <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
@@ -188,37 +193,49 @@
       <polygon points="13 19 22 12 13 5 13 19" fill="currentColor"/>
       <polygon points="2 19 11 12 2 5 2 19" fill="currentColor"/>
     </symbol>
+    <!-- Server Alert / Offline -->
+    <symbol id="icon-server-alert" viewBox="0 0 24 24">
+      <rect x="2" y="3" width="20" height="7" rx="2" stroke="currentColor" stroke-width="2" fill="none"/>
+      <rect x="2" y="14" width="20" height="7" rx="2" stroke="currentColor" stroke-width="2" fill="none"/>
+      <line x1="6" y1="6.5" x2="6.01" y2="6.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+      <line x1="6" y1="17.5" x2="6.01" y2="17.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+      <line x1="16" y1="5.5" x2="19" y2="7.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="19" y1="5.5" x2="16" y2="7.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="16" y1="16.5" x2="19" y2="18.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="19" y1="16.5" x2="16" y2="18.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
   </defs>
 </svg>
 <div id="crt" aria-hidden="true"></div>
 <div id="bg-glow" aria-hidden="true"></div>
 
 <header class="tui-head">
-  <div class="head-brand">
+  <div class="head-brand" id="head-brand" title="Kembali ke Beranda (Katalog Anime)" role="button" tabindex="0" aria-label="Tatap Beranda">
+    <svg class="brand-logo-mark" viewBox="0 0 24 24" aria-hidden="true">
+      <use href="#icon-brand-mark"/>
+    </svg>
     <span class="brand-name">TATAP</span>
-    <span class="brand-ver" id="brand-ver">v2.9.3</span>
+    <span class="brand-ver" id="brand-ver">v2.10.3</span>
   </div>
+  <nav class="nav-tabs-bar" id="nav-tabs-bar" role="navigation" aria-label="Navigasi Utama">
+    <button class="nav-tab-btn active" data-view="katalog" id="tab-nav-katalog" tabindex="0">Katalog</button>
+    <button class="nav-tab-btn" data-view="musim" id="tab-nav-musim" tabindex="0">Musim Ini</button>
+    <button class="nav-tab-btn" data-view="terbaru" id="tab-nav-terbaru" tabindex="0">Terbaru</button>
+    <button class="nav-tab-btn" data-view="lanjutan" id="tab-nav-lanjutan" tabindex="0">Masih Tayang</button>
+    <button class="nav-tab-btn" data-view="riwayat" id="tab-nav-riwayat" tabindex="0">Riwayat</button>
+    <button class="nav-tab-btn" data-view="favorit" id="tab-nav-favorit" tabindex="0">Favorit</button>
+  </nav>
   <div class="head-actions">
-    <button id="btn-drawer-head" class="icon-btn header-drawer-btn" title="Buka Menu & Navigasi (☰)" aria-label="Menu">
+    <button id="btn-drawer-head" class="icon-btn header-drawer-btn" title="Buka Menu & Navigasi (☰)" aria-label="Menu" tabindex="0">
       <span class="drawer-btn-icon"><svg class="ui-icon"><use href="#icon-menu"/></svg></span>
     </button>
   </div>
 </header>
 
 <main>
-  <section id="continue-sec" class="hidden">
+  <section id="continue-sec" class="hidden" style="display:none">
     <div class="sec-head"><h2>Lanjutkan menonton</h2><button class="link-btn" id="clear-hist">hapus</button></div>
     <div id="continue-row" class="hscroll"></div>
-  </section>
-
-  <section id="lane-season-sec" class="hidden">
-    <div class="sec-head"><h2 id="lane-season-title">Tayang musim ini</h2></div>
-    <div id="lane-season" class="hscroll"></div>
-  </section>
-
-  <section id="lane-still-sec" class="hidden">
-    <div class="sec-head"><h2>Masih tayang (lanjut)</h2></div>
-    <div id="lane-still" class="hscroll"></div>
   </section>
 
   <section id="search-sec">
@@ -227,16 +244,16 @@
       <div class="sec-title-wrap">
         <h2 id="results-title">siap</h2>
         <span id="results-meta" class="dim small"></span>
-        <button id="btn-catalog-filter" class="icon-btn catalog-filter-btn hidden" title="Filter Katalog (Cross Filter Urutan + Tahun + Bulan)"><svg class="ui-icon"><use href="#icon-filter"/></svg> Filter</button>
+        <button id="btn-catalog-filter" class="icon-btn catalog-filter-btn hidden" title="Filter Katalog (Cross Filter Urutan + Tahun + Bulan)" tabindex="0"><svg class="ui-icon"><use href="#icon-filter"/></svg> Filter</button>
       </div>
       <div id="schedule-days-bar" class="seg schedule-days-bar hidden" role="group" aria-label="Filter Hari Rilis">
-        <button class="ep-range-chip" data-day="monday">Senin</button>
-        <button class="ep-range-chip" data-day="tuesday">Selasa</button>
-        <button class="ep-range-chip" data-day="wednesday">Rabu</button>
-        <button class="ep-range-chip" data-day="thursday">Kamis</button>
-        <button class="ep-range-chip" data-day="friday">Jumat</button>
-        <button class="ep-range-chip" data-day="saturday">Sabtu</button>
-        <button class="ep-range-chip" data-day="sunday">Minggu</button>
+        <button class="ep-range-chip" data-day="monday" tabindex="0">Senin</button>
+        <button class="ep-range-chip" data-day="tuesday" tabindex="0">Selasa</button>
+        <button class="ep-range-chip" data-day="wednesday" tabindex="0">Rabu</button>
+        <button class="ep-range-chip" data-day="thursday" tabindex="0">Kamis</button>
+        <button class="ep-range-chip" data-day="friday" tabindex="0">Jumat</button>
+        <button class="ep-range-chip" data-day="saturday" tabindex="0">Sabtu</button>
+        <button class="ep-range-chip" data-day="sunday" tabindex="0">Minggu</button>
       </div>
     </div>
     <div id="results"></div>
@@ -259,13 +276,13 @@
     <div class="drawer-head">
       <div class="drawer-title">
         <span class="brand-name">TATAP</span>
-        <span class="dim small">v2.9.3</span>
+        <span class="dim small">v2.10.3</span>
       </div>
       <button class="icon-btn big" id="drawer-close" title="Tutup Menu (Esc)"><svg class="ui-icon"><use href="#icon-close"/></svg></button>
     </div>
 
     <div class="drawer-body">
-      <div class="drawer-group">
+      <div class="drawer-group drawer-group-nav">
         <div class="drawer-group-label">NAVIGASI TAMPILAN</div>
         <button class="drawer-item" data-view="cari">
           <span class="drawer-item-icon"><svg class="ui-icon"><use href="#icon-search"/></svg></span>
@@ -286,6 +303,11 @@
           <span class="drawer-item-icon"><svg class="ui-icon"><use href="#icon-tv"/></svg></span>
           <span class="drawer-item-label">Masih Tayang (Lanjut)</span>
           <span class="drawer-item-badge">:lanjutan</span>
+        </button>
+        <button class="drawer-item" data-view="riwayat">
+          <span class="drawer-item-icon"><svg class="ui-icon"><use href="#icon-clock"/></svg></span>
+          <span class="drawer-item-label">Riwayat Menonton</span>
+          <span class="drawer-item-badge">:riwayat</span>
         </button>
         <button class="drawer-item" data-view="favorit">
           <span class="drawer-item-icon"><svg class="ui-icon"><use href="#icon-star"/></svg></span>
@@ -548,21 +570,17 @@
 
 <footer class="bottom-bar">
   <div class="bottom-search-row">
-    <div class="search-input-wrap">
+    <div class="search-input-wrap" id="search-input-wrap" tabindex="0" role="searchbox" aria-label="Cari anime">
+      <svg class="ui-icon search-lead-icon" aria-hidden="true"><use href="#icon-search"/></svg>
       <span class="prompt-ps1">tatap$</span>
-      <input id="cmd" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="cari judul, atau :perintah (cth: :update, :musim, :bantuan)">
+      <input id="cmd" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="cari judul anime, atau :perintah (cth: :update, :musim, :bantuan)" readonly>
       <span class="caret" aria-hidden="true"></span>
-    </div>
-    <div class="bottom-actions">
-      <span id="health" class="health" title="Status koneksi scraper backend">…</span>
-      <button id="btn-drawer" class="icon-btn header-drawer-btn" title="Buka Menu & Navigasi (☰)" aria-label="Menu">
-        <span class="drawer-btn-icon"><svg class="ui-icon"><use href="#icon-menu"/></svg></span>
-      </button>
+      <kbd class="search-kbd-hint" title="Pintasan keyboard: tekan '/' untuk cari">/</kbd>
     </div>
   </div>
   <div class="statusbar">
     <div class="sb-shortcuts">
-      <span><b>↑↓</b> pilih</span>
+      <span><b>↑↓←→</b> pilih</span>
       <span><b>enter</b> buka</span>
       <span><b>tab</b> ganti tampilan</span>
       <span><b>[ ]</b> halaman</span>
@@ -683,6 +701,40 @@
       <button id="pm-next" title="Episode berikutnya (n)">NEXT <svg class="ui-icon"><use href="#icon-step-next"/></svg></button>
     </div>
     <div class="player-hint dim small">Space play/pause · ←/→ seek 5 dtk · f fullscreen · [ / ] kecepatan · n/p ganti episode · m mute · Esc tutup</div>
+  </div>
+</div>
+
+<!-- BACKEND STARTUP ERROR / RECONNECT OVERLAY -->
+<div id="backend-error-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="be-title">
+  <div class="backend-error-sheet">
+    <div class="be-head">
+      <div class="be-icon-wrap">
+        <svg class="ui-icon be-alert-icon"><use href="#icon-server-alert"/></svg>
+      </div>
+      <div>
+        <h2 id="be-title" class="be-title">Backend Tatap Belum Terhubung</h2>
+        <span class="dim small">Server Lokal http://127.0.0.1:8767</span>
+      </div>
+    </div>
+    <div class="be-body">
+      <p>Tidak dapat terhubung ke server backend lokal Tatap. Hal ini biasanya terjadi jika:</p>
+      <ul>
+        <li>Proses backend Python masih dalam tahap inisialisasi / <i>warming up</i>.</li>
+        <li>Port <code>8767</code> terblokir firewall atau sedang digunakan oleh aplikasi lain.</li>
+        <li>Proses backend terhenti saat awal mulai dibuka.</li>
+      </ul>
+      <div id="be-status-box" class="be-status-box">
+        <span id="be-status-text" class="dim">Mencoba menghubungkan kembali secara otomatis...</span>
+      </div>
+    </div>
+    <div class="be-actions">
+      <button id="be-retry-btn" class="btn btn-primary be-btn">
+        <svg class="ui-icon"><use href="#icon-switch"/></svg> Coba Hubungkan Ulang
+      </button>
+      <button id="be-copy-debug-btn" class="btn btn-secondary be-btn">
+        Salin Info Diagnostik
+      </button>
+    </div>
   </div>
 </div>
 

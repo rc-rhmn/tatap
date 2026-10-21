@@ -9,8 +9,20 @@ import time
 import urllib.parse
 from config import HI_UA
 
-# Cache DNS hasil resolve DoH / direct
+# Cache DNS hasil resolve DoH / direct dengan batas memori maksimum
 _DNS_CACHE = {}
+_MAX_DNS_CACHE = 256
+
+
+def _set_dns_cache(host: str, ip: str):
+    """Menyimpan hasil resolve DNS dengan batas ukuran memori (bounded cache)."""
+    if len(_DNS_CACHE) >= _MAX_DNS_CACHE:
+        try:
+            first_k = next(iter(_DNS_CACHE))
+            _DNS_CACHE.pop(first_k, None)
+        except Exception:
+            _DNS_CACHE.clear()
+    _DNS_CACHE[host] = ip
 
 
 def _resolve_host(host: str) -> str:
@@ -23,7 +35,7 @@ def _resolve_host(host: str) -> str:
     
     # Cek apakah host sudah merupakan IP numerik
     if all(part.isdigit() for part in host.split(".") if part):
-        _DNS_CACHE[host] = host
+        _set_dns_cache(host, host)
         return host
 
     # 1. Coba resolve DNS sistem lokal
@@ -31,7 +43,7 @@ def _resolve_host(host: str) -> str:
         ip = socket.gethostbyname(host)
         # Abaikan bila di-poison ke IP localhost atau private range
         if ip and not ip.startswith("10.") and not ip.startswith("127.") and not ip.startswith("192.168."):
-            _DNS_CACHE[host] = ip
+            _set_dns_cache(host, ip)
             return ip
     except Exception:
         pass
@@ -52,7 +64,7 @@ def _resolve_host(host: str) -> str:
                     for ans in answers:
                         if ans.get("type") == 1 and ans.get("data"):
                             ip = ans["data"]
-                            _DNS_CACHE[host] = ip
+                            _set_dns_cache(host, ip)
                             return ip
         except Exception:
             pass
@@ -63,7 +75,7 @@ def _resolve_host(host: str) -> str:
         "dramahot.top": "93.123.109.210",
     }
     if host in known:
-        _DNS_CACHE[host] = known[host]
+        _set_dns_cache(host, known[host])
         return known[host]
 
     return host
@@ -136,59 +148,59 @@ def tls_desync_request(url: str, headers: dict = None, timeout: float = 10.0) ->
         path += "?" + p.query
 
     raw_sock, sslobj, in_bio, out_bio = tls_desync_connect(host, port, timeout=timeout)
-    
-    h_lines = [
-        f"GET {path} HTTP/1.1",
-        f"Host: {host}",
-        f"User-Agent: {HI_UA}",
-        "Accept: */*",
-        "Connection: close",
-    ]
-    if headers:
-        for k, v in headers.items():
-            if k.lower() not in ("host", "connection"):
-                h_lines.append(f"{k}: {v}")
-    
-    req_data = "\r\n".join(h_lines) + "\r\n\r\n"
-    sslobj.write(req_data.encode("utf-8"))
-    raw_sock.sendall(out_bio.read())
-
-    # Baca seluruh HTTP response
-    resp_raw = b""
-    raw_sock.settimeout(timeout)
-    while True:
-        try:
-            d = raw_sock.recv(16384)
-            if not d:
-                break
-            in_bio.write(d)
-            while True:
-                try:
-                    chunk = sslobj.read(16384)
-                    if not chunk:
-                        break
-                    resp_raw += chunk
-                except (ssl.SSLWantReadError, ssl.SSLZeroReturnError):
-                    break
-        except socket.timeout:
-            break
-        except Exception:
-            break
-
     try:
-        raw_sock.close()
-    except Exception:
-        pass
+        h_lines = [
+            f"GET {path} HTTP/1.1",
+            f"Host: {host}",
+            f"User-Agent: {HI_UA}",
+            "Accept: */*",
+            "Connection: close",
+        ]
+        if headers:
+            for k, v in headers.items():
+                if k.lower() not in ("host", "connection"):
+                    h_lines.append(f"{k}: {v}")
+        
+        req_data = "\r\n".join(h_lines) + "\r\n\r\n"
+        sslobj.write(req_data.encode("utf-8"))
+        raw_sock.sendall(out_bio.read())
 
-    # Pisahkan header dan body HTTP
-    idx = resp_raw.find(b"\r\n\r\n")
-    if idx >= 0:
-        return resp_raw[idx + 4:]
-    return resp_raw
+        # Baca seluruh HTTP response
+        resp_raw = b""
+        raw_sock.settimeout(timeout)
+        while True:
+            try:
+                d = raw_sock.recv(16384)
+                if not d:
+                    break
+                in_bio.write(d)
+                while True:
+                    try:
+                        chunk = sslobj.read(16384)
+                        if not chunk:
+                            break
+                        resp_raw += chunk
+                    except (ssl.SSLWantReadError, ssl.SSLZeroReturnError):
+                        break
+            except socket.timeout:
+                break
+            except Exception:
+                break
+
+        # Pisahkan header dan body HTTP
+        idx = resp_raw.find(b"\r\n\r\n")
+        if idx >= 0:
+            return resp_raw[idx + 4:]
+        return resp_raw
+    finally:
+        try:
+            raw_sock.close()
+        except Exception:
+            pass
 
 
 async def tls_desync_stream(url: str, headers: dict = None, chunk_size: int = 65536):
-    """Async generator untuk streaming segmen video via desync TLS."""
+    """Async generator untuk streaming segmen video via desync TLS dengan proteksi anti socket-leak."""
     import asyncio
     p = urllib.parse.urlsplit(url)
     host = p.netloc.split(":")[0]
@@ -202,55 +214,56 @@ async def tls_desync_stream(url: str, headers: dict = None, chunk_size: int = 65
         None, lambda: tls_desync_connect(host, port, timeout=10.0)
     )
 
-    h_lines = [
-        f"GET {path} HTTP/1.1",
-        f"Host: {host}",
-        f"User-Agent: {HI_UA}",
-        "Accept: */*",
-        "Connection: close",
-    ]
-    if headers:
-        for k, v in headers.items():
-            if k.lower() not in ("host", "connection"):
-                h_lines.append(f"{k}: {v}")
-
-    req_data = "\r\n".join(h_lines) + "\r\n\r\n"
-    sslobj.write(req_data.encode("utf-8"))
-    raw_sock.sendall(out_bio.read())
-
-    # Stream chunks
-    header_parsed = False
-    buf = b""
-    raw_sock.settimeout(12.0)
-
-    while True:
-        try:
-            d = await loop.run_in_executor(None, lambda: raw_sock.recv(32768))
-            if not d:
-                break
-            in_bio.write(d)
-            while True:
-                try:
-                    chunk = sslobj.read(32768)
-                    if not chunk:
-                        break
-                    if not header_parsed:
-                        buf += chunk
-                        sep = buf.find(b"\r\n\r\n")
-                        if sep >= 0:
-                            header_parsed = True
-                            body_part = buf[sep + 4:]
-                            buf = b""
-                            if body_part:
-                                yield body_part
-                    else:
-                        yield chunk
-                except (ssl.SSLWantReadError, ssl.SSLZeroReturnError):
-                    break
-        except Exception:
-            break
-
     try:
-        raw_sock.close()
-    except Exception:
-        pass
+        h_lines = [
+            f"GET {path} HTTP/1.1",
+            f"Host: {host}",
+            f"User-Agent: {HI_UA}",
+            "Accept: */*",
+            "Connection: close",
+        ]
+        if headers:
+            for k, v in headers.items():
+                if k.lower() not in ("host", "connection"):
+                    h_lines.append(f"{k}: {v}")
+
+        req_data = "\r\n".join(h_lines) + "\r\n\r\n"
+        sslobj.write(req_data.encode("utf-8"))
+        raw_sock.sendall(out_bio.read())
+
+        # Stream chunks
+        header_parsed = False
+        buf = b""
+        raw_sock.settimeout(12.0)
+
+        while True:
+            try:
+                d = await loop.run_in_executor(None, lambda: raw_sock.recv(32768))
+                if not d:
+                    break
+                in_bio.write(d)
+                while True:
+                    try:
+                        chunk = sslobj.read(32768)
+                        if not chunk:
+                            break
+                        if not header_parsed:
+                            buf += chunk
+                            sep = buf.find(b"\r\n\r\n")
+                            if sep >= 0:
+                                header_parsed = True
+                                body_part = buf[sep + 4:]
+                                buf = b""
+                                if body_part:
+                                    yield body_part
+                        else:
+                            yield chunk
+                    except (ssl.SSLWantReadError, ssl.SSLZeroReturnError):
+                        break
+            except Exception:
+                break
+    finally:
+        try:
+            raw_sock.close()
+        except Exception:
+            pass

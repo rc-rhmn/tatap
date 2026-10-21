@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse, FileResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from config import APP_PORT, APP_HOST, HI_BASE, HI_UA
-from database import init_db, get_search_cache, set_search_cache, get_episode_cache, set_episode_cache, add_history, get_history, clear_history, save_progress, get_progress, clear_progress, add_bookmark, remove_bookmark, get_bookmarks, is_bookmarked, clear_bookmarks, get_setting, set_setting, get_browse_cache, set_browse_cache, get_slug_map, set_slug_map, get_subtitle_cache, set_subtitle_cache, delete_subtitle_cache, get_today_char_count, add_today_char_count
+from database import init_db, get_search_cache, set_search_cache, get_episode_cache, set_episode_cache, delete_episode_cache, add_history, get_history, clear_history, save_progress, get_progress, clear_progress, add_bookmark, remove_bookmark, get_bookmarks, is_bookmarked, clear_bookmarks, get_setting, set_setting, get_browse_cache, set_browse_cache, get_slug_map, set_slug_map, get_subtitle_cache, set_subtitle_cache, delete_subtitle_cache, get_today_char_count, add_today_char_count
 from api import hianime as hi
 from api import anilist as al
 from api import otakudesu as otaku
@@ -19,6 +19,29 @@ frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "f
 async def lifespan(app: FastAPI):
     await init_db()
     yield
+    # Graceful shutdown: tutup connection pool video dan persistent client API
+    global _direct_client
+    if _direct_client is not None:
+        try:
+            await _direct_client.aclose()
+        except Exception:
+            pass
+        _direct_client = None
+    try:
+        from api.anilist import close_al_client
+        close_al_client()
+    except Exception:
+        pass
+    try:
+        from api.hianime import close_shared_client
+        close_shared_client()
+    except Exception:
+        pass
+    try:
+        from api.otakudesu import close_otaku_client
+        close_otaku_client()
+    except Exception:
+        pass
 
 from version import __version__ as CURRENT_VERSION
 app = FastAPI(title="Tatap", version=CURRENT_VERSION, lifespan=lifespan)
@@ -41,84 +64,188 @@ async def get_version():
 
 @app.get("/api/update/check")
 async def check_update(force: bool = False):
-    """Pemeriksaan pembaruan versi Tatap secara on-demand via GitHub Releases API.
+    """Pemeriksaan pembaruan versi Tatap secara on-demand via GitHub Releases API & Multi-Tier Fallback.
     Memfilter 4 berkas resmi sesuai aturan paten agent.md:
     1. tatap-release-v<VER>.apk (Official Signed Mobile APK)
     2. tatap-tv-release-v<VER>.apk (Official Signed Android/Google TV APK)
     3. tatap-windows-x64-portable.zip (Windows Portable)
     4. Tatap-x86_64.AppImage (Linux AppImage)
     """
+    cache_key = "github_latest_release"
+    if not force:
+        cached = await get_browse_cache(cache_key, ttl=300)
+        if cached and isinstance(cached, dict):
+            return ok(cached)
+
+    def parse_ver(v_str):
+        nums = []
+        for part in (v_str or "").split("."):
+            m = re.match(r"^\d+", part)
+            nums.append(int(m.group(0)) if m else 0)
+        return tuple(nums)
+
+    def build_official_assets(ver_clean):
+        tag = f"v{ver_clean}" if not ver_clean.startswith("v") else ver_clean
+        base = f"https://github.com/rc-rhmn/tatap/releases/download/{tag}"
+        return {
+            "android": f"{base}/tatap-release-{tag}.apk",
+            "android_tv": f"{base}/tatap-tv-release-{tag}.apk",
+            "windows": f"{base}/tatap-windows-x64-portable.zip",
+            "linux": f"{base}/Tatap-x86_64.AppImage"
+        }
+
+    curr_clean = re.sub(r"^v", "", CURRENT_VERSION)
+    headers = {
+        "User-Agent": f"Tatap-App/{CURRENT_VERSION} (https://github.com/rc-rhmn/tatap)",
+        "Accept": "application/vnd.github.v3+json, text/html;q=0.9, */*;q=0.8"
+    }
+
+    out_payload = None
+    err_detail = None
+
+    # TIER 1: GitHub REST API
     try:
-        cache_key = "github_latest_release"
-        if not force:
-            cached = await get_browse_cache(cache_key, ttl=300)
-            if cached and isinstance(cached, dict):
-                return ok(cached)
+        url_api = "https://api.github.com/repos/rc-rhmn/tatap/releases/latest"
+        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+            resp = await client.get(url_api, headers=headers)
+        if resp.status_code == 200:
+            rel_data = resp.json()
+            tag_name = (rel_data.get("tag_name") or "").strip()
+            latest_clean = re.sub(r"^v", "", tag_name)
+            has_update = False
+            try:
+                has_update = parse_ver(latest_clean) > parse_ver(curr_clean)
+            except Exception:
+                has_update = latest_clean != curr_clean and bool(latest_clean)
 
-        url = "https://api.github.com/repos/rc-rhmn/tatap/releases/latest"
-        headers = {
-            "User-Agent": f"Tatap-App/{CURRENT_VERSION} (https://github.com/rc-rhmn/tatap)",
-            "Accept": "application/vnd.github.v3+json"
-        }
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
-            resp = await client.get(url, headers=headers)
-        if resp.status_code != 200:
-            return fail(f"Gagal memeriksa update (HTTP {resp.status_code})")
-        rel_data = resp.json()
-        tag_name = (rel_data.get("tag_name") or "").strip()
-        latest_clean = re.sub(r"^v", "", tag_name)
-        curr_clean = re.sub(r"^v", "", CURRENT_VERSION)
+            assets_out = {
+                "android": "",
+                "android_tv": "",
+                "windows": "",
+                "linux": ""
+            }
+            raw_assets = rel_data.get("assets") or []
+            for a in raw_assets:
+                fname = (a.get("name") or "").lower()
+                dl_url = a.get("browser_download_url") or ""
+                if "tatap-tv-release-" in fname and fname.endswith(".apk") and not fname.endswith(".idsig"):
+                    assets_out["android_tv"] = dl_url
+                elif "tatap-release-" in fname and fname.endswith(".apk") and not fname.endswith(".idsig"):
+                    assets_out["android"] = dl_url
+                elif "windows" in fname and fname.endswith(".zip"):
+                    assets_out["windows"] = dl_url
+                elif fname.endswith(".appimage"):
+                    assets_out["linux"] = dl_url
 
-        def parse_ver(v_str):
-            nums = []
-            for part in v_str.split("."):
-                m = re.match(r"^\d+", part)
-                nums.append(int(m.group(0)) if m else 0)
-            return tuple(nums)
+            if not assets_out["android"]:
+                assets_out = build_official_assets(latest_clean)
 
-        has_update = False
+            notes_body = rel_data.get("body") or ""
+            out_payload = {
+                "current_version": CURRENT_VERSION,
+                "latest_version": latest_clean or tag_name,
+                "tag_name": tag_name,
+                "has_update": has_update,
+                "release_name": rel_data.get("name") or tag_name,
+                "notes": notes_body,
+                "body": notes_body,
+                "published_at": rel_data.get("published_at") or "",
+                "release_url": rel_data.get("html_url") or f"https://github.com/rc-rhmn/tatap/releases/tag/{tag_name}",
+                "assets": assets_out
+            }
+        else:
+            err_detail = f"GitHub API HTTP {resp.status_code}"
+    except Exception as e:
+        err_detail = f"API: {str(e)}"
+
+    # TIER 2: GitHub Web Releases Redirect (Bypasses API rate-limits 403 on CGNAT / cellular)
+    if not out_payload:
         try:
-            has_update = parse_ver(latest_clean) > parse_ver(curr_clean)
+            url_web = "https://github.com/rc-rhmn/tatap/releases/latest"
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+                r_web = await client.get(url_web, headers=headers)
+            if r_web.status_code == 200:
+                final_url = str(r_web.url)
+                m = re.search(r"/tag/v?([0-9]+\.[0-9]+\.[0-9]+)", final_url)
+                if m:
+                    latest_clean = m.group(1)
+                    tag_name = f"v{latest_clean}"
+                    has_update = False
+                    try:
+                        has_update = parse_ver(latest_clean) > parse_ver(curr_clean)
+                    except Exception:
+                        has_update = latest_clean != curr_clean and bool(latest_clean)
+
+                    html_text = r_web.text
+                    notes_match = re.search(r'<div[^>]*class="[^"]*markdown-body[^"]*"[^>]*>(.*?)</div>', html_text, re.DOTALL)
+                    notes_extracted = ""
+                    if notes_match:
+                        raw_html = notes_match.group(1)
+                        notes_extracted = re.sub(r"<[^>]+>", "", raw_html).strip()
+
+                    out_payload = {
+                        "current_version": CURRENT_VERSION,
+                        "latest_version": latest_clean,
+                        "tag_name": tag_name,
+                        "has_update": has_update,
+                        "release_name": f"Tatap {tag_name}",
+                        "notes": notes_extracted or f"Pembaruan rilis Tatap {tag_name} tersedia di GitHub.",
+                        "body": notes_extracted or f"Pembaruan rilis Tatap {tag_name} tersedia di GitHub.",
+                        "published_at": "",
+                        "release_url": final_url,
+                        "assets": build_official_assets(latest_clean)
+                    }
+        except Exception as e:
+            if not err_detail:
+                err_detail = f"Web: {str(e)}"
+
+    # TIER 3: GitHub Raw Fastly CDN (VERSION & CHANGELOG.md)
+    if not out_payload:
+        try:
+            url_raw_ver = "https://raw.githubusercontent.com/rc-rhmn/tatap/main/VERSION"
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                r_raw = await client.get(url_raw_ver, headers=headers)
+            if r_raw.status_code == 200 and r_raw.text.strip():
+                latest_clean = r_raw.text.strip()
+                tag_name = f"v{latest_clean}" if not latest_clean.startswith("v") else latest_clean
+                latest_clean = re.sub(r"^v", "", latest_clean)
+                has_update = False
+                try:
+                    has_update = parse_ver(latest_clean) > parse_ver(curr_clean)
+                except Exception:
+                    has_update = latest_clean != curr_clean and bool(latest_clean)
+
+                out_payload = {
+                    "current_version": CURRENT_VERSION,
+                    "latest_version": latest_clean,
+                    "tag_name": tag_name,
+                    "has_update": has_update,
+                    "release_name": f"Tatap {tag_name}",
+                    "notes": f"Pembaruan rilis Tatap {tag_name} terdeteksi dari repositori resmi.",
+                    "body": f"Pembaruan rilis Tatap {tag_name} terdeteksi dari repositori resmi.",
+                    "published_at": "",
+                    "release_url": f"https://github.com/rc-rhmn/tatap/releases/tag/{tag_name}",
+                    "assets": build_official_assets(latest_clean)
+                }
+        except Exception as e:
+            if not err_detail:
+                err_detail = f"Raw: {str(e)}"
+
+    # TIER 4: Stale Cache Fallback (If all network calls fail)
+    if not out_payload:
+        try:
+            cached_stale = await get_browse_cache(cache_key, ttl=86400 * 30)
+            if cached_stale and isinstance(cached_stale, dict):
+                cached_stale["cached"] = True
+                return ok(cached_stale)
         except Exception:
-            has_update = latest_clean != curr_clean and bool(latest_clean)
+            pass
 
-        # Filter strictly the 4 official assets according to agent.md
-        assets_out = {
-            "android": "",
-            "android_tv": "",
-            "windows": "",
-            "linux": ""
-        }
-        raw_assets = rel_data.get("assets") or []
-        for a in raw_assets:
-            fname = (a.get("name") or "").lower()
-            dl_url = a.get("browser_download_url") or ""
-            if "tatap-tv-release-" in fname and fname.endswith(".apk") and not fname.endswith(".idsig"):
-                assets_out["android_tv"] = dl_url
-            elif "tatap-release-" in fname and fname.endswith(".apk") and not fname.endswith(".idsig"):
-                assets_out["android"] = dl_url
-            elif "windows" in fname and fname.endswith(".zip"):
-                assets_out["windows"] = dl_url
-            elif fname.endswith(".appimage"):
-                assets_out["linux"] = dl_url
-
-        notes_body = rel_data.get("body") or ""
-        out_payload = {
-            "current_version": CURRENT_VERSION,
-            "latest_version": latest_clean or tag_name,
-            "tag_name": tag_name,
-            "has_update": has_update,
-            "release_name": rel_data.get("name") or tag_name,
-            "notes": notes_body,
-            "body": notes_body,
-            "published_at": rel_data.get("published_at") or "",
-            "release_url": rel_data.get("html_url") or "https://github.com/asfaraguest/tatap/releases/latest",
-            "assets": assets_out
-        }
+    if out_payload:
         await set_browse_cache(cache_key, out_payload)
         return ok(out_payload)
-    except Exception as e:
-        return fail(f"Koneksi gagal: {str(e)}")
+
+    return fail(f"Gagal memeriksa update ({err_detail or 'Periksa koneksi internet Anda'}).")
 
 @app.get("/api/health")
 async def health():
@@ -135,38 +262,56 @@ async def health():
     return ok({"hianime": HI_BASE, "reachable": reachable})
 
 @app.get("/api/search")
-async def search(q: str = Query(""), limit: int = 15, source: str = Query("")):
+async def search(q: str = Query(""), page: int = Query(1, ge=1, le=100), limit: int = 24, source: str = Query("")):
     q = (q if isinstance(q, str) else "").strip()
     if not q:
         return fail("missing q")
     if q.lower() == "hentai" or "hentai" in q.lower().split():
-        return ok({"results": [], "cached": False})
+        return ok({"results": [], "page": page, "total_pages": 1, "has_next": False, "cached": False})
     
     src = (source if isinstance(source, str) else "").strip().lower()
-    cache_key = f"{src}|{q.lower()}" if src else q.lower()
+    c_page = page if isinstance(page, int) and page >= 1 else 1
+    c_limit = limit if isinstance(limit, int) and limit >= 1 else 24
+    cache_key = f"{src}|{q.lower()}|p{c_page}|l{c_limit}" if src else f"{q.lower()}|p{c_page}|l{c_limit}"
     try:
         hit = await get_search_cache(cache_key)
-        if hit and any(bool(x.get("poster")) for x in hit):
-            return ok({"results": hit, "cached": True})
+        if hit:
+            if isinstance(hit, dict) and any(bool(x.get("poster")) for x in hit.get("results", [])):
+                hit_copy = dict(hit)
+                hit_copy["cached"] = True
+                return ok(hit_copy)
+            elif isinstance(hit, list) and any(bool(x.get("poster")) for x in hit):
+                return ok({"results": hit, "page": c_page, "total_pages": 1, "has_next": False, "cached": True})
+        
         loop = asyncio.get_running_loop()
-        res = []
+        paged_res = None
         if src == "otakudesu":
             from api import otakudesu as ot
-            res = await loop.run_in_executor(None, lambda: ot.search(q, limit))
+            res = await loop.run_in_executor(None, lambda: ot.search(q, c_limit))
+            paged_res = {"results": res, "page": c_page, "total_pages": 1, "has_next": False}
         else:
             try:
-                res = await loop.run_in_executor(None, lambda: hi.hianime_search(q, limit))
+                paged_res = await loop.run_in_executor(None, lambda: hi.hianime_search_page(q, limit=c_limit, page=c_page))
             except Exception:
-                res = []
-            if not res:
-                try:
-                    from api import otakudesu as ot
-                    res = await loop.run_in_executor(None, lambda: ot.search(q, limit))
-                except Exception:
-                    pass
-        if res:
-            await set_search_cache(cache_key, res)
-        return ok({"results": res, "cached": False})
+                paged_res = None
+            if not paged_res or not paged_res.get("results"):
+                # Fallback ke Otakudesu jika di halaman 1 dan HiAnime tidak menemukan hasil
+                if c_page == 1:
+                    try:
+                        from api import otakudesu as ot
+                        res = await loop.run_in_executor(None, lambda: ot.search(q, c_limit))
+                        if res:
+                            paged_res = {"results": res, "page": 1, "total_pages": 1, "has_next": False}
+                    except Exception:
+                        pass
+        
+        if not paged_res:
+            paged_res = {"results": [], "page": c_page, "total_pages": 1, "has_next": False}
+            
+        paged_res["cached"] = False
+        if paged_res.get("results"):
+            await set_search_cache(cache_key, paged_res)
+        return ok(paged_res)
     except Exception as e:
         return fail(str(e))
 
@@ -411,7 +556,7 @@ async def seasonal(which: str = Query("", pattern="^(now|prev|airing)$|^$"),
                 season_name, season_year = name_cur, year_cur
             cache_id = which or "now"
 
-        key = f"seasonal_v3|{cache_id}|page={page}"
+        key = f"seasonal_v4|{cache_id}|page={page}"
         hit = await get_browse_cache(key)
         if hit:
             hit["cached"] = True
@@ -421,7 +566,7 @@ async def seasonal(which: str = Query("", pattern="^(now|prev|airing)$|^$"),
                 hit["total_pages"] = page + 1
             return ok(hit)
 
-        status_in = None if is_future else ["RELEASING", "FINISHED"]
+        status_in = ["RELEASING"] if which == "now" else (None if is_future else ["RELEASING", "FINISHED"])
         page_data = await loop.run_in_executor(
             None, lambda: al.season_page(season_name, season_year, page, 25, status_in=status_in))
 
@@ -452,6 +597,8 @@ async def seasonal(which: str = Query("", pattern="^(now|prev|airing)$|^$"),
             eps_rel, eps_tot = al.compute_episode_counts(m)
             status_str = (m.get("status") or "").lower()
             is_finished = status_str in ("finished", "completed") or (eps_tot > 0 and eps_rel >= eps_tot)
+            if which == "now" and (is_finished or status_str in ("finished", "completed")):
+                continue
             if is_finished:
                 status_str = "finished"
                 eps_cnt = f"{eps_tot}/{eps_tot}" if eps_tot > 0 else "?/?"
@@ -960,7 +1107,8 @@ async def episodes(slug: str):
             "episodes": eps,
             "total": len(eps),
             "synopsis": syn_val,
-            "detail": detail_data
+            "detail": detail_data,
+            "poster": (detail_data.get("poster", "") if isinstance(detail_data, dict) else "")
         }
         await set_browse_cache(cache_key, data)
         data["cached"] = False
@@ -1067,7 +1215,7 @@ async def anime_relations_endpoint(slug: str, title: str = Query("")):
 
 
 @app.get("/api/stream/resolve")
-async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("sub"), q: str = Query("best"), source: str = Query("")):
+async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("sub"), q: str = Query("best"), source: str = Query(""), force: bool = Query(False)):
     try:
         if "hentai" in (slug or "").lower():
             return fail("Konten genre Hentai diblokir")
@@ -1077,11 +1225,15 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
 
         # Cache key mencakup source agar stream tidak tertukar
         cache_slug = f"{active_source}:{slug}" if active_source != "hianime" else slug
-        hit = await get_episode_cache(cache_slug, ep, mode)
-        if not hit and mode == "sub":
-            hit = await get_episode_cache(cache_slug, ep, "dub")
-        elif not hit and mode == "dub":
-            hit = await get_episode_cache(cache_slug, ep, "sub")
+        if force:
+            await delete_episode_cache(cache_slug, ep)
+            hit = None
+        else:
+            hit = await get_episode_cache(cache_slug, ep, mode)
+            if not hit and mode == "sub":
+                hit = await get_episode_cache(cache_slug, ep, "dub")
+            elif not hit and mode == "dub":
+                hit = await get_episode_cache(cache_slug, ep, "sub")
         async def _check_and_prewarm(ep_data):
             try:
                 sub_lang = (await get_setting("sub_lang", "Indonesian")).strip().lower()
@@ -1272,6 +1424,47 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
     except Exception as e:
         return fail(str(e))
 
+def _validate_external_proxy_url(url: str) -> None:
+    """Validasi keamanan URL proxy eksternal untuk mencegah SSRF (Server-Side Request Forgery).
+    Menolak skema non-HTTP(S), IP private, loopback, link-local, multicast, dan localhost."""
+    if not url or not isinstance(url, str):
+        raise HTTPException(status_code=400, detail="URL proxy tidak valid")
+    clean_u = url.strip()
+    import urllib.parse as _up
+    import ipaddress as _ipa
+    import socket as _sock
+
+    p = _up.urlsplit(clean_u)
+    if p.scheme.lower() not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="Skema URL hanya boleh http atau https")
+    hostname = (p.hostname or "").strip().lower()
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Hostname URL tidak ditemukan")
+
+    if hostname in ("localhost", "0.0.0.0", "127.0.0.1", "::1") or hostname.endswith(".local") or hostname.endswith(".internal"):
+        raise HTTPException(status_code=403, detail="Akses ke host lokal dilarang (SSRF protection)")
+
+    # Pengecekan IP numerik langsung
+    try:
+        ip = _ipa.ip_address(hostname)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            raise HTTPException(status_code=403, detail="Akses ke IP privat/lokal dilarang (SSRF protection)")
+        return
+    except ValueError:
+        pass
+
+    # Resolusi DNS untuk mendeteksi domain yang menunjuk ke IP lokal/privat
+    try:
+        addr_info = _sock.getaddrinfo(hostname, None, _sock.AF_UNSPEC, _sock.SOCK_STREAM)
+        for family, socktype, proto, canonname, sockaddr in addr_info:
+            ip_str = sockaddr[0]
+            ip = _ipa.ip_address(ip_str)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+                raise HTTPException(status_code=403, detail=f"Resolusi domain mengarah ke IP privat/lokal ({ip_str})")
+    except (_sock.gaierror, _sock.herror):
+        pass
+
+
 def _is_m3u8_url(url: str, ctype: str = "") -> bool:
     """Deteksi akurat apakah URL adalah playlist m3u8 atau segmen video/audio."""
     if "mpegurl" in (ctype or "").lower():
@@ -1311,6 +1504,8 @@ async def proxy_video(url: str = Query(""), referer: str = Query("")):
             url = real if real.startswith("http") else url
         except Exception:
             pass
+
+    _validate_external_proxy_url(url)
 
     is_m3u8 = _is_m3u8_url(url)
     media_type = "application/vnd.apple.mpegurl" if is_m3u8 else "video/mp2t"
@@ -1570,6 +1765,10 @@ async def _prewarm_sub_translation(url: str, referer: str, src: str = "en", lang
     """Prefetch subtitle translate di latar belakang jika belum ada di cache."""
     if not url or not url.startswith("http") or not lang or lang == src:
         return
+    try:
+        _validate_external_proxy_url(url)
+    except HTTPException:
+        return
     import hashlib
     base_hash = hashlib.sha1((url + "|" + (referer or "") + "|" + lang).encode("utf-8")).hexdigest()
     key_gtx = "sub2|gtx|" + base_hash
@@ -1613,6 +1812,7 @@ async def proxy_sub(url: str = Query(""),
     dan proteksi cache poisoning."""
     if not url.startswith("http"):
         return Response(status_code=400)
+    _validate_external_proxy_url(url)
 
     # Lang kosong atau sama dengan sumber -> return source apa adanya
     if not lang or lang == src:
@@ -1881,6 +2081,7 @@ async def upload_custom_sub(body: dict = None):
 
     if not text and url:
         try:
+            _validate_external_proxy_url(url)
             text = await _fetch_sub_text(url, "")
         except Exception as e:
             return fail(f"Gagal mengunduh subtitle dari URL: {e}")
@@ -1924,6 +2125,7 @@ async def get_custom_sub(id: str = Query(""),
     if id:
         vtt_text = await get_subtitle_cache(f"custom|{id}")
     elif url:
+        _validate_external_proxy_url(url)
         try:
             vtt_text = await _fetch_sub_text(url, "")
             from api.translate import parse_vtt, build_vtt
@@ -2079,7 +2281,7 @@ async def play_mpv(body: dict = None):
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=creationflags)
-        await add_history(slug, body.get("title", slug), ep, mode)
+        await add_history(slug, body.get("title", slug), ep, mode, poster=body.get("poster", ""), type=body.get("type", ""))
         return ok({"cmd": cmd, "picked": picked, "subs_attached": len(downloaded)})
     except Exception as e:
         return fail(str(e))

@@ -38,9 +38,9 @@
             android:layout_weight="1"
             android:layout_marginStart="8dp"
             android:text="Detail Anime"
-            android:textColor="#FFFFFF"
-            android:textSize="16sp"
-            android:textStyle="bold"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_title_large"
+            android:fontFamily="sans-serif-medium"
             android:singleLine="true"
             android:ellipsize="end" />
 
@@ -110,10 +110,10 @@
                         android:maxLines="2"
                         android:ellipsize="end"
                         android:text="Judul Anime"
-                        android:textColor="#FFFFFF"
-                        android:textSize="14.5sp"
-                        android:textStyle="bold"
-                        android:lineSpacingExtra="2dp" />
+                        android:textColor="@color/text_primary"
+                        android:textSize="@dimen/text_headline"
+                        android:fontFamily="sans-serif-medium"
+                        android:lineSpacingExtra="2.5dp" />
 
                     <!-- Badges Row: Format, Score, Status -->
                     <LinearLayout
@@ -132,9 +132,10 @@
                             android:paddingHorizontal="7dp"
                             android:paddingVertical="3dp"
                             android:text="TV SERIES"
-                            android:textColor="#E2E8F0"
-                            android:textSize="9.5sp"
-                            android:textStyle="bold" />
+                            android:textColor="@color/text_secondary"
+                            android:textSize="@dimen/text_badge"
+                            android:fontFamily="sans-serif-medium"
+                            android:letterSpacing="0.04" />
 
                         <TextView
                             android:id="@+id/tv_detail_score"
@@ -145,8 +146,9 @@
                             android:paddingHorizontal="6dp"
                             android:paddingVertical="3dp"
                             android:textColor="#F59E0B"
-                            android:textSize="9.5sp"
-                            android:textStyle="bold"
+                            android:textSize="@dimen/text_badge"
+                            android:fontFamily="sans-serif-medium"
+                            android:letterSpacing="0.02"
                             app:drawableStartCompat="@drawable/ic_star_filled"
                             app:drawableTint="#F59E0B"
                             android:drawablePadding="3dp"
@@ -162,9 +164,10 @@
                             android:background="@drawable/bg_detail_status_ongoing"
                             android:paddingHorizontal="6dp"
                             android:paddingVertical="3dp"
-                            android:textColor="#38BDF8"
-                            android:textSize="9.5sp"
-                            android:textStyle="bold"
+                            android:textColor="@color/text_accent"
+                            android:textSize="@dimen/text_badge"
+                            android:fontFamily="sans-serif-medium"
+                            android:letterSpacing="0.04"
                             android:visibility="gone"
                             android:text="ONGOING" />
                     </LinearLayout>
@@ -175,8 +178,9 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:textColor="#94A3B8"
-                        android:textSize="10.5sp"
+                        android:textColor="@color/text_muted"
+                        android:textSize="@dimen/text_caption"
+                        android:fontFamily="sans-serif"
                         android:maxLines="2"
                         android:ellipsize="end"
                         android:visibility="gone"
@@ -188,8 +192,9 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
                         android:text="Memuat episode..."
-                        android:textColor="#8B95A5"
-                        android:textSize="11sp" />
+                        android:textColor="@color/text_dim"
+                        android:textSize="@dimen/text_caption"
+                        android:fontFamily="sans-serif" />
 
                 </LinearLayout>
             </LinearLayout>
@@ -209,11 +214,10 @@
                     android:insetTop="0dp"
                     android:insetBottom="0dp"
                     android:text="Putar Ep 1"
-                    android:textColor="#38BDF8"
+                    android:textColor="@color/text_accent"
                     android:backgroundTint="#161C28"
-                    android:textSize="12sp"
+                    android:textSize="@dimen/text_subhead"
                     android:fontFamily="sans-serif-medium"
-                    android:textStyle="bold"
                     android:textAllCaps="false"
                     android:focusable="true"
                     android:singleLine="true"
@@ -244,11 +248,10 @@
                     app:iconSize="15dp"
                     app:iconGravity="textStart"
                     android:text="+ Favorit"
-                    android:textColor="#94A3B8"
+                    android:textColor="@color/text_secondary"
                     android:backgroundTint="#1E2433"
-                    android:textSize="12sp"
+                    android:textSize="@dimen/text_subhead"
                     android:fontFamily="sans-serif-medium"
-                    android:textStyle="bold"
                     android:textAllCaps="false"
                     android:focusable="true"
                     android:nextFocusUp="@+id/btn_back"
@@ -292,19 +295,20 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="SINOPSIS"
-                    android:textColor="#38BDF8"
-                    android:textSize="10sp"
-                    android:textStyle="bold"
-                    android:letterSpacing="0.08"
+                    android:textColor="@color/text_accent"
+                    android:textSize="@dimen/text_badge"
+                    android:fontFamily="sans-serif-medium"
+                    android:letterSpacing="0.06"
                     android:layout_marginBottom="5dp" />
 
                 <TextView
                     android:id="@+id/tv_detail_synopsis"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:textColor="#CBD5E1"
-                    android:textSize="12sp"
-                    android:lineSpacingExtra="3dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="@dimen/text_body_large"
+                    android:fontFamily="sans-serif"
+                    android:lineSpacingExtra="3.5dp"
                     android:maxLines="2"
                     android:ellipsize="end"
                     android:text="Memuat sinopsis..." />
@@ -318,9 +322,9 @@
                     android:paddingVertical="4dp"
                     android:paddingHorizontal="10dp"
                     android:text="Selengkapnya ▼"
-                    android:textColor="#38BDF8"
-                    android:textSize="11sp"
-                    android:textStyle="bold"
+                    android:textColor="@color/text_accent"
+                    android:textSize="@dimen/text_caption"
+                    android:fontFamily="sans-serif-medium"
                     android:background="@drawable/bg_btn_toggle_synopsis"
                     android:clickable="true"
                     android:focusable="true" />
@@ -342,9 +346,9 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="SEASON / RELASI TERKAIT"
-            android:textColor="#38BDF8"
-            android:textSize="10.5sp"
-            android:textStyle="bold"
+            android:textColor="@color/text_accent"
+            android:textSize="@dimen/text_badge"
+            android:fontFamily="sans-serif-medium"
             android:letterSpacing="0.05" />
 
         <androidx.recyclerview.widget.RecyclerView
@@ -373,18 +377,19 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="Daftar Episode"
-            android:textColor="#94A3B8"
-            android:textSize="12.5sp"
-            android:textStyle="bold" />
+            android:textColor="@color/text_muted"
+            android:textSize="@dimen/text_title_large"
+            android:fontFamily="sans-serif-medium" />
 
         <Button
             android:id="@+id/btn_sort_order"
             android:layout_width="wrap_content"
             android:layout_height="32dp"
             android:text="Urutan: 1 - N"
-            android:textColor="#E2E8F0"
+            android:textColor="@color/text_secondary"
             android:backgroundTint="#11141C"
-            android:textSize="11sp"
+            android:textSize="@dimen/text_badge"
+            android:fontFamily="sans-serif-medium"
             android:focusable="true"
             android:nextFocusUp="@+id/btn_quick_play"
             android:nextFocusDown="@+id/rv_episodes"

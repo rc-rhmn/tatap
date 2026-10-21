@@ -27,28 +27,70 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Clean up any stale Tatap process occupying port 8767 before startup
-"${HERE}/usr/bin/python3" -c "import urllib.request; req = urllib.request.Request('http://127.0.0.1:8767/api/shutdown', data=b'', method='POST'); urllib.request.urlopen(req, timeout=0.5)" >/dev/null 2>&1 || true
-fuser -k 8767/tcp >/dev/null 2>&1 || true
+# Check if a healthy Tatap server is already running on port 8767
+ALREADY_RUNNING=0
+if "${HERE}/usr/bin/python3" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/api/ping', timeout=0.8)" >/dev/null 2>&1; then
+    ALREADY_RUNNING=1
+fi
 
-# Start backend server
-"${HERE}/usr/bin/python3" "${HERE}/backend/main.py" &
-SERVER_PID=$!
+if [ "$ALREADY_RUNNING" -ne 1 ]; then
+    # 1. Clean up any stale/unresponsive process on port 8767
+    "${HERE}/usr/bin/python3" -c "import urllib.request; req = urllib.request.Request('http://127.0.0.1:8767/api/shutdown', data=b'', method='POST'); urllib.request.urlopen(req, timeout=0.5)" >/dev/null 2>&1 || true
+    fuser -k 8767/tcp >/dev/null 2>&1 || true
+    "${HERE}/usr/bin/python3" -c "
+import socket, subprocess, os
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    s.bind(('127.0.0.1', 8767))
+    s.close()
+except Exception:
+    try:
+        p = subprocess.run(['lsof', '-ti:8767'], capture_output=True, text=True)
+        for pid in p.stdout.strip().split():
+            if pid.isdigit() and int(pid) != os.getpid():
+                os.kill(int(pid), 9)
+    except Exception:
+        pass
+" >/dev/null 2>&1 || true
 
-# Wait for server ready (max 10 seconds) using lightweight local ping
-READY=0
-for i in {1..20}; do
-    if "${HERE}/usr/bin/python3" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/api/ping', timeout=1)" >/dev/null 2>&1 || \
-       (command -v curl >/dev/null 2>&1 && curl -s --max-time 1 http://127.0.0.1:8767/api/ping >/dev/null 2>&1); then
-        READY=1
-        break
+    # 2. Start backend server with logging
+    SERVER_LOG="${DATA_DIR}/server.log"
+    "${HERE}/usr/bin/python3" "${HERE}/backend/main.py" > "$SERVER_LOG" 2>&1 &
+    SERVER_PID=$!
+
+    # 3. Wait for server ready (max 15 seconds, polling every 200ms)
+    READY=0
+    for i in {1..75}; do
+        if "${HERE}/usr/bin/python3" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/api/ping', timeout=0.5)" >/dev/null 2>&1; then
+            READY=1
+            break
+        fi
+        if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+            break
+        fi
+        sleep 0.2
+    done
+
+    if [ "$READY" -ne 1 ]; then
+        ERR_LOG=""
+        if [ -f "$SERVER_LOG" ]; then
+            ERR_LOG=$(tail -n 15 "$SERVER_LOG")
+        fi
+        MSG="Server backend Tatap tidak dapat dimulai atau gagal merespons dalam 15 detik pada http://127.0.0.1:8767.\n\nLog Kesalahan:\n${ERR_LOG:-Tidak ada catatan error di log.}"
+
+        if command -v zenity >/dev/null 2>&1; then
+            zenity --error --title="Tatap — Gagal Memulai Backend" --text="$MSG" --width=520 2>/dev/null || true
+        elif command -v kdialog >/dev/null 2>&1; then
+            kdialog --error "$MSG" --title "Tatap — Gagal Memulai Backend" 2>/dev/null || true
+        elif command -v xmessage >/dev/null 2>&1; then
+            xmessage -center -title "Tatap — Gagal Memulai Backend" "$MSG" 2>/dev/null || true
+        elif command -v notify-send >/dev/null 2>&1; then
+            notify-send -u critical "Tatap — Gagal Memulai Backend" "Server backend gagal berjalan. Periksa log di $SERVER_LOG" 2>/dev/null || true
+        fi
+
+        echo -e "$MSG" >&2
+        exit 1
     fi
-    sleep 0.5
-done
-
-if [ "$READY" -ne 1 ]; then
-    echo "Gagal memulai backend Tatap."
-    exit 1
 fi
 
 # Detect browser for App Mode (frameless window)

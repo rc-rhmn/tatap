@@ -14,11 +14,7 @@ def start_server(data_dir=None, is_tv=False):
     try:
         if is_tv or os.environ.get("TATAP_IS_TV") == "1":
             os.environ["TATAP_IS_TV"] = "1"
-            try:
-                import gc
-                gc.set_threshold(100, 5, 5)
-            except Exception:
-                pass
+            # Jangan override gc.set_threshold ke angka kecil karena memicu CPU thrashing & thermal throttling di TV Stick!
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
         backend_dir = os.path.join(base_dir, "backend")

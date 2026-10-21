@@ -13,19 +13,212 @@ Format versi menggunakan skema `MAJOR.MINOR.PATCH`:
 - **MINOR (x.Y.0):** Penambahan fitur atau kapabilitas baru yang tetap kompatibel ke belakang (*backward-compatible new features*). Digit PATCH direset ke 0.
 - **PATCH (x.y.Z):** Perbaikan bug, peningkatan stabilitas, atau perbaikan internal tanpa penambahan fitur baru (*backward-compatible bug fixes*).
 
-## [2.9.3] - 2026-10-19
+## [2.10.3] - 2026-10-21
 
-### Sinkronisasi Upstream v2.9.2 (Personal Fork)
-Rilis personal ini menyinkronkan fork `rc-rhmn/tatap` dengan upstream `asfaraguest/tatap` hingga v2.9.2 (83 commit sejak merge v2.4.3). Identitas personal dipertahankan: nama aplikasi **Tatapan / Tatapan TV**, appId `id.tatap.personal` (+ `.tv`), dan pemeriksaan pembaruan tetap mengarah ke repo fork.
-1. **Metadata Detail Anime (v2.9.0):** header detail kaya (skor, studio, tipe, status tamat/ongoing yang akurat), sinopsis expandable, serta chip genre yang bisa diklik untuk memfilter katalog (mobile & TV).
-2. **Haptic / Getaran (v2.9.0):** `HapticHelper` baru — feedback taktil pada UI, gesture pemutar, dan deteksi adegan audio; toggle getaran dipindah ke menu perintah dengan opsi auto.
-3. **Autotranslate Lebih Natural (v2.9.0):** kamus English slang, sanitizer calque, dan smart scene classifier agar hasil terjemahan tidak kaku/mentah.
-4. **Subtitle 5-Tier Fallback & Custom Subtitle (v2.9.1):** harvesting SUB->DUB, probing lintas server, donor softsub Otakudesu->HiAnime, serta dukungan file `.srt`/`.vtt` lokal dan URL eksternal. Default English kini dipilih akurat pada anime multi-track.
-5. **In-App Update (v2.9.0):** menu "Periksa Pembaruan" / `:update` dengan dialog progress streaming dan installer FileProvider, mendukung D-Pad Android TV.
-6. **Filter Katalog Lengkap:** filter tahun, musim, bulan, tipe, dan status + sort; tab cache in-memory untuk perpindahan tab instan.
-7. **Redesign Header & Navigasi:** header quick menu, tombol kembali portrait, riwayat/resume flow yang lebih rapi, serta optimasi TV (layout landscape 2 kolom).
-8. **Bookmark Native Menggantikan Favorites Personal:** fitur favorit kini memakai tabel `bookmarks` dan endpoint `/api/bookmarks` bawaan upstream (tombol "+ Favorit" di detail, tab Favorit, perintah `:favorit`). Data lama dari tabel `favorites` dimigrasikan otomatis saat pertama kali dijalankan.
-9. **Perbaikan Stabilitas:** race condition fast-click background play, flicker top bar saat resolve stream, lag haptic, status tamat palsu, dan normalisasi bahasa subtitle.
+### Sinkronisasi Upstream v2.10.2 (Personal Fork)
+Rilis personal ini menyinkronkan fork `rc-rhmn/tatap` dengan upstream `asfaraguest/tatap` hingga v2.10.2 (v2.9.4 → v2.10.0 → v2.10.1 → v2.10.2, 22 commit). Identitas personal dipertahankan: nama aplikasi **Tatapan / Tatapan TV**, appId `id.tatap.personal` (+ `.tv`), tuning Gradle RAM rendah, dan pemeriksaan pembaruan yang mengarah ke repo fork (backend 3-tier: GitHub API, halaman web, raw VERSION; serta `AppUpdateManager`).
+1. **Layout Desktop & Homescreen Katalog (v2.10.0):** container desktop terpusat dengan ergonomi fluid, katalog anime sebagai tampilan awal saat startup, dan thumbnail 16:9 pada strip "Lanjutkan Menonton".
+2. **Watch History Lebih Tahan Banting (v2.10.0):** poster anime tidak lagi terhapus dari riwayat (auto-backfill + fallback placeholder anti-kotak-hitam), isolasi riwayat ke view tersendiri tanpa duplikasi judul.
+3. **Typografi & Player Android (v2.10.0):** harmonisasi skala tipografi semantik, eliminasi faux-bold, dan redesain kapsul buffering ExoPlayer.
+4. **Keamanan & Resiliensi (v2.10.1):** mitigasi SSRF pada proxy internal, perbaikan kebocoran file descriptor socket TLS desync, pembersihan connection pool saat shutdown, backoff AniList, dan penguatan sanitasi XSS frontend.
+5. **Navigasi Android TV 10-Foot UI (v2.10.2):** focus history stack tanpa *orphan focus*, navigasi grid spasial geometris (tidak lagi wrap-around ke baris atas), state machine HUD player, hierarki tombol Back 6 tingkat, dan pencegahan *virtual keyboard thrashing*.
+6. **Performa Android TV (v2.9.4):** penghapusan lag/GC thrashing di `server_launcher.py`, zero-animation pada grid, tuning cache RecyclerView, dan penyempurnaan D-Pad player.
+
+## [2.10.2] - 2026-10-21
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.10.1 -> 2.10.2)
+Kenaikan digit PATCH diterapkan sesuai kaidah Semantic Versioning 2.0.0 karena memuat perbaikan bug navigasi (*navigation bug fixes*), perbaikan kompatibilitas platform Android TV dan 10-Foot UI, eliminasi *orphan focus*, pencegahan *virtual keyboard popup thrashing*, serta implementasi hierarki tombol Back berjenjang tanpa mengubah kontrak antarmuka eksternal (*backward-compatible platform ergonomics & bug fix patch*):
+1. **Zero Orphan Focus & Focus History Stack (`frontend/js/app.js`):**
+   - Mengimplementasikan `TvNavigationManager` yang mencatat `activeZone` (`tabs`, `search`, `chips`, `grid`, `detail-modal`, `player-hud`, `settings-modal`) dan `focusHistoryStack`.
+   - Menambahkan mekanisme preservasi fokus sebelum dan sesudah re-render DOM (`innerHTML = ''`), menyimpan indeks elemen fokus dan memulihkannya secara otomatis setelah render selesai, sehingga fokus tidak pernah terlempar ke `document.body`.
+   - Mengelola tumpukan riwayat fokus saat membuka Detail Anime, dialog Resume Watch, atau masuk ke Video Player, serta memulihkan fokus dan posisi scroll persis ke kartu atau episode pemicu saat pengguna menekan Back.
+2. **Geometric & Dynamic Grid Spatial Navigation (`frontend/js/app.js`, `frontend/js/term.js`):**
+   - Menghilangkan modulo statis `(idx + cols) % total` yang memicu wrap-around ke baris teratas saat pengguna menekan D-Pad Bawah di baris terbawah.
+   - Mengimplementasikan kalkulasi geometris spasial 2D via `getBoundingClientRect()` dan dynamic row grouping.
+   - Mengatasi edge-case baris terakhir tidak penuh: jika baris terakhir memiliki jumlah item lebih sedikit, target fokus otomatis dikunci ke item terakhir di baris bawah tersebut (`Math.min(targetIndex, items.length - 1)`).
+   - Menambahkan pemanggilan seragam `targetEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })` pada setiap perpindahan fokus remote TV.
+3. **Player HUD State Machine & Auto-Hide Fix (`frontend/js/app.js`, `frontend/css/style.css`):**
+   - Memisahkan state fokus pemutaran video menjadi 3 mode tegas:
+     a) `PLAYER_IDLE`: HUD tersembunyi. D-Pad Kiri/Kanan langsung melakukan seek 5 detik tanpa terhalang kontrol tersembunyi; OK melakukan Play/Pause (atau eksekusi AniSkip jika aktif); Up memunculkan HUD kontrol atas; Down memfokuskan AniSkip atau bar bawah.
+     b) `PLAYER_HUD_ACTIVE`: HUD tampil dengan timer auto-hide 4000ms (4 detik) yang di-reset pada setiap interaksi D-Pad. Saat timer habis dan `hidePlayerControls()` berjalan, kelas `.tv-focus` dan `blur()` dibersihkan dari seluruh tombol HUD sebelum kembali ke mode `PLAYER_IDLE`.
+     c) `PLAYER_MODAL_ACTIVE`: Saat dialog pengaturan (Subtitle/Resolusi/Kecepatan/Resume) terbuka, timer auto-hide dihentikan sementara (*suspended*) dan navigasi dikunci (*focus trap*) di dalam dialog sampai ditutup.
+4. **Two-Stage Search Input Focus vs Virtual Keyboard (IME) (`frontend/js/app.js`, `frontend/index.html`, `MainActivity.java`):**
+   - Pada mode TV di antarmuka web, kolom pencarian `#cmd` berstatus `readonly` saat navigasi visual D-Pad (Stage 1), mencegah Virtual Keyboard (IME) muncul menutupi layar hanya karena dilewati cursor D-Pad.
+   - Mode ketik aktif (Stage 2) hanya dibuka ketika pengguna menekan tombol OK/Enter pada kolom pencarian.
+   - Di Android TV native (`MainActivity.java`), `layoutSearchBox` menerima fokus visual D-Pad terlebih dahulu, dan `etSearch` tidak memanggil `showKeyboard(SHOW_FORCED)` secara agresif. Tombol Back dan D-Pad Bawah menutup keyboard via `hideSoftInputFromWindow` dan mengembalikan fokus navigasi.
+5. **6-Level Back Button Hierarchy & Indikator Visual .tv-focus (`frontend/css/style.css`, `MainActivity.java`):**
+   - Memastikan seluruh elemen interaktif memiliki `tabindex="0"`.
+   - Memperkuat styling visual `.tv-focus` dengan `outline: 3px solid var(--accent)`, `transform: scale(1.06)`, `z-index: 20`, dan `scroll-margin: 72px` agar tidak terpotong header sticky maupun batas overscan TV.
+   - Menata alur penanganan tombol Back (`Escape` / `KEYCODE_BACK`) berjenjang 6-level:
+     (1) Tutup IME / keluar search edit $\to$ (2) Tutup modal dialog aktif $\to$ (3) Sembunyikan Player HUD $\to$ (4) Keluar Player ke Detail Episode $\to$ (5) Tutup Detail ke Grid Beranda $\to$ (6) Konfirmasi double-back (Toast 2000ms) untuk keluar aplikasi di layar utama.
+6. **Unit Test Suite Otomatis Navigasi TV (`tests/test_tv_dpad_navigation.py`):**
+   - Menambahkan 5 unit test komprehensif yang menguji ke-5 spesifikasi di atas.
+   - Seluruh 248 test suite unit tests Tatap lulus 100%.
+
+## [2.10.1] - 2026-10-21
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.10.0 -> 2.10.1)
+Kenaikan digit PATCH diterapkan sesuai kaidah Semantic Versioning 2.0.0 karena memuat perbaikan bug keamanan kritis (*security vulnerability fix*), pencegahan kebocoran resource (*resource leak fix*), serta peningkatan stabilitas internal tanpa memodifikasi kontrak antarmuka eksternal (*backward-compatible security & reliability patch*):
+1. **Mitigasi Celah Kritis SSRF (Server-Side Request Forgery) & Intranet Scanning (`backend/main.py`):**
+   - Mengatasi kerentanan di mana endpoint proxy `/api/player/video`, `/api/player/sub`, dan `/api/player/sub_custom` memiliki konfigurasi CORS `Access-Control-Allow-Origin: *` dan sebelumnya hanya memverifikasi awalan skema `http`.
+   - Mengimplementasikan fungsi validasi terpusat `_validate_external_proxy_url(url)` yang menolak seluruh skema non-HTTP/HTTPS serta memblokir akses ke alamat IP privat RFC 1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), alamat loopback (`127.0.0.0/8`, `localhost`, `0.0.0.0`, `::1`), link-local/cloud metadata (`169.254.0.0/16`, `169.254.169.254`), multicast, dan domain intranet (`.local`, `.internal`) dengan status `HTTP 403 Forbidden`.
+   - Mencegah skrip jahat pada halaman web eksternal di peramban pengguna menyalahgunakan backend lokal Tatap (`127.0.0.1:8767`) untuk memindai jaringan lokal pengguna atau membaca layanan internal.
+2. **Eliminasi Kebocoran File Descriptor Socket pada TLS Desync Streaming (`backend/api/desync.py`):**
+   - Menyelidiki akar masalah terputusnya streaming video saat pengguna melakukan *seek*, *pause*, atau perpindahan episode: FastAPI `StreamingResponse` menginterupsi generator `tls_desync_stream` via `GeneratorExit`.
+   - Menata ulang generator `tls_desync_stream` dan fungsi transmisi `tls_desync_request` ke dalam blok `try...finally:`, menjamin pemanggilan `raw_sock.close()` selalu dieksekusi dalam kondisi apa pun sehingga mencegah akumulasi socket descriptor tak tertutup (`OSError: [Errno 24] Too many open files`).
+   - Menerapkan batasan kapasitas maksimum memori (*bounded cache* 256 entri) pada tabel in-memory `_DNS_CACHE`.
+3. **Graceful Connection Pool Cleanup pada FastAPI Lifespan (`backend/main.py`):**
+   - Menambahkan prosedur pembersihan koneksi jaringan asinkron saat server menerima sinyal *shutdown* pada handler `lifespan(app)`.
+   - Menutup connection pool `_direct_client` via `await _direct_client.aclose()`, serta memanggil pembersihan persistent client pada `api.anilist.close_al_client()`, `api.hianime.close_shared_client()`, dan `api.otakudesu.close_otaku_client()`.
+4. **Resiliensi Rate Limiting AniList & Optimasi Traversal Prekuel (`backend/api/anilist.py`):**
+   - Mengimplementasikan pelacak *backoff cooldown* in-memory `_al_rate_limit_until`: jika upstream AniList merespons `HTTP 429 Too Many Requests`, sistem secara cerdas membaca header `Retry-After` (default 60 detik) dan menahan request berikutnya agar tidak memperpanjang penalti ban IP pengguna, melainkan langsung mengalirkan *fallback* katalog HiAnime / data lokal.
+   - Mengoptimalkan penelusuran rantai prekuel pada `anime_relations()` dari 5 langkah menjadi 3 langkah maksimal, menghemat konsumsi kuota AniList secara drastis saat membuka modal detail anime berseri panjang.
+5. **Perbaikan Resolusi URL Relatif Master M3U8 (`backend/api/hianime.py`):**
+   - Memperbaiki metode pembacaan variant stream pada `_probe_master` agar menggunakan RFC-compliant `urllib.parse.urljoin(master_url, v_url)` alih-alih penggabungan string mentah `base + v_url`, mencegah terbentuknya URL cacat dengan double slash (`//`) pada CDN upstream bertingkat.
+6. **Penguatan Defense-in-Depth Sanitasi XSS Frontend (`frontend/js/app.js`, `frontend/js/term.js`):**
+   - Memperluas utilitas pembersih string `esc()` di antarmuka web desktop dan antarmuka TUI agar turut meng-escape karakter tanda kutip tunggal (`'` $\to$ `&#39;`), menutup celah penyisipan HTML injection pada atribut berelemen kutip tunggal.
+7. **Suite Pengujian Keamanan & Resiliensi Otomatis (`tests/test_security_and_resilience.py`):**
+   - Menambahkan 6 unit test baru yang memverifikasi penolakan SSRF, kelulusan URL publik sah, penutupan socket saat interupsi generator, serta pelacakan backoff AniList 429.
+   - Seluruh 243 unit test lulus 100%.
+
+## [2.10.0] - 2026-10-20
+
+### Justifikasi SemVer 2.0.0 (MINOR: 2.9.4 -> 2.10.0)
+Kenaikan digit MINOR diterapkan sesuai kaidah Semantic Versioning 2.0.0 karena memperkenalkan penambahan kapabilitas antarmuka baru, visual thumbnail sinematik 16:9 pada riwayat tontonan, perombakan arsitektur tampilan desktop, dan pencegahan hilangnya poster pada database tanpa breaking changes:
+1. **Perombakan Layout Desktop Platform (Centered Container & Fluid Ergonomics):**
+   - Menambahkan pembatas lebar maksimal `max-width: 1560px` terpusat (`margin: 0 auto`) pada layar desktop (`>= 1024px`), mencegah kartu anime merentang pipih tanpa batas pada monitor ultrawide dan 4K.
+   - Mengoptimalkan media queries grid poster desktop: kartu diperlebar secara ergonomis dari sebelumnya 155px menjadi `minmax(165px, 1fr)` pada layar `>= 769px` dan `minmax(182px, 1fr)` pada layar `>= 1280px`.
+   - Menambahkan efek hover elevasi kartu yang halus (`translate3d(0, -4px, 0)`) dengan *cyan rim glow* lembut (`box-shadow: 0 12px 28px -4px rgba(0,0,0,0.85), 0 0 18px rgba(25,208,208,0.22)`).
+   - Memperbaiki tipografi judul kartu anime di desktop (`font-size: 13.5px`, `line-height: 1.38`, `height: 2.76em`) untuk keterbacaan optimal.
+2. **Katalog Anime Sebagai Default Homescreen Saat Startup:**
+   - Menjadikan **Katalog Anime** (`/api/catalog`) sebagai tampilan awal default saat aplikasi Tatap pertama kali dibuka di platform Desktop maupun Web Browser.
+   - Tab navigasi `Katalog` (`tab-nav-katalog`) aktif secara otomatis dan memuat katalog populer lengkap dengan kartu anime, kontrol paginasi, dan tombol filter katalog tanpa lagi menampilkan prompt pencarian kosong (*"siap [ ] ketik judul"*).
+3. **Penyajian Thumbnail Visual 16:9 pada Strip "Lanjutkan Menonton" di Beranda (`app.js`, `style.css`):**
+   - Mengubah strip horizontal "Lanjutkan menonton" (`#continue-sec` / `#continue-row`) dari sebelumnya hanya berupa kotak teks polos tanpa gambar menjadi kartu visual horizontal (`.hist-card`) dengan thumbnail rasio sinematik 16:9 (`.hist-thumb-wrap`).
+   - Melengkapi thumbnail dengan badge episode melayang (`.hist-ep-badge`), ikon play saat hover (`.hist-play-badge`), serta progress track bar (`.hist-progress-track` & `.hist-progress-fill`) di dasar thumbnail yang menampilkan proporsi menit tontonan secara presisi.
+   - Menyediakan fallback placeholder anggun (`.hist-thumb-ph`) dengan ikon Tatap jika berkas poster sedang memuat atau gagal dimuat, mencegah terjadinya layout shift.
+   - Memperbaiki visibilitas strip lanjutkan menonton agar tampil di beranda katalog (`katalog`, `musim`, `cari`).
+4. **Pencegahan Terhapusnya Poster Anime pada Watch History & Auto-Backfill (`backend/database/__init__.py`):**
+   - Menyelidiki akar masalah terhapusnya poster pada `watch_history`: saat memutar anime atau memperbarui progres tontonan, pemanggilan `add_history` tanpa argumen `poster` sebelumnya mengeksekusi `DELETE FROM watch_history` dan menyisipkan string kosong, melenyapkan URL poster yang tersimpan.
+   - Memperbaiki `add_history` agar otomatis memeriksa dan mengawetkan (*preserve*) nilai `poster` dan `type` dari rekor sebelumnya, serta melakukan fallback pencarian ke tabel `bookmarks`.
+   - Menambahkan mekanisme auto-backfill pada `get_history()` yang secara cerdas mengisi kembali poster dan tipe anime dari tabel `bookmarks` jika sebelumnya kosong, lalu memperbarui basis data SQLite secara atomik.
+5. **Ekstraksi Poster pada Detail HiAnime & Forwarding MPV (`backend/api/hianime.py`, `backend/main.py`):**
+   - Memperbarui `hianime_details(slug)` agar mengekstrak URL poster anime dari elemen `class="film-poster-img"` atau `class="film-poster"`.
+   - Mengirimkan metadata `poster` pada respons endpoint `/api/anime/{slug}/episodes`.
+   - Menyesuaikan handler `/api/play-mpv` agar turut meneruskan `poster` dan `type` ke `add_history`.
+6. **Fallback Placeholder Anti-Kotak Hitam Kosong pada Grid Riwayat (`term.js`, `style.css`):**
+   - Menambahkan fallback placeholder `.pc-thumb-ph` pada kartu grid tab Riwayat (`poster-grid`), mencegah kartu menjadi kotak hitam kosong saat poster belum tersedia atau terjadi kegagalan jaringan gambar.
+7. **Hardening Startup Backend & Dialog Kesalahan GUI (`linux/AppRun`):**
+   - Mengalihkan output server Python ke berkas log terpusat `${DATA_DIR}/server.log`.
+   - Menambahkan pembersihan port 8767 cerdas via Python socket dan deteksi instance sehat yang sudah berjalan (`/api/ping`) untuk mencegah tabrakan socket (`[Errno 98] Address already in use`).
+   - Menaikkan batas waktu tunggu startup ke 15 detik dengan interval polling 200ms (75 iterasi), menjamin pembukaan instan saat server siap dan toleran terhadap cold boot.
+   - Menampilkan dialog kesalahan grafis (`zenity`, `kdialog`, `xmessage`, atau `notify-send`) yang menyajikan cuplikan log terakhir saat server gagal merespons, mencegah aplikasi keluar hening (*silent exit*).
+8. **Handshake Startup Frontend & Overlay Pemulihan Koneksi (`app.js`, `api.js`, `index.html`):**
+   - Menambahkan handshake `/api/ping` dengan mekanisme auto-retry 5 kali saat inisialisasi browser untuk mencegah error koneksi prematur saat backend sedang *warming up*.
+   - Menyediakan modal overlay diagnostik `#backend-error-overlay` (*"Backend Tatap Belum Terhubung"*) lengkap dengan tombol interaktif *"Coba Hubungkan Ulang"*, penyalin informasi debug, serta *auto-reconnect poller* setiap 3 detik.
+9. **Paritas Penuh Chaquopy Android & Suite Uji Otomatis (`tests/test_watch_history_thumbnail.py`):**
+   - Menyinkronkan 100% seluruh modifikasi backend ke `android/app/src/main/python/backend/`.
+   - Menambahkan unit test otomatis baru yang menguji layout desktop, startup hardening, preservasi poster, auto-backfill bookmarks, paritas Chaquopy, dan integritas token CSS/JS frontend.
+10. **Harmonisasi Skala Tipografi Semantik, Eliminasi Faux-Bold & Redesain Kapsul Buffering ExoPlayer Android:**
+    - **Skala Tipografi Semantik & Token Warna (`dimens.xml`, `colors.xml`):** Menetapkan skala tipografi modular harmonis Material Design 3 (`text_display_large` 20sp, `text_headline` 17sp, `text_title_large` 15sp, `text_title_medium` 13sp, `text_body_large` 13.5sp, `text_body_medium` 12sp, `text_subhead` 12sp, `text_caption` 11sp, `text_badge` 9.5sp, `text_code` 11.5sp) beserta token warna semantik (`text_primary`, `text_secondary`, `text_muted`, `text_dim`, `text_accent`, `text_success`, `text_warning`, `text_danger`).
+    - **Eliminasi Total Faux-Bolding:** Menghilangkan kombinasi ganda sintetis `fontFamily="sans-serif-medium"` + `textStyle="bold"` di seluruh layout Android (`activity_main.xml`, `activity_detail.xml`, `activity_player.xml`, `item_anime_card.xml`, `item_episode.xml`, `item_lane_header.xml`, `item_range_chip.xml`, `item_season_chip.xml`, dan seluruh dialog), menghasilkan rendering glif medium murni (font weight 500) yang tajam tanpa artefak penebalan blur di semua chipset Android/TV (MediaTek, Transsion/Infinix, Amlogic).
+    - **Redesain Kapsul HUD Buffering & Menyiapkan Stream ExoPlayer (`bg_buffering_hud.xml`, `activity_player.xml`, `PlayerActivity.java`):** Mengganti bentuk oval kaku 64x64dp lama dengan kapsul rounded rectangle dinamis modern (`corners:radius="14dp"`, stroke `1dp #3338BDF8`, padding `20dp x 14dp`, `wrap_content` hingga `maxWidth="260dp"`). Pesan teks buffering (`"MENYIAPKAN STREAM..."`, `"MEMUAT STREAM..."`, `"MENGHUBUNGKAN ULANG..."`, `"MEMUAT EPISODE X..."`) kini tampil proporsional tanpa terpotong (*clipped/truncated*) di semua rasio layar.
+    - **Peningkatan Keterbacaan Dialog Bantuan Command (`dialog_command_help.xml`):** Memisahkan font perintah sintaks terminal (`monospace` tebal `@dimen/text_code`) dari teks penjelas fungsi yang kini menggunakan `sans-serif` alami `@dimen/text_caption`, meningkatkan legibilitas panduan perintah pengguna secara signifikan.
+    - **Automated Test Suite Baru (`tests/test_android_typography_and_buffering_hud.py`):** Menambahkan 5 pengujian otomatis untuk memvalidasi token tipografi, integritas kapsul buffering, pencegahan faux-bolding, dan keterbacaan deskripsi dialog bantuan. Seluruh 216 automated test suite di repositori Tatap lulus 100%.
+11. **Eliminasi Menyeluruh Duplicate Title & Isolasi Mutlak Riwayat Tontonan ke View Riwayat (`index.html`, `term.js`, `app.js`):**
+    - **Pembersihan DOM & Eliminasi Seksi Usang:** Menghapus tuntas elemen usang `#lane-season-sec` (header statis *"Tayang musim ini"*) dan `#lane-still-sec` (header statis *"Masih tayang (lanjut)"*) dari `frontend/index.html` dan `frontend/js/term.js`. Menjadikan `<section id="search-sec">` dengan `<h2 id="results-title">` sebagai satu-satunya elemen kontainer judul di dalam `<main>`.
+    - **Mesin Resolusi Judul Deterministik (`updateResultsTitle` di `term.js`):** Mengganti logika string appending akumulatif (`label += ...`) dengan resolver deterministik yang mencegah duplikasi judul di seluruh view:
+      - *Musim Ini:* Menyajikan *"Tayang musim ini · FALL"* secara tunggal dan mencegah compounding string saat berpindah halaman paginasi (`pageNext`/`pagePrev`).
+      - *Masih Tayang:* Menyajikan *"Masih tayang (lanjut)"* secara tunggal tanpa judul kembar.
+      - *Terbaru / Jadwal Rilis:* Mencegah duplikasi frasa *"Hari Ini · Hari Ini"* saat melihat jadwal hari ini, menyajikannya bersih sebagai *"Jadwal rilis (Hari Ini)"*.
+      - *Season Custom:* Mencegah duplikasi season berulang (misal *"Season: FALL 2024"* alih-alih *"Season: Fall 2024 · FALL"*).
+      - *Katalog & Favorit:* Mempertahankan judul filter dinamis murni tanpa tercemar season appending.
+    - **Isolasi Mutlak Riwayat Tontonan (`app.js`):** Mengisolasi riwayat tontonan 100% hanya pada tab **Riwayat** (`data-view="riwayat"`). Menghilangkan strip `#continue-sec` dari Katalog, Musim Ini, Cari, dan view lainnya sehingga beranda katalog bersih tanpa polusi riwayat. Tab Riwayat menyajikan seluruh riwayat tontonan secara lengkap dalam satu grid visual poster 16:9 (`.poster-grid`) dengan progress bar, badge episode, indikator waktu, paginasi, dan tombol hapus semua.
+    - **Automated Test Suite Baru (`tests/test_desktop_title_deduplication.py`):** Menambahkan 4 pengujian otomatis yang memvalidasi ketiadaan seksi usang di DOM, isolasi strip riwayat, serta determinisme judul di semua view. Seluruh 220 pengujian di repositori Tatap lulus 100%.
+12. **Eliminasi Online Status Pill, Penyesuaian Search Bar & Konsistensi Episode Button Size (`index.html`, `style.css`, `app.js`):**
+    - **Eliminasi Online Status Pill & Redundansi Status:** Menghapus elemen `.bottom-actions` dan badge pil status scraper (`<span id="health">`) dari footer search bar, mengingat status konektivitas sudah ditangani secara andal oleh modal diagnostik startup `#backend-error-overlay` dan footer drawer navigation.
+    - **Penataan & Dimensi Ergonomis Search Bar:** Search bar (`.search-input-wrap`) kini memanfaatkan 100% lebar baris input secara bebas tanpa terpotong elemen samping, dengan ketinggian yang ditingkatkan ke `height: 42px;` dan padding horizontal `0 16px;`.
+    - **Penyelarasan Terpusat Desktop (Flush Alignment 1560px):** Menerapkan pembatas `max-width: 1560px; margin: 0 auto; width: 100%;` pada `.bottom-search-row` dan `.statusbar` di layar desktop (`>= 1024px`), menyelaraskan batas horizontal search bar agar lurus sejajar (*flush*) dengan kartu anime pada monitor 1080p, 1440p, hingga ultrawide.
+    - **Konsistensi Dimensi Episode Button (.ep & .ep-grid):** Menetapkan tinggi tetap seragam `height: 44px; min-height: 44px; max-height: 44px;` dengan `border-radius: 8px;` pada tombol episode desktop (dan `40px` di mobile). Mengeliminasi ketimpangan visual di mana tombol episode terakhir ditonton (`.last-watch`) sebelumnya lebih tinggi daripada tombol normal karena memuat badge *"TERAKHIR"*; kini seluruh tombol memiliki dimensi luar yang persis identik (100% presisi).
+    - **Automated Test Suite Baru (`tests/test_search_bar_layout_and_health_pill.py`):** Menambahkan 4 pengujian otomatis yang memverifikasi eliminasi status pill, dimensi dan alignment search bar, keseragaman dimensi episode button, serta ketahanan penanganan health check di JavaScript. Seluruh 224 pengujian otomatis di repositori Tatap lulus 100%.
+13. **Pemulihan Menyeluruh Navigasi Keyboard 4-Arah, Enter/Space, dan Detail Episode Modal pada Desktop & Web (`term.js`, `app.js`, `style.css`, `index.html`):**
+    - **Dukungan Grid Poster pada `renderSel()` & `moveSel()`:** Mengubah query `renderSel()` dari sebelumnya hanya `.trow` menjadi `box.querySelectorAll(".poster-card, .trow")`. Memperbaiki bug di mana navigasi keyboard macet total saat antarmuka berada pada tampilan beranda default Katalog, Musim Ini, Lanjutan, Riwayat, maupun Favorit (yang menggunakan kartu visual `.poster-card`).
+    - **Navigasi Panah 4-Arah & Perhitungan Kolom Grid Responsif (`getGridCols`):** Menambahkan handler navigasi horizontal (`ArrowLeft` dan `ArrowRight`) serta vertikal baris demi baris (`ArrowDown` dan `ArrowUp` berdasarkan jumlah kolom grid responsif dinamis), memungkinkan penjelajahan kartu anime 2D yang alami dan lancar di monitor desktop.
+    - **Aksi Enter dan Spasi Membuka Anime (`openSelected()`):** Memperbaiki handler tombol `Enter` dan `Space` pada kartu anime terpilih sehingga langsung memicu `openSelected()` / `App.openTitle()` untuk membuka detail episode anime alih-alih me-reset fokus ke command prompt.
+    - **Transisi Mulus dari Search Bar Input (`#cmd`):** Menekan `ArrowDown` saat berada di kotak input pencarian kini secara otomatis memindahkan fokus langsung ke kartu hasil pertama tanpa perlu interaksi mouse.
+    - **Navigasi Keyboard Lengkap di Modal Detail Anime (`handleTitleModalKey`):** Memungkinkan penjelajahan tombol episode (`.ep`) menggunakan panah 4-arah (`ArrowLeft`/`ArrowRight`/`ArrowUp`/`ArrowDown`), penekanan `Enter`/`Space` untuk langsung memutar episode yang disorot, pintasan `/` untuk memfilter nomor episode, pintasan `F` untuk bookmark favorit, serta `S` untuk beralih sumber streaming. Tombol episode terakhir ditonton (atau episode 1) otomatis terfokus saat modal dibuka.
+    - **Kontrol Volume Keyboard di Video Player Desktop (`ArrowUp` / `ArrowDown`):** Menambahkan pengaturan volume bertahap (+/- 10%) dengan indikator toast visual pada pemutar video HTML5 desktop saat menekan `ArrowUp` atau `ArrowDown`.
+    - **Styling Indikator Fokus Aksesibilitas (`:focus-visible` di `style.css`):** Menambahkan cincin fokus cyan bertepi tajam (`outline: 2px solid rgba(25,208,208,0.75)`) pada `.poster-card` dan tombol `.ep` saat dijelajahi via keyboard.
+    - **Indikator Statusbar (`index.html`):** Memperbarui teks pintasan statusbar menjadi `<b>↑↓←→</b> pilih` untuk mencerminkan navigasi 4 arah.
+    - **Suite Uji Otomatis Baru (`tests/test_desktop_keyboard_navigation.py`):** Menambahkan 8 unit test otomatis yang memverifikasi seluruh fungsionalitas navigasi keyboard, transisi input, seleksi grid 2D, modal episode, dan volume player.
+14. **Perbaikan Masalah Auto-Scroll ke Bawah pada View Masih Tayang (`term.js`):**
+    - **Akar Masalah Teratasi:** Mendiagnosis bug *cascading focus loop* di mana elemen banner header dual-lane (`is_header: true`) di dalam `S.items` tidak memiliki class `.poster-card`, sehingga query DOM `all = box.querySelectorAll(".poster-card, .trow")` mengalami pergeseran indeks. Mengklik kartu baris atas sebelumnya memfokuskan kartu berikutnya secara programatik dan memicu loop fokus berantai yang menyeret scroll ke dasar halaman.
+    - **Seleksi Deterministik Berbasis `data-idx`:** Mengganti pencarian `all[S.sel]` dengan selektor langsung `box.querySelector('[data-idx="' + S.sel + '"]')` yang menyelaraskan indeks secara presisi dengan data `S.items`.
+    - **Guard Pencegahan Rekursi Fokus:** Menambahkan kondisi `if(document.activeElement !== selEl)` sebelum memanggil `selEl.focus()`, memastikan interaksi mouse click tidak pernah memicu loop fokus berulang ke kartu lain.
+15. **Paginasi Pencarian Desktop & Eliminasi Kebocoran Anime Tamat di Musim Saat Ini (`term.js`, `api.js`, `backend/main.py`, Chaquopy parity):**
+    - **Pagination Pencarian Desktop (`view: "cari"`):** Menambahkan parameter `page` pada `window.Tatap.search` di `frontend/js/api.js`. Mengaktifkan pager (`hasPagination = S.total > 1`) pada pencarian di `frontend/js/term.js`, menyimpan `S.searchQuery = q`, menambahkan nomor halaman pada judul `(Hal X)`, dan memperbaiki `loadView()` serta `pagePrev()`/`pageNext()` agar menavigasi halaman pencarian alih-alih me-reset ke riwayat pencarian lama.
+    - **Reset Pointer Seleksi Keyboard:** Menjamin reset `S.sel = -1` pada seluruh transisi halaman (termasuk tab Favorit dan Riwayat).
+    - **Pembersihan Anime Tamat pada Musim Saat Ini (`which=now`):** Menyetel query AniList menjadi `status_in = ["RELEASING"]` khusus `which == "now"`, serta menyematkan filter pengaman sekunder `if which == "now" and is_finished: continue` untuk menyingkirkan anime Movie (1/1 episode) dan anime selesai dari tab Musim Ini.
+    - **Pembaruan Cache Key `seasonal_v4`:** Menaikkan versi cache key dari `seasonal_v3` ke `seasonal_v4` pada `backend/main.py` dan Chaquopy parity (`android/app/src/main/python/backend/main.py`).
+    - **Suite Uji Otomatis Baru (`tests/test_seasonal_and_navigation_fixes.py`):** Menambahkan 5 pengujian otomatis baru. Seluruh 237 pengujian otomatis di repositori Tatap lulus 100%.
+
+## [2.9.4] - 2026-10-20
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.9.3 -> 2.9.4)
+Kenaikan digit PATCH diterapkan sesuai kaidah Semantic Versioning 2.0.0 karena memuat optimasi performa komprehensif pada varian Android TV (khususnya perangkat low-end dan TV Stick dengan RAM 1GB), penyempurnaan ergonomi navigasi remote D-Pad pada Video Player TV saat pause, serta perombakan sistem tipografi semantik untuk Android Mobile dan TV tanpa adanya breaking changes maupun perombakan arsitektur baru:
+1. **Pemberantasan Lag & Stop-The-World GC Thrashing pada Android TV (`server_launcher.py`):**
+   - Menghapus konfigurasi agresif `gc.set_threshold(100, 5, 5)` pada launcher background thread Chaquopy yang sebelumnya memicu stop-the-world Garbage Collection setiap kali terdapat 100 alokasi objek baru.
+   - Mengembalikan ambang batas Python ke standar `(700, 10, 10)`, memangkas hingga ~70% pemborosan siklus CPU quad-core A53 pada TV Stick / TV Box kelas entri, sekaligus mencegah panas berlebih (*thermal throttling*).
+   - Pembersihan memori GC eksplisit (`gc.collect()`) tetap dipertahankan secara pasif hanya saat sistem OS Android memicu event `onTrimMemory`.
+2. **Eliminasi Cascading Layout Animation pada Grid Android TV (`MainActivity.java`):**
+   - Menonaktifkan layout animation (`rvGrid.setLayoutAnimation(null)`) dan melewati `scheduleLayoutAnimation()` pada mode Android TV (`TvFocusHelper.isTv()`).
+   - Kartu anime langsung muncul secara instan saat membuka beranda, berpindah tab, maupun menampilkan hasil pencarian tanpa membebani GPU fill-rate Mali-450 / Mali-G31.
+3. **Optimasi Thread Priority & Zero-Animation pada `ImageLoader.java`:**
+   - Memasang `ThreadFactory` kustom pada thread pool pemroses gambar dengan prioritas `android.os.Process.THREAD_PRIORITY_BACKGROUND`, menjamin thread pengunduh dan pen-decode bitmap tidak merebut time-slice CPU dari UI rendering thread dan thread pemutar video ExoPlayer.
+   - Pada Android TV (`isTv`), menghilangkan animasi alpha fade berulang (`animate().alpha(1.0f).setDuration(160)`) per poster saat gambar selesai dimuat, beralih ke direct bitmap assignment untuk mencegah penumpukan animator object saat scrolling D-pad.
+4. **Tuning Cache RecyclerView & Zero Layout Passes pada Focus Change (`TvFocusHelper.java` & `MainActivity.java`):**
+   - Menetapkan ukuran view cache `rvGrid.setItemViewCacheSize(10)` dan membatasi `RecycledViewPool` ke 12 item pada TV, cukup untuk menampung baris atas dan bawah di luar viewport 4-5 kolom tanpa konsumsi RAM berlebih (< 1.5MB).
+   - Menghapus mutasi dinamis `card.setStrokeWidth(...)` saat berpindah fokus di `TvFocusHelper.java`, sehingga hanya warna border (`card.setStrokeColor(...)`) yang diperbarui (pure GPU paint shader tanpa memicu `requestLayout()` dan kalkulasi ulang outline shape).
+   - Menambahkan `.withLayer()` dan `DecelerateInterpolator` (80ms) pada scale zoom fokus remote TV.
+5. **Penyempurnaan Navigasi Remote D-Pad Player Android TV (`PlayerActivity.java`):**
+   - Mengimplementasikan routing navigasi remote deterministik saat video dalam keadaan **pause**:
+     - **D-pad Kanan:** Mengarahkan fokus berurutan ke tombol Episode Berikutnya (`btnExoNext`) $\to$ tombol Skip Op/Ed (`btnSkipOpEd`) jika tersedia.
+     - **D-pad Kiri:** Mengarahkan fokus ke tombol Episode Sebelumnya (`btnExoPrev`) $\to$ tombol Play/Pause.
+     - **D-pad Atas:** Membuka dan langsung memfokuskan panel atas (`layoutTopBar`) (prioritas: tombol Subtitle Selector `btnSubSelector` $\to$ Resolusi $\to$ Back).
+     - **D-pad Bawah:** Menutup top bar dan langsung memfokuskan panel kontrol bawah (Timeline bar $\to$ Play/Pause $\to$ Skip Op/Ed).
+   - Saat video sedang berputar (**playing**), D-pad Kiri dan Kanan tetap berfungsi sebagai seek cepat mundur/maju 5 detik dengan visual feedback ripple instan.
+6. **Perombakan Sistem Tipografi Semantik & Skala 10-Foot UI:**
+   - Menambahkan file resource qualifier resmi `values-television/dimens.xml` dan `values-sw600dp-land/dimens.xml` untuk menghadirkan skala tipografi 10-Foot UI yang nyaman dibaca dari jarak 3 meter (judul kartu `15sp`, tinggi kontainer `48dp` anti-terpotong, badge `11.5sp`, judul detail `21sp`, sinopsis `14.5sp`).
+   - Merapikan token dimensi mobile di `values/dimens.xml` (judul kartu `13sp`, tinggi kontainer `40dp`, badge `10sp`, judul detail `17sp`, sinopsis `13sp`).
+   - Menerapkan keluarga font modern `sans-serif-medium` (Google Roboto sistem tanpa alokasi memori tambahan) pada kartu, badge, tombol tab, dan halaman detail.
+7. **Penambahan Test Suite Otomatis (`tests/test_android_tv_perf_and_typography.py`):**
+   - Menambahkan 6 unit test otomatis untuk memvalidasi tiadanya GC thrashing, background thread priority, zero layout passes, D-pad navigation routing, dan konsistensi token tipografi.
+   - Seluruh test suite Tatap lulus 100% (202 tests passed).
+
+## [2.9.3] - 2026-10-20
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.9.2 -> 2.9.3)
+Kenaikan digit PATCH diterapkan sesuai kaidah Semantic Versioning 2.0.0 karena memuat perbaikan bug kritis timeout streaming (*streaming timeout fixes*), optimasi failover multi-tier, dan mekanisme auto-retry serta cache invalidation tanpa adanya breaking changes maupun perombakan arsitektur baru:
+1. **Perbaikan Timeout Streaming Multi-Tier & Fast Failover (Studi Kasus: Anime Naruto `naruto-1335`):**
+   - Mendiagnosis dan memperbaiki akar masalah pada anime yang memiliki server upstream gantung (seperti `fetch.nexabloom.top` pada server Megaplay `HD-1` Naruto Episode 1) yang memicu error `The read operation timed out`.
+   - Mengatasi bug pada fungsi `_fetch` di mana parameter `timeout=timeout` tidak diteruskan ke `client.get(url, headers=h, timeout=timeout)`, sehingga timeout pendek (5-8s) saat scanning server mati diabaikan oleh `httpx` di lingkungan Chaquopy Android dan memakan waktu tunggu penuh 12 detik + 11 detik fallback desync (23.57 detik terbuang sia-sia).
+   - Menetapkan batas timeout ketat (5.0s) pada master playlist probing `_try_megaplay` dan langsung menandai host CDN master yang mati ke `_mark_dead(master_host, ttl=600)` agar pemutaran episode berikutnya langsung melewati (*skip*) server tersebut dalam 0ms.
+   - Mengeliminasi penandaan keliru pada `megaplay.buzz` saat yang mati adalah CDN master di baliknya, sehingga endpoint utama tetap dapat melayani judul anime lain.
+2. **Peningkatan Batas Read Timeout Client Android (`PlayerActivity.java`):**
+   - Menaikkan `conn.setReadTimeout(20000)` (20 detik) menjadi `conn.setReadTimeout(45000)` (45 detik) pada `resolveAndPlayStream`.
+   - Mencegah Android memutus koneksi secara sepihak di detik ke-20 (`SocketTimeoutException: Read timed out`) sebelum backend sempat mencapai server alternatif yang sehat (seperti ZokoAnime yang selesai dalam 2.8 detik).
+3. **Mekanisme Smart Auto-Retry & Invalidation Cache Basi (`force=true`):**
+   - Menambahkan fungsi `delete_episode_cache(slug, ep, mode)` pada modul database SQLite (`backend/database/__init__.py` dan Chaquopy parity).
+   - Menambahkan parameter `force: bool = Query(False)` pada endpoint `/api/stream/resolve`. Jika `force=True`, backend secara otomatis memotong dan menghapus cache episode yang basi atau bermasalah, lalu meminta stream segar dari provider upstream.
+   - Pada Android Native (`PlayerActivity.java`) dan Web Desktop (`app.js` & `api.js`): Saat terjadi error timeout atau player error, pemutar secara otomatis melakukan 1 kali *failover auto-retry* dengan query `&force=true` untuk memulihkan pemutaran tanpa campur tangan pengguna.
+   - Jika setelah auto-retry stream tetap tidak dapat dijangkau, pemutar menampilkan tombol interaktif *"Coba Lagi ↻"* alih-alih membiarkan layar gelap/freeze.
+4. **Eliminasi Unduhan Ganda Master M3U8 (`_validate_master_playlist`):**
+   - Pada `_try_embed_legacy`, playlist master yang telah diunduh pada fase `_probe_master` langsung diteruskan ke `_validate_master_playlist(master, referer, variants=[], body_content=...)`, menghemat 1 kali round-trip jaringan (1-3 detik) pada server ZokoAnime dan VidTube.
+5. **Paritas Penuh Chaquopy Android:**
+   - Seluruh perbaikan backend disinkronkan 100% secara identik ke `android/app/src/main/python/backend/api/hianime.py`, `backend/main.py`, dan `backend/database/__init__.py`.
+6. **Penambahan Test Suite Otomatis (`tests/test_stream_timeout_recovery.py`):**
+   - Menambahkan unit test komprehensif untuk pengujian `delete_episode_cache`, `resolve` dengan `force=True`, `_validate_master_playlist` dengan `body_content`, serta fungsi negative cache `_mark_dead`.
+   - Seluruh test suite Tatap lulus 100% (196 tests passed).
 
 ## [2.9.2] - 2026-10-18
 
@@ -102,6 +295,86 @@ Kenaikan digit PATCH diterapkan sesuai kaidah Semantic Versioning 2.0.0 karena m
 15. **Restorasi Format Kontrol CC & Subtitle Bawaan Stabil:**
    - Membatalkan perubahan eksperimental panel CC Styler HUD fullscreen, tombol dock mengambang, serta menu titik 3 pada pemutar desktop.
    - Mengembalikan arsitektur kontrol subtitle pemutar desktop secara utuh ke implementasi stabil bawaan Tatap (`#pm-subs-wrap`, dropdown `#pm-subs`, sizing S/M/L, dan tombol terjemahan cepat ID) demi menjaga stabilitas fungsional dan kenyamanan pemutaran.
+16. **Adopsi Desain Sistem Shiru UI (Ultra-Minimalist & Optimasi Perangkat Low-End):**
+   - Mengadopsi bahasa desain modern Shiru (RockinChaos/Shiru & shiru.app) yang diselaraskan secara penuh dengan filosofi Tatap: Ultra-Minimalist, Zero-Bloat, dan Hemat Resource untuk Perangkat Low-End (laptop lawas, prosesor Celeron/Atom, GPU terintegrasi, dan Linux software rendering).
+   - **Palet Obsidian & Electric Teal:** Latar belakang hitam pekat murni (`#000000`) yang hemat daya di layar OLED/AMOLED, panel permukaan bertingkat (`#0e1015` / `#151820`), dan aksen vibrant electric teal (`#19d0d0` dan `#008d8d`).
+   - **100% Native System Font Stack (0KB Download / 0ms Latency):** Tidak memuat Google Fonts eksternal untuk menjaga prinsip Standalone Runtime lokal Tatap (0 network request, 0ms latency font swap, 0 footprint memori font table).
+   - **Peniadaan Beban Backdrop Blur (Zero Backdrop Blur Tax):** Menghilangkan `backdrop-filter: blur(...)` pada seluruh elemen UI (navbar, drawer, sheet, modal, floating skip button), mencegah lonjakan utilisasi CPU hingga 80-100% pada GPU lawas dan driver Mesa software rasterization.
+   - **Top Slim Sticky Navigation Bar (`.tui-head` & `.nav-tabs-bar`):** Menghadirkan bar navigasi tab atas yang ramping (tinggi 50px) dengan tab kategori langsung (*Musim Ini*, *Terbaru*, *Masih Tayang*, *Favorit*, *Katalog*) dengan indikator garis bawah aksen teal sederhana dan cepat, terhubung secara reaktif dengan router `Tui.setView`.
+   - **Kartu Anime Sinematik Berestetika Bersih (`.poster-card`):** Sudut melengkung modern `border-radius: 10px`, layout containment (`contain: content; will-change: transform;`) untuk menghemat hingga 70% kalkulasi relayout DOM browser saat scrolling, dan transisi GPU composited `translate3d(0, -2px, 0)` yang mulus 60 FPS.
+   - **Elemen Mikro Khas Shiru:** Indikator `.eyebrow` dengan titik neon persegi teal (`box-shadow: 0 0 6px var(--accent)`) dan garis pemisah `.shiru-divider`.
+   - **Integritas Fungsional & Subtitle Dual-Layer:** Seluruh ID DOM, shortcut keyboard, endpoint API, dan kontrol subtitle dual-layer (`#pm-subs-overlay` & native `VTTCue`) tetap 100% stabil dan kompatibel.
+17. **Test Suite Komprehensif Shiru UI Minimalist (`tests/test_shiru_ui_minimalist.py`):**
+   - Menambahkan 6 pengujian otomatis baru yang memverifikasi ketiadaan font Google eksternal, peniadaan backdrop blur, token obsidian-teal, struktur tab navigasi atas, isolasi layout kartu anime, dan sinkronisasi event listener JavaScript.
+18. **Optimalisasi Video Player Shell 16:9 Adaptif & Pemanfaatan Area Panggung Maksimal:**
+   - Menghapus pembatasan kaku tinggi video 640px (`max-height: clamp(240px, 66vh, 640px)`) yang sebelumnya memicu letterboxing berlebihan pada layar monitor modern (1080p, 1440p, 4K).
+   - Memperbarui dimensi `.player-shell` menjadi dinamis dan proporsional: `width: min(calc((94vh - 100px) * (16 / 9)), 96vw); max-width: 1560px; max-height: 96vh;` dengan overflow vertikal terisolasi rapi.
+   - Mengatur rasio aspek bawaan video anime ke `aspect-ratio: 16 / 9` dengan penyesuaian dinamis intrinsik stream (`videoWidth / videoHeight`) saat event `loadedmetadata`, memungkinkan video anime mengisi area panggung secara maksimal tanpa memotong kontrol header atau footer.
+19. **Fitur Tampilan Penuh Riwayat Menonton (Watch History View Paritas Android):**
+   - Menambahkan tab navigasi **Riwayat** di header atas (`.nav-tabs-bar`) dan menu drawer (`:riwayat`) yang selaras dengan tab riwayat di Android.
+   - Menampilkan koleksi anime yang pernah ditonton lengkap dengan badge nomor episode terakhir, indikator progress bar menit menonton di bagian bawah thumbnail kartu, tanggal tonton, dan dukungan resume pemutaran sekali klik.
+   - Memperbarui perintah terminal `:riwayat`: mengetik `:riwayat` membuka tampilan riwayat menonton, sedangkan `:riwayat hapus` atau tombol "hapus semua" membersihkan database riwayat.
+20. **Penghalusan Tipografi & Percantik Top Header Menu:**
+   - Menerapkan global font antialiasing (`-webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility;`) untuk mengeliminasi rasterisasi teks bergerigi pada latar hitam obsidian.
+   - Merombak top header menu menjadi bar terpadu yang elegan: logo TATAP dengan tracking geometrik 2.2px, pill badge versi v2.9.2, dan tab bar tersegmentasi ala pill container (`background: var(--surface); border-radius: 8px;`) dengan feedback interaktif yang bersih dan halus.
+   - Mengeliminasi tombol hamburger menu ganda di bottom bar (`#btn-drawer`), mempertahankan `#btn-drawer-head` di pojok kanan atas sebagai tombol menu tunggal resmi.
+   - Mengatasi redundansi menu di drawer dengan menyembunyikan grup navigasi tampilan di layar desktop ($\ge 769\text{px}$) via class responsif `.drawer-group-nav`.
+   - Menata ulang status bar keyboard shortcuts dengan styling badge keycap `kbd` yang rapi.
+21. **Test Suite Komprehensif Video Player Shell & Riwayat (`tests/test_videoplayer_shell_and_riwayat.py`):**
+   - Menambahkan 6 pengujian otomatis baru yang memverifikasi antialiasing tipografi, tombol hamburger tunggal, elemen UI dan tab riwayat, eliminasi duplikasi drawer di desktop, rasio aspek player shell 16:9, dan handler view/command riwayat di JavaScript (seluruh 175 test suite Tatap lulus 100%).
+22. **Optimasi Engine Terjemahan Subtitle GTX+ (Pengayaan Slang Halus & Kosakata Game/Dungeon/Anime):**
+   - **Pre-GTX Normalizer (`_PRE_GTX_EN_SLANG_RULES`):** Memperluas pra-pemrosesan teks sumber bahasa Inggris untuk menangkap idiom dan slang modern sebelum dikirim ke Google Translate guna mencegah blunder harfiah mesin (*dead meat, for real, cut the crap, spawn point, pull aggro, freaking out, rage quit, dungeon break, raid boss, party leader/members*).
+   - **Kamus Leksikon Universal Game, RPG & Dungeon (`_UNIVERSAL_FANSUB_RULES`):** Mengoreksi calque harfiah mesin menjadi istilah anime/game yang akurat dan imersif (*"pesta"* $\to$ *"party"*, *"ruang bawah tanah tingkat X"* $\to$ *"dungeon tingkat X"*, *"inti/gerbang/jebakan ruang bawah tanah"* $\to$ *"inti/gerbang/jebakan dungeon"*, *"titik bertelur/kemunculan"* $\to$ *"titik spawn"*, *"menarik kebencian"* $\to$ *"menarik aggro"*, *"waktu/masa pendinginan"* $\to$ *"waktu cooldown"*, *"tingkat drop"* $\to$ *"drop rate"*, *"bilah kesehatan/mana"* $\to$ *"bar HP/MP"*, *"bos serbuan"* $\to$ *"raid boss"*, *"penggemar status"* $\to$ *"buff status"*, *"pemain tunggal"* $\to$ *"pemain solo"*, *"pemburu peringkat S"* $\to$ *"hunter rank S"*).
+   - **Penghalusan Diksi Lisan Percakapan Kasual (`_CASUAL_FANSUB_RULES`):** Menyuntikkan partikel percakapan alami (*"nih", "deh", "sih", "kan", "kok"*) serta mengoreksi ekspresi harfiah kaku (*"apakah kamu nyata"* $\to$ *"kamu serius"*, *"tidak ada cara di neraka"* $\to$ *"mana mungkin"*, *"kamu daging mati"* $\to$ *"mampus kau"*, *"potong omong kosong"* $\to$ *"hentikan omong kosongmu"*, *"buat dirimu di rumah"* $\to$ *"anggap aja rumah sendiri"*), tanpa redundansi atau duplikasi leksikon.
+   - **Preservasi Akronim Kapital pada Case-Matching:** Memperbarui `_replace_match` agar akronim kapital (seperti `HP`, `MP`, `DPS`, `SMK`, `OSIS`) tidak tereduksi menjadi huruf kecil saat teks sumber ditulis dengan huruf kecil.
+   - **Proteksi Adegan Formal & Paritas 100% Chaquopy Android:** Adegan formal (kerajaan/militer) tetap 100% terlindungi dari bahasa gaul santai, dan seluruh aturan disinkronkan identik antara root backend dan Chaquopy embedded Android.
+   - **Perluasan Automated Test Suite (`tests/test_translate.py`):** Menambahkan 3 blok pengujian komprehensif (`test_new_pre_gtx_slang_and_gaming`, `test_new_gaming_and_dungeon_universal_rules`, `test_new_casual_slang_smoothing`, dan `royal3`) sehingga total 18 pengujian translate dan seluruh 178 test suite Tatap lulus 100%.
+23. **Penyempurnaan Tampilan & Tata Letak Anime Card (Optimasi Khusus Perangkat Low-End):**
+    - **Rasio Poster Proporsional 2:3:** Mengubah rasio visual poster pada `.pc-media` menjadi `aspect-ratio: 2/3` sesuai standar format poster anime bioskop/serial industri, mengeliminasi distorsi dan pemotongan canggung di sisi gambar.
+    - **Gradien Scrim Halus Tanpa Tambahan Node DOM (`.pc-media::after`):** Menerapkan gradien pelindung poster bawah via pseudo-element CSS murni, menjamin keterbacaan teks dan badge pada poster berlatar terang tanpa menambah elemen `<div>` baru di JavaScript (menghemat 30–50+ node DOM per render halaman).
+    - **Sistem Badge Terstruktur & Semantik:**
+      - **Kiri Atas:** Nomor urut / index (`.pc-idx`) dengan styling *dark pill*.
+      - **Kanan Atas:** Skor rating bintang amber (`.pc-score`: `★ 8.5`) atau tanda tanya (`.pc-bad`) jika unmapped.
+      - **Kiri Bawah:** Status episode semantik (`.pc-badge-ep`, `.pc-badge-tamat`, `.pc-badge-long`) tanpa styling CSS inline.
+      - **Kanan Bawah:** Format anime (`.pc-badge-type`: `TV`, `MOVIE`, `ONA`).
+      - **Garis Bawah Media:** Watch history progress bar (`.pc-progress-track`).
+    - **Jaminan Performa 60 FPS untuk Low-End Device:**
+      - *Strictly Zero `backdrop-filter: blur(...)`:* Menghilangkan seluruh filter blur multi-pass GPU yang menjadi penyebab utama stutter/jank pada chipset low-end (Mali, PowerVR, Intel HD). Seluruh badge menggunakan warna solid/transparan pekat berkinerja tinggi.
+      - *Strict CSS Containment:* Mempertahankan `contain: content;` dan `will-change: transform;` guna mengisolasi subtree rendering setiap kartu.
+      - *Compositor-Only Animations:* Mikro-interaksi hover hanya memanfaatkan akselerasi GPU murni (`transform: translate3d(0, -2px, 0)` dan `opacity`).
+      - *Bypass Zoom pada Touch/TV:* Animasi scaling poster diisolasi hanya untuk perangkat dengan mouse/pointer melalui `@media (hover: hover)`.
+    - **Test Suite Komprehensif (`tests/test_anime_card_polish.py`):** Menambahkan 4 pengujian otomatis baru yang memvalidasi keberadaan wadah `pc-media`, rasio 2/3, pseudo-element scrim, kelas badge semantik, zero backdrop-filter, dan CSS containment (seluruh 182 test suite Tatap lulus 100%).
+24. **Perbaikan Ketahanan Sistem Pembaruan Versi (Pemberantasan Error 'Koneksi Gagal' pada Opsi Update):**
+    - **Akar Masalah:** Menangani pembatasan kuota unauthenticated GitHub REST API (`HTTP 403 Forbidden` / 60 req/jam) yang sering habis pada jaringan seluler bersama (CGNAT) di Indonesia, timeout koneksi seluler/TV box, serta ketiadaan fallback jaringan.
+    - **Arsitektur Fallback Bertingkat 4-Tier pada Backend (`backend/main.py` & Paritas Chaquopy):**
+      - *Tier 1 (GitHub REST API):* Memeriksa API resmi GitHub dengan perpanjangan timeout menjadi 12.0 detik.
+      - *Tier 2 (GitHub Web Releases Redirect):* Jika Tier 1 mengembalikan HTTP 403 atau error jaringan, otomatis menghubungi halaman web rilis `https://github.com/asfaraguest/tatap/releases/latest` (bebas batas kuota API), mengekstrak nomor versi dari header redirect `Location` (`/tag/v<VER>`), dan merekonstruksi URL unduhan 4 aset resmi secara deterministik.
+      - *Tier 3 (GitHub Raw Fastly CDN):* Jika Tier 1 & 2 terganggu oleh DNS poisoning, membaca `VERSION` dan `CHANGELOG.md` via Fastly CDN (`raw.githubusercontent.com`) dengan latensi instan (< 500ms).
+      - *Tier 4 (Stale Cache Fallback):* Jika perangkat benar-benar offline, menyajikan data cache rilis sebelumnya alih-alih melempar error gagal.
+    - **Fallback Native Java Langsung pada Android (`AppUpdateManager.java`):**
+      - Menambahkan mekanisme fallback langsung via HTTPS dari kode Java native jika server backend lokal Python (`127.0.0.1:8767`) sedang sibuk atau tidak merespons, menjamin pemeriksaan update di Android tidak pernah gagal.
+    - **Perluasan Automated Test Suite (`tests/test_in_app_update.py`):**
+      - Menambahkan 2 pengujian otomatis baru (`test_backend_update_tier2_web_fallback` dan `test_backend_update_tier3_raw_fallback`) yang memverifikasi otomatisasi fallback saat API terkena HTTP 403 dan simulasi kegagalan DNS web (seluruh 184 test suite Tatap lulus 100%).
+25. **Penyempurnaan Proporsi & Konsistensi Desain Bilah Atas dan Bilah Bawah Sesuai Kaidah Desain Grafis:**
+    - **Mathematical 3-Column Grid (`1fr auto 1fr`):** Mengganti sistem flex pada `.tui-head` menjadi 3-kolom grid CSS presisi dengan `justify-self: center` pada bar tab navigasi (`.nav-tabs-bar`), mengeliminasi deviasi horizontal sehingga tab navigasi berada 100% tepat di garis tengah (*true optical center*) layar monitor.
+    - **Modular Scale 8-Point Grid (`56px`):** Menyelaraskan tinggi bilah atas menjadi 56px ($7 \times 8\text{px}$) dengan elevasi permukaan obsidian halus dan jarak bernapas vertikal 10px atas-bawah yang proporsional.
+    - **Simbol Grafis Brand Mark Geometrik (`#icon-brand-mark`):** Menambahkan simbol apertur geometrik cyber viewfinder tajam di samping logo `TATAP` serta menjadikan elemen logo interaktif (`#head-brand`) untuk kembali ke Beranda (*Musim Ini*) dan auto-scroll ke atas.
+    - **Pemusatan Pencarian Eksklusif di Bar Bawah & Konsistensi Gaya Desain Atas-Bawah:**
+      - Mengeliminasi duplikasi elemen pencarian pada header atas agar bilah atas tetap bersih, fokus, dan lapang.
+      - Menyelaraskan bahasa desain *bottom bar* secara simetris dengan *top bar*: menggunakan gradien obsidian komplementer `linear-gradient(0deg, ...)`, garis batas halus `rgba(255,255,255,0.07)`, elevasi bayangan `0 -4px 20px rgba(0,0,0,0.5)`, serta material permukaan `search-input-wrap` yang identik dengan kapsul tab navigasi (`background: rgba(18,21,28,0.85); border-radius: 9px;`).
+      - Menyematkan ikon pencarian penuntun (*search lead icon*) dan keycap shortcut hint `/` pada bar bawah.
+    - **Perluasan Automated Test Suite (`tests/test_top_bar_menu_polish.py`):** Menambahkan 6 pengujian otomatis baru yang memverifikasi keberadaan brand logo mark SVG, arsitektur 3-kolom grid CSS, pemusatan pencarian eksklusif di bar bawah, konsistensi token desain atas-bawah, event listener interaktif, dan kepatuhan Zero Backdrop Blur (seluruh 190 test suite Tatap lulus 100%).
+26. **Perbaikan Bug Next Page pada Pencarian Android Platform:**
+    - **Akar Masalah Teratasi:**
+      1. Mengatasi ketiadaan parameter `&page=` pada pembentukan URL endpoint `/api/search` di `MainActivity.java` yang menyebabkan tombol Next Page memanggil ulang hasil halaman 1.
+      2. Menambahkan parameter `page: int = Query(1, ge=1, le=100)` pada endpoint backend `/api/search` (`backend/main.py` dan Chaquopy Android) serta mengisolasi cache key per nomor halaman (`p1`, `p2`).
+      3. Meng-upgrade scraper HiAnime (`backend/api/hianime.py`) dengan fungsi `hianime_search_page` yang mengekstrak kartu halaman selanjutnya via `/search?keyword={}&page={}` dan membedah total halaman serta status `has_next` dari paginator HTML.
+      4. Mengeliminasi heuristik usang `count >= 10` pada `MainActivity.java` dengan metadata paginasi semantik (`hasNextPage || totalPages > currentPage`), mencegah tombol Next Page aktif secara keliru (*false-positive*) pada kata kunci pencarian yang hanya memiliki 1 halaman.
+    - **Penyempurnaan Indikator Paginasi & Proteksi Navigasi TV:**
+      - Menampilkan indikator halaman dinamis `Hal X / Y` pada bilah kontrol paginasi dan memperbarui judul hasil pencarian dengan keterangan `(Hal X)`.
+      - Menambahkan proteksi navigasi remote D-Pad Android TV: ketika tombol Next Page dinonaktifkan di halaman terakhir, fokus remote otomatis dialihkan ke tombol `Sebelumnya` atau kartu anime untuk mencegah jebakan fokus (*focus trap*).
+    - **Perluasan Automated Test Suite (`tests/test_search.py` & `tests/test_pagination_all_views.py`):**
+      - Menambahkan pengujian otomatis baru untuk validasi envelope pagination pencarian, isolasi cache per halaman, dan verifikasi multi-halaman (seluruh 192 test suite Tatap lulus 100%).
 
 ## [2.9.1] - 2026-10-18
 

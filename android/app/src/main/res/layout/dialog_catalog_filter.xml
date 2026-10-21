@@ -26,16 +26,17 @@
                 android:drawablePadding="7dp"
                 android:drawableTint="#38BDF8"
                 android:text="Filter Katalog Anime"
-                android:textColor="#F1F5F9"
-                android:textSize="15sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_primary"
+                android:textSize="@dimen/text_title_large"
+                android:fontFamily="sans-serif-medium" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Cross Filter: Urutan, Tahun, Musim, Bulan, Tipe &amp; Status"
-                android:textColor="#64748B"
-                android:textSize="11sp"
+                android:textColor="@color/text_muted"
+                android:textSize="@dimen/text_caption"
+                android:fontFamily="sans-serif"
                 android:layout_marginTop="2dp" />
         </LinearLayout>
 
@@ -965,10 +966,10 @@
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:text="Hapus Filter"
-            android:textColor="#EF4444"
+            android:textColor="@color/text_danger"
             android:backgroundTint="#161A24"
-            android:textSize="11.5sp"
-            android:textStyle="bold" />
+            android:textSize="@dimen/text_subhead"
+            android:fontFamily="sans-serif-medium" />
 
         <View
             android:layout_width="0dp"
@@ -982,8 +983,8 @@
             android:text="Terapkan Filter"
             android:textColor="#0B132B"
             android:backgroundTint="#38BDF8"
-            android:textSize="11.5sp"
-            android:textStyle="bold"
+            android:textSize="@dimen/text_subhead"
+            android:fontFamily="sans-serif-medium"
             android:paddingHorizontal="16dp" />
     </LinearLayout>
 </LinearLayout>

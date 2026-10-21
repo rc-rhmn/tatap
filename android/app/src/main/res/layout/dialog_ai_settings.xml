@@ -18,9 +18,9 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="Pengaturan AI Translate"
-            android:textColor="#F1F5F9"
-            android:textSize="15sp"
-            android:textStyle="bold" />
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_title_large"
+            android:fontFamily="sans-serif-medium" />
 
         <Button
             android:id="@+id/btn_close_ai_dialog"
@@ -57,9 +57,9 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="API Key : (Belum disetel)"
-                    android:textColor="#38BDF8"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
+                    android:textColor="@color/text_accent"
+                    android:textSize="@dimen/text_subhead"
+                    android:fontFamily="sans-serif-medium" />
 
                 <TextView
                     android:id="@+id/tv_ai_status_model"
@@ -249,10 +249,10 @@
                     android:layout_width="wrap_content"
                     android:layout_height="34dp"
                     android:text="Simpan"
-                    android:textColor="#FFFFFF"
+                    android:textColor="@color/text_primary"
                     android:backgroundTint="#1E2433"
-                    android:textSize="11.5sp"
-                    android:textStyle="bold" />
+                    android:textSize="@dimen/text_caption"
+                    android:fontFamily="sans-serif-medium" />
             </LinearLayout>
         </LinearLayout>
     </ScrollView>

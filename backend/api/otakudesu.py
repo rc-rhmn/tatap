@@ -30,6 +30,16 @@ def _get_otaku_client():
         )
     return _otaku_client
 
+def close_otaku_client():
+    """Tutup persistent client Otakudesu saat aplikasi shutdown."""
+    global _otaku_client
+    if _otaku_client is not None:
+        try:
+            _otaku_client.close()
+        except Exception:
+            pass
+        _otaku_client = None
+
 def _fetch(url: str, referer: str = None, timeout: int = 12) -> str:
     """Fetch helper menggunakan curl_cffi dengan fallback httpx pool dan TLS desync."""
     h = dict(HEADERS)

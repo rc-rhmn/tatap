@@ -177,6 +177,17 @@ async def get_episode_cache(slug: str, ep: int, mode: str, ttl=12*3600):
                 d["outro"] = {"start": 0, "end": 0}
             return d
 
+async def delete_episode_cache(slug: str, ep: int = None, mode: str = None):
+    """Hapus cache episode tertentu jika stream basi atau mengalami timeout."""
+    async with _connect_db() as db:
+        if ep is not None and mode is not None:
+            await db.execute("DELETE FROM episode_cache WHERE slug=? AND ep=? AND mode=?", (slug, ep, mode))
+        elif ep is not None:
+            await db.execute("DELETE FROM episode_cache WHERE slug=? AND ep=?", (slug, ep))
+        else:
+            await db.execute("DELETE FROM episode_cache WHERE slug=?", (slug,))
+        await db.commit()
+
 async def set_episode_cache(slug, ep, mode, master, variants, sub, sub_lang, referer, server,
                           subtitles=None, intro=None, outro=None):
     """Simpan cache episode. subtitles=list, intro={start,end}, outro={start,end}."""
@@ -193,6 +204,24 @@ async def set_episode_cache(slug, ep, mode, master, variants, sub, sub_lang, ref
 
 async def add_history(slug, title, episode, mode="sub", progress=0, poster="", type=""):
     async with _connect_db() as db:
+        if not poster and slug:
+            # Preservasi poster dari riwayat sebelumnya agar tidak terhapus saat pembaruan progres
+            async with db.execute("SELECT poster, type FROM watch_history WHERE slug=? AND poster != ''", (slug,)) as cur:
+                row = await cur.fetchone()
+                if row:
+                    if not poster and row[0]:
+                        poster = row[0]
+                    if not type and row[1]:
+                        type = row[1]
+        if not poster and slug:
+            # Cari dari bookmarks jika ada
+            async with db.execute("SELECT poster, type FROM bookmarks WHERE slug=? AND poster != ''", (slug,)) as cur:
+                row = await cur.fetchone()
+                if row:
+                    if not poster and row[0]:
+                        poster = row[0]
+                    if not type and row[1]:
+                        type = row[1]
         if slug:
             await db.execute("DELETE FROM watch_history WHERE slug=?", (slug,))
         await db.execute("INSERT INTO watch_history(slug,title,episode,mode,progress,poster,type,played_at) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
@@ -204,9 +233,22 @@ async def get_history(limit=50):
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM watch_history ORDER BY played_at DESC LIMIT ?", (limit,)) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
+            needs_commit = False
             for r in rows:
                 if "slug" in r and r["slug"]:
                     r["id"] = r["slug"]
+                # Backfill poster jika belum ada tapi tersedia di bookmarks
+                if not r.get("poster") and r.get("slug"):
+                    async with db.execute("SELECT poster, type FROM bookmarks WHERE slug=? AND poster != ''", (r["slug"],)) as c_bm:
+                        bm_row = await c_bm.fetchone()
+                        if bm_row and bm_row[0]:
+                            r["poster"] = bm_row[0]
+                            if not r.get("type") and bm_row[1]:
+                                r["type"] = bm_row[1]
+                            await db.execute("UPDATE watch_history SET poster=?, type=? WHERE slug=?", (r["poster"], r.get("type", ""), r["slug"]))
+                            needs_commit = True
+            if needs_commit:
+                await db.commit()
             return rows
 
 async def clear_history():

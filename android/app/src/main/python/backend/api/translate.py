@@ -715,7 +715,9 @@ _SCENE_ROYAL_RE = _re.compile(
 _SCENE_GAMING_RE = _re.compile(
     r"\b(dungeon|guild|party|quest|raid|boss raid|monster bos|buff|debuff|hp|mp|mana|mana pool|"
     r"skill point|level up|drop rate|drop item|aggro|spawn|respawn|cooldown|magic circle|lingkaran sihir|"
-    r"potion|ramuan penyembuh|guild master|petualang peringkat|status window|jendela status|papan peringkat)\b",
+    r"potion|ramuan penyembuh|guild master|petualang peringkat|status window|jendela status|papan peringkat|"
+    r"tank|tanker|healer|dps|damage dealer|solo player|solo hunter|hunter rank|death game|vrmmo|"
+    r"player killer|boss room|skill tree|dungeon break|spawn point)\b",
     _re.I
 )
 
@@ -783,6 +785,38 @@ _PRE_GTX_EN_SLANG_RULES = [
     (r"\bwater under the bridge\b", "thing of the past"),
     (r"\bbreak the ice\b", "warm up the atmosphere"),
     (r"\bhit the nail on the head\b", "be completely accurate"),
+    # Slang & Idiom Tambahan (Disambiguasi Sebelum Masuk GTX)
+    (r"\b(are you )?for real\b", "seriously"),
+    (r"\b(you're|you are) dead meat\b", "you are finished"),
+    (r"\bdead meat\b", "in deep trouble"),
+    (r"\bcut the (crap|bullshit|bs)\b", "stop the nonsense"),
+    (r"\b(no way|not a chance) in hell\b", "impossible"),
+    (r"\bfreaking out\b", "panicking"),
+    (r"\bfreak out\b", "panic"),
+    (r"\bmessing with (me|you|us|him|her|them)\b", r"tricking \1"),
+    (r"\bfed up with\b", "sick and tired of"),
+    (r"\bgo easy on (me|him|her|us|them)\b", r"be gentle with \1"),
+    (r"\bwhat (on earth|in the world)\b", "what exactly"),
+    (r"\b(are you|you gotta be) kidding (me)?\b", "are you joking"),
+    (r"\bmake yourself at home\b", "feel comfortable as at home"),
+    (r"\bbite me\b", "screw you"),
+    (r"\b(piss|bug) off\b", "go away"),
+    (r"\bjust drop it\b", "just forget about it"),
+    (r"\bget over it\b", "move on from it"),
+    (r"\bhave a crush on\b", "be attracted to"),
+    (r"\bflexing\b", "showing off"),
+    (r"\brage quit(ting)?\b", "quit in anger"),
+    # Gaming & Dungeon Disambiguasi
+    (r"\b(pull|draw|taking) aggro\b", "attracting enemy attention"),
+    (r"\bspawn points?\b", "appearance location"),
+    (r"\bdungeon crawl(er|ing)?\b", "dungeon exploration"),
+    (r"\bdungeon break\b", "dungeon outbreak"),
+    (r"\braid boss\b", "large-scale boss"),
+    (r"\bparty leader\b", "group leader"),
+    (r"\bparty members?\b", "group member"),
+    (r"\bclear rewards?\b", "quest completion reward"),
+    (r"\bepic (?:class|job)\b", "epic tier class"),
+    (r"\blegendary job\b", "legendary class"),
 ]
 _COMPILED_PRE_GTX_EN_SLANG = [(_re.compile(pat, _re.IGNORECASE), repl) for pat, repl in _PRE_GTX_EN_SLANG_RULES]
 
@@ -1176,6 +1210,102 @@ _UNIVERSAL_FANSUB_RULES = [
     (r"\bmemukul karung\b", "pergi tidur"),
     (r"\bjangan berkeringat\b", "jangan dipikirkan"),
     (r"\bburukku\b", "salahku"),
+    # Istilah Game, RPG, Dungeon & Eksplorasi
+    (r"\binti ruang bawah tanah\b", "inti dungeon"),
+    (r"\binti penjara bawah tanah\b", "inti dungeon"),
+    (r"\bjebakan ruang bawah tanah\b", "jebakan dungeon"),
+    (r"\bgerbang ruang bawah tanah\b", "gerbang dungeon"),
+    (r"\bgerbang penjara bawah tanah\b", "gerbang dungeon"),
+    (r"\bledakan ruang bawah tanah\b", "dungeon break"),
+    (r"\bkebobolan ruang bawah tanah\b", "dungeon break"),
+    (r"\bpenjelajahan ruang bawah tanah\b", "eksplorasi dungeon"),
+    (r"\bpenjelajah ruang bawah tanah\b", "penjelajah dungeon"),
+    (r"\bruang bawah tanah tingkat ([A-Za-z0-9]+)\b", r"dungeon tingkat \1"),
+    (r"\bruang bawah tanah level ([A-Za-z0-9]+)\b", r"dungeon level \1"),
+    (r"\bmasuk ke ruang bawah tanah\b", "masuk ke dungeon"),
+    (r"\bkeluar dari ruang bawah tanah\b", "keluar dari dungeon"),
+    (r"\bruang bos\b", "boss room"),
+    (r"\bkamar bos\b", "boss room"),
+    # Party, Guild & Peran Tempur
+    (r"\bpesta penyerbuan\b", "party raid"),
+    (r"\bpesta petualang\b", "party petualang"),
+    (r"\banggota pesta\b", "anggota party"),
+    (r"\bpemimpin pesta\b", "party leader"),
+    (r"\bketua pesta\b", "party leader"),
+    (r"\bmembubarkan pesta\b", "membubarkan party"),
+    (r"\bpesta bubar\b", "party bubar"),
+    (r"\bbergabung dengan pesta\b", "bergabung dengan party"),
+    (r"\bbergabung ke pesta\b", "bergabung ke party"),
+    (r"\bmencari pesta\b", "mencari party"),
+    (r"\bmembentuk pesta\b", "membentuk party"),
+    (r"\bkartu serikat\b", "kartu guild"),
+    (r"\banggota serikat\b", "anggota guild"),
+    (r"\bmisi serikat\b", "misi guild"),
+    (r"\bpapan serikat\b", "papan misi guild"),
+    (r"\bstaf serikat\b", "resepsionis guild"),
+    (r"\bpegawai serikat\b", "resepsionis guild"),
+    # Mekanik Pertarungan & Game Stats
+    (r"\bmenarik kebencian\b", "menarik aggro"),
+    (r"\bmengambil kebencian\b", "mengambil aggro"),
+    (r"\bkehilangan kebencian\b", "kehilangan aggro"),
+    (r"\btitik bertelur\b", "titik spawn"),
+    (r"\btitik kemunculan\b", "titik spawn"),
+    (r"\btitik bibit\b", "titik spawn"),
+    (r"\bwaktu pendinginan\b", "waktu cooldown"),
+    (r"\bmasa pendinginan\b", "waktu cooldown"),
+    (r"\btingkat drop\b", "drop rate"),
+    (r"\bbarang penurunan\b", "drop item"),
+    (r"\bbarang drop\b", "item drop"),
+    (r"\btetesan monster\b", "drop item monster"),
+    (r"\bbilah kesehatan\b", "bar HP"),
+    (r"\bpoin kesehatan\b", "HP"),
+    (r"\btitik hit\b", "HP"),
+    (r"\bbilah mana\b", "bar MP"),
+    (r"\bpoin mana\b", "MP"),
+    (r"\bbos serbuan\b", "raid boss"),
+    (r"\bbos penyerbuan\b", "raid boss"),
+    (r"\bjendela negara bagian\b", "jendela status"),
+    (r"\bpohon keterampilan\b", "skill tree"),
+    (r"\bpoin keterampilan\b", "skill point"),
+    (r"\bpemburu peringkat ([SABCDE])\b", r"hunter rank \1"),
+    (r"\bpemburu peringkat-([SABCDE])\b", r"hunter rank-\1"),
+    (r"\bpemburu kelas ([SABCDE])\b", r"hunter kelas \1"),
+    (r"\bpemain tunggal\b", "pemain solo"),
+    (r"\bpemburu tunggal\b", "hunter solo"),
+    (r"\bpembunuh pemain\b", "player killer"),
+    (r"\bpermainan kematian\b", "death game"),
+    (r"\bpenggemar status\b", "buff status"),
+    (r"\bdiberi penggemar\b", "diberi buff"),
+    (r"\bmendapat penggemar\b", "mendapat buff"),
+    # Calque Harfiah Terjemahan Mesin (Anti-Terjemahan Kaku)
+    (r"\bapakah kamu nyata\b", "beneran nih"),
+    (r"\bkamu nyata\b", "kamu serius"),
+    (r"\btidak ada cara di neraka\b", "mana mungkin"),
+    (r"\btak ada cara di neraka\b", "mana mungkin"),
+    (r"\bpotong omong kosong\b", "hentikan omong kosongmu"),
+    (r"\bpotong kotoran itu\b", "jangan banyak omong"),
+    (r"\bkamu daging mati\b", "mampus kau"),
+    (r"\bdaging mati\b", "habis riwayatmu"),
+    (r"\bketakutan keluar\b", "panik banget"),
+    (r"\bkacau denganku\b", "mengerjaiku"),
+    (r"\bkacau dengan aku\b", "mengerjaiku"),
+    (r"\bdiberi makan dengan\b", "muak dengan"),
+    (r"\bsudah diberi makan dengan\b", "sudah muak dengan"),
+    (r"\bpergi mudah padaku\b", "jangan kejam-kejam ya"),
+    (r"\bpergi mudah pada saya\b", "jangan kejam-kejam ya"),
+    (r"\bapa di bumi\b", "sebenarnya apa"),
+    (r"\bbuat dirimu di rumah\b", "anggap saja rumah sendiri"),
+    (r"\bmerasa seperti di rumah\b", "anggap rumah sendiri"),
+    (r"\bgigit aku\b", "persetan"),
+    (r"\bjatuhkan itu\b", "sudahlah, lupakan saja"),
+    (r"\batasi itu\b", "ikhlaskan saja"),
+    (r"\bmelenturkan otot\b", "pamer kekuatan"),
+    (r"\bberhenti melenturkan\b", "jangan pamer"),
+    (r"\bkeluar dalam kemarahan\b", "keluar sambil ngamuk"),
+    (r"\bkeluar karena marah\b", "cabut gara-gara emosi"),
+    (r"\bhadiah yang jelas\b", "hadiah penyelesaian misi"),
+    (r"\bkelas yang hebat\b", "kelas epik"),
+    (r"\bpekerjaan yang luar biasa\b", "pekerjaan kelas epik"),
 ]
 
 # Aturan khusus adegan kasual/santai (tidak diterapkan jika konteks formal/kerajaan).
@@ -1252,8 +1382,6 @@ _CASUAL_FANSUB_RULES = [
     (r"\bdengarkan aku\b", "dengerin aku"),
     (r"\bdengarkan\b", "dengerin"),
     (r"\bsangat banyak\b", "banget"),
-    (r"\bapa yang kamu bicarakan\b", "ngomong apa sih kamu"),
-    (r"\bapa yang kau bicarakan\b", "ngomong apa sih kamu"),
     (r"\bbodoh sekali\b", "bodoh banget"),
     (r"\bbagus sekali\b", "hebat banget"),
     (r"\bdi sini untuk mengambil\b", "mau mengambil"),
@@ -1285,6 +1413,25 @@ _CASUAL_FANSUB_RULES = [
     (r"\bmudah sekali\b", "gampang banget"),
     (r"\bapa-apaan ini\b", "ada apa-apaan nih"),
     (r"\bsedikit pun\b", "dikit pun"),
+    # Diksi Percakapan & Slang Santai Tambahan
+    (r"\bbercanda kan\b", "bercanda ya"),
+    (r"\bjangan macam-macam\b", "jangan macam-macam deh"),
+    (r"\bada apa sebenarnya\b", "ada apa sih sebenarnya"),
+    (r"\bkan sudah kubilang\b", "kan udah kubilang"),
+    (r"\bsudah kubilang\b", "kan udah kubilang"),
+    (r"\btidak mungkin kan\b", "nggak mungkin kan"),
+    (r"\btak mungkin kan\b", "nggak mungkin kan"),
+    (r"\bapa yang salah denganmu\b", "kamu kenapa sih"),
+    (r"\bapa yang salah denganku\b", "aku kenapa sih"),
+    (r"\bapa yang salah\b", "ada apa sih"),
+    (r"\bbukan urusanku\b", "bukan urusanku kok"),
+    (r"\baku tidak peduli\b", "aku nggak peduli"),
+    (r"\btak peduli\b", "nggak peduli"),
+    (r"\bsampai jumpa nanti\b", "sampai ketemu lagi"),
+    (r"\btenanglah sedikit\b", "santai dikit dong"),
+    (r"\btenang sedikit\b", "santai dikit dong"),
+    (r"\bapa maumu\b", "mau apa sih kamu"),
+    (r"\bapa yang kamu inginkan\b", "kamu mau apa sih"),
 ]
 
 _AIGTX_SMOOTH_RULES = [
@@ -1328,7 +1475,9 @@ def _sanitize_fansub_id(text: str) -> str:
         expanded = m.expand(repl) if "\\" in repl else repl
         orig = m.group(0)
         if orig and orig.islower():
-            return expanded.lower()
+            words = expanded.split(" ")
+            lowered = [w if (w.isupper() and len(w) >= 2) else w.lower() for w in words]
+            return " ".join(lowered)
         if orig and orig[0].isupper():
             return expanded[0].upper() + expanded[1:]
         return expanded
@@ -1361,7 +1510,9 @@ def _sanitize_gtxplus_id(text: str) -> str:
         expanded = m.expand(repl) if "\\" in repl else repl
         orig = m.group(0)
         if orig and orig.islower():
-            return expanded.lower()
+            words = expanded.split(" ")
+            lowered = [w if (w.isupper() and len(w) >= 2) else w.lower() for w in words]
+            return " ".join(lowered)
         if orig and orig[0].isupper():
             return expanded[0].upper() + expanded[1:]
         return expanded

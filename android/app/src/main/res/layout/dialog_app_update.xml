@@ -33,9 +33,9 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Pembaruan Tatap Tersedia"
-                android:textColor="#F1F5F9"
-                android:textSize="15.5sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_primary"
+                android:textSize="@dimen/text_title_large"
+                android:fontFamily="sans-serif-medium" />
 
             <TextView
                 android:id="@+id/tv_update_version_badge"
@@ -43,9 +43,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:text="v2.9.1 ➔ v2.9.2"
-                android:textColor="#38BDF8"
-                android:textSize="12sp"
-                android:textStyle="bold" />
+                android:textColor="@color/text_accent"
+                android:textSize="@dimen/text_body_medium"
+                android:fontFamily="sans-serif-medium" />
         </LinearLayout>
 
         <ImageButton
@@ -69,9 +69,9 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="CATATAN RILIS"
-        android:textColor="#94A3B8"
-        android:textSize="10.5sp"
-        android:textStyle="bold"
+        android:textColor="@color/text_muted"
+        android:textSize="@dimen/text_badge"
+        android:fontFamily="sans-serif-medium"
         android:letterSpacing="0.08"
         android:layout_marginBottom="6dp" />
 
@@ -90,8 +90,9 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Memuat catatan rilis..."
-            android:textColor="#CBD5E1"
-            android:textSize="12sp"
+            android:textColor="@color/text_secondary"
+            android:textSize="@dimen/text_body_medium"
+            android:fontFamily="sans-serif"
             android:lineSpacingExtra="3dp" />
     </androidx.core.widget.NestedScrollView>
 
@@ -108,8 +109,9 @@
             android:layout_width="wrap_content"
             android:layout_height="40dp"
             android:text="Nanti"
-            android:textColor="#94A3B8"
-            android:textSize="12.5sp"
+            android:textColor="@color/text_muted"
+            android:textSize="@dimen/text_subhead"
+            android:fontFamily="sans-serif-medium"
             android:textAllCaps="false"
             android:backgroundTint="#161C28"
             app:strokeColor="#2A3347"
@@ -125,8 +127,8 @@
             android:layout_marginStart="10dp"
             android:text="Perbarui Sekarang"
             android:textColor="#080C14"
-            android:textSize="12.5sp"
-            android:textStyle="bold"
+            android:textSize="@dimen/text_subhead"
+            android:fontFamily="sans-serif-medium"
             android:textAllCaps="false"
             android:backgroundTint="#38BDF8"
             app:cornerRadius="8dp"
@@ -142,8 +144,9 @@
         android:layout_gravity="center_horizontal"
         android:layout_marginTop="10dp"
         android:text="Atau buka tautan rilis di browser"
-        android:textColor="#64748B"
-        android:textSize="11sp"
+        android:textColor="@color/text_dim"
+        android:textSize="@dimen/text_caption"
+        android:fontFamily="sans-serif"
         android:padding="4dp"
         android:background="?attr/selectableItemBackground"
         android:focusable="true" />

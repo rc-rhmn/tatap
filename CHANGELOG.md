@@ -13,73 +13,264 @@ Format versi menggunakan skema `MAJOR.MINOR.PATCH`:
 - **MINOR (x.Y.0):** Penambahan fitur atau kapabilitas baru yang tetap kompatibel ke belakang (*backward-compatible new features*). Digit PATCH direset ke 0.
 - **PATCH (x.y.Z):** Perbaikan bug, peningkatan stabilitas, atau perbaikan internal tanpa penambahan fitur baru (*backward-compatible bug fixes*).
 
-## [2.10.3] - 2026-10-21
+## [2.12.2] - 2026-10-24
 
-### Sinkronisasi Upstream v2.10.2 (Personal Fork)
-Rilis personal ini menyinkronkan fork `rc-rhmn/tatap` dengan upstream `asfaraguest/tatap` hingga v2.10.2 (v2.9.4 → v2.10.0 → v2.10.1 → v2.10.2, 22 commit). Identitas personal dipertahankan: nama aplikasi **Tatapan / Tatapan TV**, appId `id.tatap.personal` (+ `.tv`), tuning Gradle RAM rendah, dan pemeriksaan pembaruan yang mengarah ke repo fork (backend 3-tier: GitHub API, halaman web, raw VERSION; serta `AppUpdateManager`).
-1. **Layout Desktop & Homescreen Katalog (v2.10.0):** container desktop terpusat dengan ergonomi fluid, katalog anime sebagai tampilan awal saat startup, dan thumbnail 16:9 pada strip "Lanjutkan Menonton".
-2. **Watch History Lebih Tahan Banting (v2.10.0):** poster anime tidak lagi terhapus dari riwayat (auto-backfill + fallback placeholder anti-kotak-hitam), isolasi riwayat ke view tersendiri tanpa duplikasi judul.
-3. **Typografi & Player Android (v2.10.0):** harmonisasi skala tipografi semantik, eliminasi faux-bold, dan redesain kapsul buffering ExoPlayer.
-4. **Keamanan & Resiliensi (v2.10.1):** mitigasi SSRF pada proxy internal, perbaikan kebocoran file descriptor socket TLS desync, pembersihan connection pool saat shutdown, backoff AniList, dan penguatan sanitasi XSS frontend.
-5. **Navigasi Android TV 10-Foot UI (v2.10.2):** focus history stack tanpa *orphan focus*, navigasi grid spasial geometris (tidak lagi wrap-around ke baris atas), state machine HUD player, hierarki tombol Back 6 tingkat, dan pencegahan *virtual keyboard thrashing*.
-6. **Performa Android TV (v2.9.4):** penghapusan lag/GC thrashing di `server_launcher.py`, zero-animation pada grid, tuning cache RecyclerView, dan penyempurnaan D-Pad player.
+### Fork Personal — Sinkronisasi Upstream v2.12.1
+Kenaikan PATCH khusus fork **Tatapan** (`id.tatap.personal`) untuk menyelaraskan 46 commit upstream sejak v2.10.2 tanpa fitur personal baru.
 
-## [2.10.2] - 2026-10-21
+### Upstream yang Diadopsi
+1. **Player & Subtitle:** AnimeTosho + OpenSubtitles Smart Merge, unified Indonesian subtitle engine, penghapusan opsi bilingual/raw, perbaikan tombol CC ExoPlayer, PiP lifecycle di Android Mobile.
+2. **UI Apple-style:** redesign top pill controls ke bottom bar ExoPlayer native, TV D-Pad/focus stack, soal sidebar rail.
+3. **Metadata & Stream:** season/release year pada kartu anime, Jaccard similarity anti-false-match, provider HLS `anichan` dengan failover per judul.
+4. **Android:** safe mode toggle (mobile + TV), persist dub mode di riwayat tonton.
 
-### Justifikasi SemVer 2.0.0 (PATCH: 2.10.1 -> 2.10.2)
-Kenaikan digit PATCH diterapkan sesuai kaidah Semantic Versioning 2.0.0 karena memuat perbaikan bug navigasi (*navigation bug fixes*), perbaikan kompatibilitas platform Android TV dan 10-Foot UI, eliminasi *orphan focus*, pencegahan *virtual keyboard popup thrashing*, serta implementasi hierarki tombol Back berjenjang tanpa mengubah kontrak antarmuka eksternal (*backward-compatible platform ergonomics & bug fix patch*):
-1. **Zero Orphan Focus & Focus History Stack (`frontend/js/app.js`):**
-   - Mengimplementasikan `TvNavigationManager` yang mencatat `activeZone` (`tabs`, `search`, `chips`, `grid`, `detail-modal`, `player-hud`, `settings-modal`) dan `focusHistoryStack`.
-   - Menambahkan mekanisme preservasi fokus sebelum dan sesudah re-render DOM (`innerHTML = ''`), menyimpan indeks elemen fokus dan memulihkannya secara otomatis setelah render selesai, sehingga fokus tidak pernah terlempar ke `document.body`.
-   - Mengelola tumpukan riwayat fokus saat membuka Detail Anime, dialog Resume Watch, atau masuk ke Video Player, serta memulihkan fokus dan posisi scroll persis ke kartu atau episode pemicu saat pengguna menekan Back.
-2. **Geometric & Dynamic Grid Spatial Navigation (`frontend/js/app.js`, `frontend/js/term.js`):**
-   - Menghilangkan modulo statis `(idx + cols) % total` yang memicu wrap-around ke baris teratas saat pengguna menekan D-Pad Bawah di baris terbawah.
-   - Mengimplementasikan kalkulasi geometris spasial 2D via `getBoundingClientRect()` dan dynamic row grouping.
-   - Mengatasi edge-case baris terakhir tidak penuh: jika baris terakhir memiliki jumlah item lebih sedikit, target fokus otomatis dikunci ke item terakhir di baris bawah tersebut (`Math.min(targetIndex, items.length - 1)`).
-   - Menambahkan pemanggilan seragam `targetEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })` pada setiap perpindahan fokus remote TV.
-3. **Player HUD State Machine & Auto-Hide Fix (`frontend/js/app.js`, `frontend/css/style.css`):**
-   - Memisahkan state fokus pemutaran video menjadi 3 mode tegas:
-     a) `PLAYER_IDLE`: HUD tersembunyi. D-Pad Kiri/Kanan langsung melakukan seek 5 detik tanpa terhalang kontrol tersembunyi; OK melakukan Play/Pause (atau eksekusi AniSkip jika aktif); Up memunculkan HUD kontrol atas; Down memfokuskan AniSkip atau bar bawah.
-     b) `PLAYER_HUD_ACTIVE`: HUD tampil dengan timer auto-hide 4000ms (4 detik) yang di-reset pada setiap interaksi D-Pad. Saat timer habis dan `hidePlayerControls()` berjalan, kelas `.tv-focus` dan `blur()` dibersihkan dari seluruh tombol HUD sebelum kembali ke mode `PLAYER_IDLE`.
-     c) `PLAYER_MODAL_ACTIVE`: Saat dialog pengaturan (Subtitle/Resolusi/Kecepatan/Resume) terbuka, timer auto-hide dihentikan sementara (*suspended*) dan navigasi dikunci (*focus trap*) di dalam dialog sampai ditutup.
-4. **Two-Stage Search Input Focus vs Virtual Keyboard (IME) (`frontend/js/app.js`, `frontend/index.html`, `MainActivity.java`):**
-   - Pada mode TV di antarmuka web, kolom pencarian `#cmd` berstatus `readonly` saat navigasi visual D-Pad (Stage 1), mencegah Virtual Keyboard (IME) muncul menutupi layar hanya karena dilewati cursor D-Pad.
-   - Mode ketik aktif (Stage 2) hanya dibuka ketika pengguna menekan tombol OK/Enter pada kolom pencarian.
-   - Di Android TV native (`MainActivity.java`), `layoutSearchBox` menerima fokus visual D-Pad terlebih dahulu, dan `etSearch` tidak memanggil `showKeyboard(SHOW_FORCED)` secara agresif. Tombol Back dan D-Pad Bawah menutup keyboard via `hideSoftInputFromWindow` dan mengembalikan fokus navigasi.
-5. **6-Level Back Button Hierarchy & Indikator Visual .tv-focus (`frontend/css/style.css`, `MainActivity.java`):**
-   - Memastikan seluruh elemen interaktif memiliki `tabindex="0"`.
-   - Memperkuat styling visual `.tv-focus` dengan `outline: 3px solid var(--accent)`, `transform: scale(1.06)`, `z-index: 20`, dan `scroll-margin: 72px` agar tidak terpotong header sticky maupun batas overscan TV.
-   - Menata alur penanganan tombol Back (`Escape` / `KEYCODE_BACK`) berjenjang 6-level:
-     (1) Tutup IME / keluar search edit $\to$ (2) Tutup modal dialog aktif $\to$ (3) Sembunyikan Player HUD $\to$ (4) Keluar Player ke Detail Episode $\to$ (5) Tutup Detail ke Grid Beranda $\to$ (6) Konfirmasi double-back (Toast 2000ms) untuk keluar aplikasi di layar utama.
-6. **Unit Test Suite Otomatis Navigasi TV (`tests/test_tv_dpad_navigation.py`):**
-   - Menambahkan 5 unit test komprehensif yang menguji ke-5 spesifikasi di atas.
-   - Seluruh 248 test suite unit tests Tatap lulus 100%.
+### Fitur Personal yang Dipertahankan
+1. Rebrand **Tatapan** / **Tatapan TV** dan appId `id.tatap.personal` (+ `.tv`) sehingga tetap koeksis dengan app official.
+2. Update checker mengarah ke `rc-rhmn/tatap` (backend `check_update` 3 tier + `AppUpdateManager.java`).
+3. Tuning `android/gradle.properties` untuk VPS 2GB RAM.
 
-## [2.10.1] - 2026-10-21
+## [2.12.1] - 2026-10-24
 
-### Justifikasi SemVer 2.0.0 (PATCH: 2.10.0 -> 2.10.1)
-Kenaikan digit PATCH diterapkan sesuai kaidah Semantic Versioning 2.0.0 karena memuat perbaikan bug keamanan kritis (*security vulnerability fix*), pencegahan kebocoran resource (*resource leak fix*), serta peningkatan stabilitas internal tanpa memodifikasi kontrak antarmuka eksternal (*backward-compatible security & reliability patch*):
-1. **Mitigasi Celah Kritis SSRF (Server-Side Request Forgery) & Intranet Scanning (`backend/main.py`):**
-   - Mengatasi kerentanan di mana endpoint proxy `/api/player/video`, `/api/player/sub`, dan `/api/player/sub_custom` memiliki konfigurasi CORS `Access-Control-Allow-Origin: *` dan sebelumnya hanya memverifikasi awalan skema `http`.
-   - Mengimplementasikan fungsi validasi terpusat `_validate_external_proxy_url(url)` yang menolak seluruh skema non-HTTP/HTTPS serta memblokir akses ke alamat IP privat RFC 1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), alamat loopback (`127.0.0.0/8`, `localhost`, `0.0.0.0`, `::1`), link-local/cloud metadata (`169.254.0.0/16`, `169.254.169.254`), multicast, dan domain intranet (`.local`, `.internal`) dengan status `HTTP 403 Forbidden`.
-   - Mencegah skrip jahat pada halaman web eksternal di peramban pengguna menyalahgunakan backend lokal Tatap (`127.0.0.1:8767`) untuk memindai jaringan lokal pengguna atau membaca layanan internal.
-2. **Eliminasi Kebocoran File Descriptor Socket pada TLS Desync Streaming (`backend/api/desync.py`):**
-   - Menyelidiki akar masalah terputusnya streaming video saat pengguna melakukan *seek*, *pause*, atau perpindahan episode: FastAPI `StreamingResponse` menginterupsi generator `tls_desync_stream` via `GeneratorExit`.
-   - Menata ulang generator `tls_desync_stream` dan fungsi transmisi `tls_desync_request` ke dalam blok `try...finally:`, menjamin pemanggilan `raw_sock.close()` selalu dieksekusi dalam kondisi apa pun sehingga mencegah akumulasi socket descriptor tak tertutup (`OSError: [Errno 24] Too many open files`).
-   - Menerapkan batasan kapasitas maksimum memori (*bounded cache* 256 entri) pada tabel in-memory `_DNS_CACHE`.
-3. **Graceful Connection Pool Cleanup pada FastAPI Lifespan (`backend/main.py`):**
-   - Menambahkan prosedur pembersihan koneksi jaringan asinkron saat server menerima sinyal *shutdown* pada handler `lifespan(app)`.
-   - Menutup connection pool `_direct_client` via `await _direct_client.aclose()`, serta memanggil pembersihan persistent client pada `api.anilist.close_al_client()`, `api.hianime.close_shared_client()`, dan `api.otakudesu.close_otaku_client()`.
-4. **Resiliensi Rate Limiting AniList & Optimasi Traversal Prekuel (`backend/api/anilist.py`):**
-   - Mengimplementasikan pelacak *backoff cooldown* in-memory `_al_rate_limit_until`: jika upstream AniList merespons `HTTP 429 Too Many Requests`, sistem secara cerdas membaca header `Retry-After` (default 60 detik) dan menahan request berikutnya agar tidak memperpanjang penalti ban IP pengguna, melainkan langsung mengalirkan *fallback* katalog HiAnime / data lokal.
-   - Mengoptimalkan penelusuran rantai prekuel pada `anime_relations()` dari 5 langkah menjadi 3 langkah maksimal, menghemat konsumsi kuota AniList secara drastis saat membuka modal detail anime berseri panjang.
-5. **Perbaikan Resolusi URL Relatif Master M3U8 (`backend/api/hianime.py`):**
-   - Memperbaiki metode pembacaan variant stream pada `_probe_master` agar menggunakan RFC-compliant `urllib.parse.urljoin(master_url, v_url)` alih-alih penggabungan string mentah `base + v_url`, mencegah terbentuknya URL cacat dengan double slash (`//`) pada CDN upstream bertingkat.
-6. **Penguatan Defense-in-Depth Sanitasi XSS Frontend (`frontend/js/app.js`, `frontend/js/term.js`):**
-   - Memperluas utilitas pembersih string `esc()` di antarmuka web desktop dan antarmuka TUI agar turut meng-escape karakter tanda kutip tunggal (`'` $\to$ `&#39;`), menutup celah penyisipan HTML injection pada atribut berelemen kutip tunggal.
-7. **Suite Pengujian Keamanan & Resiliensi Otomatis (`tests/test_security_and_resilience.py`):**
-   - Menambahkan 6 unit test baru yang memverifikasi penolakan SSRF, kelulusan URL publik sah, penutupan socket saat interupsi generator, serta pelacakan backoff AniList 429.
-   - Seluruh 243 unit test lulus 100%.
+### Justifikasi SemVer 2.0.0 (PATCH: 2.12.0 -> 2.12.1)
+Kenaikan digit PATCH diterapkan sesuai kaidah Semantic Versioning 2.0.0 dan Direktif #3 [`AGENTS.md`](AGENTS.md) karena rilis ini berfokus pada penyempurnaan visual & estetika antarmuka (**UI/UX Visual Polish**) pemutar video, penambahan integrasi sumber subtitle eksternal **OpenSubtitles Smart Merge**, serta perbaikan siklus hidup Picture-in-Picture (PiP) pada Android Mobile tanpa modifikasi skema database SQLite ataupun perubahan mendasar pada kontrak runtime eksternal.
+
+### Added
+1. **Integrasi Provider AnimeTosho & Penyaringan Ketat Subtitle Bahasa Indonesia (`backend/api/animetosho.py`, `backend/main.py`):**
+   - **Attachment Subtitle Anime Spesifik (AnimeTosho):** Mengambil attachment subtitle anime resmi (Crunchyroll, Netflix, Bstation, Muse) dan fansub (Judas, SubsPlease, Erai-raws, DKB) melalui AnimeTosho API (`feed.animetosho.net`) dengan dekompresi instan format XZ (`lzma.decompress`).
+   - **Penyaringan Ketat Subtitle Bahasa Indonesia (Indonesian-Only):** Memastikan pencarian subtitle di AnimeTosho dan OpenSubtitles menyaring secara ketat hanya rilisan yang pasti berbahasa Indonesia (`[ind, ASS]`, `[ind, SRT]`, `ind`, `indonesian`), meniadakan kebocoran track bahasa lain.
+2. **Unifikasi Engine Subtitle Indonesia (Smart Fansub & Merge) & Pembersihan Opsi Mentah / Bilingual:**
+   - **Single Unified Smart Subtitle Pipeline:** Menyatukan seluruh pipeline subtitle Indonesia ke dalam satu mesin utama: **Smart Fansub & Merge** yang secara otomatis mengombinasikan pencarian AnimeTosho (prioritas utama) → OpenSubtitles → Subtitle Bawaan Anime + Smart GTX+, serta memproses seluruh cue melalui **Smart Lexicon (`apply_universal_lexicon_id`)**, **Smart Scene Detector (`automate_opensubtitles_pronouns`)**, dan **Smart Merge (`merge_opensubtitles_with_builtin`)**.
+   - **Eliminasi Opsi Mentah Non-Bawaan (Raw Translation Removal):** Menghapus opsi terjemahan mentah seperti *Google GTX Murni* yang kaku dari antarmuka pemutar video. Opsi mentah (*raw*) kini hanya diizinkan untuk track audio/subtitle bawaan asli dari server anime (`[ID] Asli/Resmi`, `[EN] English Original`).
+   - **Eliminasi Opsi Dwibahasa (Bilingual Dual-Track Removal):** Menghapus opsi dwibahasa (`gtx+_dual`, `os_dual`) yang menumpuk baris teks secara bising di layar, menyajikan subtitle Indonesia satu baris yang bersih, elegan, dan berfokus penuh pada kenyamanan menonton.
+   - **Pencarian Manual Subtitle Terintegrasi:** Memperbarui menu pencarian eksternal menjadi `[+] Cari Subtitle Bahasa Indonesia (AnimeTosho & OpenSubtitles)...` pada pemutar Web, Desktop, Android Mobile, dan Android TV.
+3. **Integrasi OpenSubtitles Multi-Tier & Smart Merge Engine (`backend/api/opensubtitles.py`, `backend/api/translate.py`, `backend/main.py`, `frontend/`, `PlayerActivity.java`):**
+   - **Arsitektur Multi-Tier OpenSubtitles:** Mengambil rilis subtitle komunitas dari OpenSubtitles melalui 3 tingkat terintegrasi: Stremio v3 Public API (`opensubtitles-v3.strem.io`), Legacy REST API (`rest.opensubtitles.org` melalui bypass TLS Desync DoH), dan fallback scraper web HTML.
+   - **Bypass Proteksi Jaringan & De-chunking (`backend/api/desync.py`):** Mendukung parsing respons `Transfer-Encoding: chunked` serta dekompresi otomatis `gzip`/`deflate` pada koneksi HTTP raw socket desync.
+   - **Pembersih Iklan & Watermark Komunitas (`strip_opensubtitles_ads`):** Menghapus secara otomatis baris promosi/iklan, URL situs, donasi crypto/VIP, nama ripper/encoder, dan watermark OpenSubtitles tanpa merusak konten dialog anime.
+   - **Pembersihan Tag ASS/HTML & Kamus Istilah Anime Universal (`apply_universal_lexicon_id`):** Menghapus secara otomatis sisa tag format fansub (`{\an8}`, `{\pos}`, `\N`, `\h`, `<i>`, `&amp;`) serta menerapkan kamus istilah anime universal (seperti *"penjara bawah tanah"* → *"dungeon"*, *"serikat petualang"* → *"guild petualang"*, *"energi spiritual"* → *"Qi Spiritual"*, dsb.).
+   - **Pengayaan Kamus Istilah Anime Overgeared (Episode 1–4 Lengkap):** Mengakomodasi terminologi khusus dunia VRMMO *Satisfy* dan *Legendary Blacksmith* (seperti *Pagma's Successor* → *Keturunan Pagma*, *Blue Orichalcum* → *Orichalcum Biru*, *Kitab Langka Pagma*, *Guild Tzedakah*, *Earl Steim*, *Earl Ashur*, *Desa Bairan*, *Desa Winston*, *Paus Drevigo*, dsb.).
+   - **Proteksi & Restorasi Nama Game Anime dari Terjemahan Mentah (Anti-Literal Translation):** Melindungi dan memulihkan nama resmi game anime yang kerap diterjemahkan secara konyol/mentah oleh penerjemah mesin atau amatir:
+     - Memulihkan nama game VRMMO *Satisfy* (Overgeared) dari segala bentuk blunder terjemahan mesin: memulihkan *"Puaskan, game..."* / *"Memuaskan, game..."* / *"Puas, game..."* kembali menjadi **`Satisfy, game...`**, *"Berita Memuaskan!"* / *"Berita yang Memuaskan!"* menjadi **`Berita Satisfy!`**, *"Puaskan!"* / *"Memuaskan!"* menjadi **`Satisfy!`**, *"Tidak Memuaskan!"* / *"Bukan Memuaskan!"* menjadi **`Bukan Satisfy!`**, *"Mengakses Puas"* menjadi **`Mengakses Satisfy`**, serta *"Puaskan pengguna/pemain..."* menjadi **`Satisfy pengguna/pemain...`**.
+     - Memulihkan nama resmi game anime lainnya: *"seni pedang daring"* menjadi **`Sword Art Online`**, *"badai senjata daring"* menjadi **`Gun Gale Online`**, *"perbatasan shangri-la"* menjadi **`Shangri-La Frontier`**, *"ledakan otak"* menjadi **`Brain Burst`**, *"dunia baru daring"* menjadi **`NewWorld Online`**, *"kisah tua"* menjadi **`Elder Tale`**, *"penyelaman penuh"* menjadi **`Full Dive`**, dsb.
+     - Menerapkan sanitasi leksikon *on-the-fly* pada pembacaan cache subtitle (`_get_validated_subtitle_cache`) sehingga perbaikan kamus langsung aktif secara instan pada subtitle yang sebelumnya sempat tersimpan di cache tanpa perlu pembersihan manual.
+   - **Otomasi Pemilihan Kata Ganti `saya` vs `aku` (`automate_opensubtitles_pronouns`):** Menerapkan deteksi konteks adegan cerdas berbasis *Sliding-Window Scene Context* ($\pm 2$ cue). Pada monolog batin `(...)`, amarah/kutukan pertarungan (*sial, brengsek, bajingan, mampus*), dan obrolan gaming santai, kata *"saya"* kaku otomatis diselaraskan menjadi **`aku`** (atau proklitik/enklitik `ku-` / `-ku`) dan *"Anda"* menjadi **`kamu` / `kau`**. Sementara pada adegan formal, menghadap raja/bangsawan/paus, atau siaran langsung wawancara resmi, kesantunan register baku **`saya` / `Anda`** tetap dipertahankan 100% utuh.
+   - **Penyelarasan Waktu Otomatis & Smart Merge (`estimate_optimal_offset` & `merge_opensubtitles_with_builtin`):** Menghitung selisih waktu ($\Delta t$) antara dialog OpenSubtitles dan subtitle bawaan stream anime secara otomatis via histogram cross-correlation onset. Melakukan sinkronisasi timestamp serta mengisi celah (*gap filling*) teks papan nama (*Signs*), lagu pembuka/penutup (*OP/ED*), dan cuplikan episode berikutnya (*Preview*) dari subtitle bawaan anime (+GTX+ terjemahan Indonesia).
+   - **Mode Gabungan Hibrida & Bilingual:** Menyediakan opsi `os_merge` (Hybrid: dialog OpenSubtitles + Sign/OP/ED bawaan) dan `os_dual` (Bilingual: dialog OpenSubtitles + teks asli bahasa Inggris/Jepang bawaan).
+   - **Antarmuka Pencarian & Pemilihan Subtitle di Seluruh Platform:** Menambahkan modal pencarian OpenSubtitles interaktif yang terisolasi di dalam kontainer panggung video Web/Desktop (`openOpenSubtitlesPicker`) dan dialog native Android (`showOpenSubtitlesSearchDialog` pada `PlayerActivity.java`).
+
+### Changed
+1. **Penyempurnaan Siklus Hidup & Proteksi PiP Android Mobile (`PlayerActivity.java`):**
+   - **Perbaikan Audio/Video Tetap Berjalan Saat Jendela PiP Ditutup:** Menghilangkan early-return `if (isInPictureInPictureMode()) return;` pada `onStop()` yang sebelumnya menyebabkan pemutar ExoPlayer terus bersuara di latar belakang ketika jendela PiP ditutup melalui tombol `✕` atau swipe-to-dismiss.
+   - **Deteksi Restored vs Dismissed:** Memasang verifikasi status siklus hidup `isRestored = !isFinishing() && getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)` pada callback `onPictureInPictureModeChanged(false, ...)`. Jika pengguna menutup/membuang jendela PiP, pemutaran langsung dijeda (`player.pause()`), progres tontonan dicatat (`recordWatchProgress(true)`), dan activity diselesaikan secara bersih (`finish()`).
+2. **Penyempurnaan Estetika Sinematik Video Player Web & Desktop (`frontend/css/style.css`):**
+   - **Floating Cinema Header & Footer Bar (`.player-head`, `.player-foot`):** Menyempurnakan bilah kontrol atas dan bawah player menjadi *dark cinema bar* berlapis gradien halus (`linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))`), *specular top highlight* (`inset 0 1px 0 rgba(255,255,255,0.09)`), serta badge kapsul cyan pada indikator meta episode (`.player-title .dim`).
+   - **Panggung Video & Bingkai Ambient (`.ambient-stage`):** Menambahkan bingkai sinematik tipis (`1px solid rgba(255,255,255,0.08)`), sudut membulat `10px`, dan bayangan kedalaman saat mode windowed (otomatis direset menjadi `0px` pada mode `:fullscreen`).
+   - **Segmented Concentric Subtitle Picker (`.sub-picker`, `.sub-size`, `.sub-delay-ctrl`, `.sub-translate`):** Merapikan pemilih subtitle, ukuran font (`S` / `M` / `L`), pengatur sinkronisasi waktu (`-` / `0.0s` / `+`), dan toggle terjemahan `ID` menjadi segmen kapsul konsentris yang bersih dan ergonomis.
+   - **OSD Gesture, Double-Tap Seek Arc & Loading Spinner (`.gesture-osd`, `.gesture-ripple`, `.spinner`):** Memperindah indikator OSD volume/kecerahan dengan progress bar berpendar cyan (`#38bdf8`), memperhalus lengkungan radial *double-tap seek* `-10s`/`+10s`, serta membungkus teks status pemuatan stream (`#pm-status`) dalam kapsul monospasi modern tanpa *backdrop-filter blur tax* demi menjaga performa perangkat low-end.
+2. **Penyempurnaan Estetika ExoPlayer, Unifikasi Top Pill ke Kontrol Bawaan & Navigasi D-Pad Android TV (`activity_player.xml`, `PlayerActivity.java`, `TvFocusHelper.java`, `drawable/`):**
+   - **Unifikasi Seluruh Fungsi Top Pill ke Tombol Bawaan ExoPlayer (`exo_subtitle`, `exo_vr`, `exo_settings`, `exo_fullscreen`):** Menyatukan fungsi dari 6 tombol pill atas (`PiP`, `Fit`, `HD`, `1.0x`, `Gaya Sub`, `Subtitle`) ke dalam kontrol bawaan ExoPlayer di bagian bawah layar (`exo_subtitle` untuk bahasa/mesin subtitle/offset/gaya di Android Mobile & Android TV, `exo_vr` berikon `ic_pip` untuk Picture-in-Picture instan khusus di Android Mobile, `exo_settings` untuk kualitas video, kecepatan putar, subtitle, gaya tampilan, offset waktu, rasio aspek, Picture-in-Picture, dan auto-skip OP/ED, serta `exo_fullscreen` untuk rotasi layar/rasio aspek). Header atas (`layout_top_bar`) kini tampil minimalis dan bersih hanya menampilkan tombol **Kembali (`←`)**, **Judul Anime & Episode**, serta **Baris Status Terpadu (`Sub • Kualitas • Kecepatan`)**.
+   - **Perbaikan Tombol CC (`exo_subtitle`) di Kedua Platform Android & Isolasi Fitur Fullscreen Sampai Notch di Android Mobile:** Memasang *State Enforcement Hook* (`enforceExoCustomButtons()`) pada `Player.Listener.onEvents` dan `onTracksChanged` agar Media3 tidak lagi mematikan (`setEnabled(false)`) tombol `exo_subtitle` ketika memakai sistem overlay subtitle kustom Tatap, sekaligus memberi indikator warna aktif cyan (`#38BDF8`). Khusus di **Android Mobile (`!TvFocusHelper.isTv(this)`)**, mengaktifkan rentang layar penuh sesungguhnya menembus area kamera depan/notch (*True Edge-to-Edge Cutout Mode*: `LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS` + `setDecorFitsSystemWindows(false)` + konsumsi `WindowInsets.CONSUMED`), memperbarui tombol `exo_fullscreen` saat sudah di Landscape untuk mengganti mode `Zoom (Penuh Sampai Notch)` / `Fill (Rentang Penuh Sampai Notch)` / `Fit (Skala Asli 16:9)` (serta *long-press* untuk kembali ke Portrait), dan menambahkan gestur **cubit 2 jari (*Pinch-to-Zoom*)** di Landscape Mobile.
+   - **Bottom Control Bar Scrim & Circular Focus Ring (`bg_player_bottom_scrim.xml`, `bg_exo_icon_btn.xml`, `bg_exo_play_center.xml`):** Mempercantik bilah kontrol bawah ExoPlayer (`exo_bottom_bar`) dengan gradien sinematik lembut (`#EC06080D` → `#9906080D` → `#00000000`), mengganti sorotan fokus kotak standar menjadi lingkaran/oval elegan berbingkai biru (`#0A84FF`) dengan latar `#1E2B45` pada seluruh tombol ikon ExoPlayer, serta menonjolkan tombol utama `Play/Pause` di tengah dengan aksen lingkaran halus.
+   - **Navigasi D-Pad 1-Baris Ergonomis di Android TV (`setupBottomBarFocusChain` & `navigateBottomBarHorizontal`):** Menghubungkan rantai fokus horizontal secara berurutan di seluruh tombol aktif bilah bawah ExoPlayer (`Prev` ↔ `Rewind` ↔ `Play/Pause` ↔ `Fast Forward` ↔ `Next` ↔ `Subtitle (CC)` ↔ `Settings (⚙)` ↔ `Aspect/Fullscreen (⛶)`) dan tombol `Skip Intro/Outro`, sehingga seluruh kontrol pemutar dapat dijangkau dengan mudah menggunakan D-Pad Kiri/Kanan/Atas/Bawah dari jarak 3 meter.
+   - **Top Overlay Gradient Scrim (`bg_player_top_scrim.xml`):** Mengganti latar blok hitam datar `#99000000` pada `layout_top_bar` dengan gradien vertikal lembut (`#E606080D` → `#8C06080D` → `#00000000`).
+   - **Kustomisasi Timeline Scrubber ExoPlayer (`DefaultTimeBar`) & Tipografi Waktu:** Menyelaraskan warna timeline `exo_progress` secara programatis di `PlayerActivity.java` dengan warna aksen khas Tatap (`playedColor = #38BDF8`, `scrubberColor = #38BDF8`, `bufferedColor = #6638BDF8`, `unplayedColor = #33FFFFFF`) serta memperjelas angka waktu `exo_position` (`#F5F5F7`) dan `exo_duration` (`#A1A1A6`).
+   - **Kapsul HUD Gesture & Lengkungan Double-Tap Seek (`bg_player_hud_pill.xml`, `bg_ripple_seek_left.xml`, `bg_ripple_seek_right.xml`):** Memperbarui tampilan pill `hud_osd` dan `hud_hold_speed` (`2X Cepat` / `Rewind`) serta mengganti indikator *double-tap seek* `-5s`/`+5s` menjadi lengkungan semi-oval lembut beranimasi fade-in/out.
+   - **Harmonisasi Panel Bawah Mode Portrait Mobile (`layout_portrait_bottom`):** Menyeragamkan palet warna panel daftar episode portrait dengan permukaan **Apple Dark (`@color/bg_root`, `@color/bg_surface`, `@color/bg_surface_elevated`)** serta tombol aksi cepat berbentuk kapsul (`cornerRadius="16dp"`).
+
+### Tests
+- Menambahkan suite pengujian otomatis `tests/test_player_visual_polish.py` untuk memverifikasi keabsahan XML drawable baru, kustomisasi `DefaultTimeBar`, serta aturan estetika CSS & layout ExoPlayer.
+- Menambahkan suite pengujian otomatis `tests/test_opensubtitles_and_pip.py` untuk memvalidasi de-chunking/gzip DoH TLS desync, pembersihan metadata judul/musim OpenSubtitles, eliminasi watermark/iklan, algoritma scoring kandidat subtitle, estimasi offset optimal cross-correlation histogram, penggabungan smart merge (hybrid & bilingual), serta audit proteksi siklus hidup PiP Android.
+
+## [2.12.0] - 2026-10-23
+
+### Justifikasi SemVer 2.0.0 (MINOR: 2.11.6 -> 2.12.0)
+Kenaikan digit MINOR (dan reset digit PATCH ke `0`) diterapkan sesuai kaidah Semantic Versioning 2.0.0 serta Direktif #3 [`AGENTS.md`](AGENTS.md) karena rilis ini menghadirkan penambahan fitur dan pengayaan besar (*backward-compatible new features*) pada **Subtitle Engine Tatap (`GTX+`)** lintas seluruh platform (Web Desktop, Windows Portable, Linux AppImage, Android Mobile, dan Android TV), termasuk: dukungan format `.ass`/`.ssa` & pembersih tag ASS override, penggabungan cue simultan (*overlapping dialogue & sign cues*), mode **Dual-Subtitle Bilingual (`ID + EN`)**, kontrol **Sinkronisasi Waktu Subtitle (Offset `-` / `+` detik)**, **Sliding-Window Scene Context (±3 cues / ≤15s)**, **Stutter Preservation (`W-What?!` → `A-Apa?!`)**, serta pengayaan 250+ aturan slang/idiom Inggris, kultivasi/murim/donghua, honorifik Jepang, dan koreksi terjemahan harfiah (*calque fixes*) agar kualitas terjemahan `GTX+` ≥90% setara fansub manusia.
+
+### Added
+1. **Dukungan Format Subtitle `.ass` / `.ssa` & Pembersih Tag ASS Override (`backend/api/translate.py`, `frontend/js/app.js`, `PlayerActivity.java`):**
+   - Menambahkan fungsi `clean_ass_tags()` dan parser otomatis blok `[Events]` `Dialogue:` untuk membaca file subtitle kustom berformat `.ass`/`.ssa` di Web Desktop maupun Android, sekaligus membersihkan tag override seperti `{\an8}`, `{\pos(x,y)}`, `{\fad(...)}`, serta mengonversi `\N`/`\n` menjadi baris baru dan `\h` menjadi spasi.
+2. **Penggabungan Cue Simultan / Overlapping (`merge_overlapping_cues` & Multi-Cue Renderer):**
+   - Menggabungkan cue yang memiliki rentang waktu identik atau sangat berdekatan (`<= 0.05s`) di backend serta merender seluruh cue aktif secara bersamaan pada overlay Web Desktop (`paintCue`) dan Android (`findActiveCue`), sehingga teks papan nama/lokasi (*sign*) tidak lagi menimpa dialog karakter yang sedang berbicara.
+3. **Mode Dual-Subtitle Bilingual (`GTX+ Bilingual ID + EN`):**
+   - Menambahkan fungsi `build_bilingual_vtt()` dan dukungan mode `gtx+_dual` / `dual=true` pada `/api/player/sub` dan `/api/player/sub_custom` yang menyusun terjemahan Bahasa Indonesia (`GTX+`) di baris utama dan teks Bahasa Inggris asli di baris bawah.
+   - Tersedia langsung pada pemilih subtitle Web Desktop (`Indonesian (GTX+ Bilingual ID+EN)`) serta Android Mobile & Android TV (`[ID+EN] Bahasa Indonesia — GTX+ Bilingual (ID + EN)`).
+4. **Kontrol Sinkronisasi Waktu Subtitle / Subtitle Timing Offset (`-` / `+` Detik):**
+   - **Web Desktop:** Menambahkan tombol HUD `-`, indikator `0.0s` (klik untuk reset), dan `+` (`±0.25s`), shortcut keyboard `,` (`-0.25s`) dan `.` (`+0.25s`), serta perintah CLI `:subdelay <detik|reset>`.
+   - **Android Mobile & Android TV:** Menambahkan menu **Sinkronisasi Waktu Subtitle (Offset)** (`-2.0s` s/d `+2.0s`) di dalam dialog pengaturan subtitle maupun tampilan subtitle, lengkap dengan indikator offset aktif pada status subtitle player.
+5. **Sliding-Window Scene Context (`sanitize_cues_with_context`):**
+   - Menganalisis konteks adegan menggunakan jendela geser `±3 cues` dalam jarak waktu `<= 15.0 detik`. Apabila terdapat indikator dialog formal/kerajaan/militer pada kalimat berdekatan (seperti *"Yang Mulia"*, *"Paduka"*, *"Lapor"*), seluruh kalimat di dalam adegan yang sama otomatis mempertahankan kata ganti dan register sopan (*Saya/Anda*), mencegah kebocoran partikel gaul di tengah adegan serius.
+6. **Pelestarian Dialog Gagap / Stutter Preservation (`_preprocess_stutter_en` & `_postprocess_stutter_id`):**
+   - Mendeteksi pola gagap bahasa Inggris (seperti `"W-What?!"`, `"S-Stop!"`, `"I-Impossible!"`) sebelum dikirim ke mesin GTX agar kata tidak rusak diterjemahkan, lalu memulihkan efek gagap secara alami pada kata hasil terjemahan Bahasa Indonesia (`"A-Apa?!"`, `"B-Berhenti!"`, `"T-Tidak mungkin!"`).
+7. **Pengayaan 250+ Slang/Idiom Bahasa Inggris, Leksikon Kultivasi/Donghua, Honorifik & Anti-Calque (`GTX+` ≥90% Setara Fansub):**
+   - **Stage-1 Pre-GTX English Slang & Idiom Normalizer:** Menambahkan 110+ phrasal verbs, idiom percakapan, kontraksi lisan (`whatcha`, `gotcha`, `lemme`, `gimme`, `dunno`, `kinda`, `outta`), dan ekspresi reaksi (`knock it off`, `passed out cold`, `hear me out`, `in the nick of time`, `out of my league`, `jump to conclusions`, `pulling my leg`, `throw in the towel`, `pushing your luck`, `buy some time`, `playing dumb`, `third wheel`, `spacing out`, `all ears`, `slipped my mind`, `ring a bell`, `turned the tables`, dll.).
+   - **Stage-2 Post-GTX Indonesian Calque Fixes & Naturalizer:** Memperbaiki terjemahan kaku kata-per-kata menjadi ungkapan lisan fansub yang luwes, memperhalus akhiran tanya (`", bukan?"` → `", kan?"`), serta memperkaya kosakata **Kultivasi / Murim / Wuxia / Donghua** (*Inti Emas, Tahap Fondasi, Jiwa Nascent, Kesengsaraan Langit, Kakak Senior, Adik Junior, Sekte Bela Diri, Qi Sejati*), **Istana Dalam / Apothecary** (*Istana Dalam, Selir Utama, Pencicip Racun, Tabib Istana*), dan **Honorifik Jepang** (*Onii-chan/Onee-chan → Kakak, Aniki → Bang, Ojou-sama → Nona Muda, Otou-san → Ayah, Okaa-san → Ibu*).
+8. **Pelestarian Baris Ganda (`\n`) pada Mesin GTX (`call_gtx_translate`):**
+   - Mengonversi newline internal cue menjadi `<br>` sebelum dikirim di dalam elemen `<p id="{i}">` ke endpoint Google GTX dan memulihkannya kembali menjadi `\n`, sehingga dialog dua baris tidak lagi menyatu menjadi satu baris panjang.
+
+### Tests
+- Menambahkan suite pengujian unit `tests/test_subtitle_engine_enrichment.py` yang menguji pembersihan tag ASS, parser `.ass`, penggabungan cue simultan, pembentukan VTT bilingual, pre-normalizer slang/idiom Inggris, pelestarian gagap (*stutter*), leksikon kultivasi/honorifik, dan sliding-window scene context.
+
+## [2.11.6] - 2026-10-23
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.11.5 -> 2.11.6)
+Kenaikan digit PATCH diterapkan sesuai kaidah Semantic Versioning 2.0.0 dan Direktif #3 [`AGENTS.md`](AGENTS.md) karena rilis ini murni berisi perbaikan 18 bug visual dan fungsional lintas seluruh platform (Web Desktop, Windows Portable, Linux AppImage, Android Mobile, dan Android TV) tanpa penambahan fitur baru, perubahan skema database, maupun modifikasi kontrak API eksternal.
+
+### Fixed
+1. **Web Desktop (`frontend/js/app.js`, `frontend/js/term.js`):**
+   - **W1 (Tombol Cek Pembaruan di Popover):** Memperbaiki handler `#pop-update` yang sebelumnya memanggil fungsi tak terdefinisi `checkUpdate(true)` (`ReferenceError`) menjadi `checkForUpdate(true)`.
+   - **W2 (Tombol Panduan Perintah di Popover):** Memperbaiki handler `#pop-help` yang sebelumnya mereferensikan variabel tak terdefinisi `HELP_TEXT` menjadi `window.Tui.cmdUsage()`.
+   - **W3 (Badge Waktu tontonan pada Kartu Riwayat):** Mengekspor `formatTimeSec` ke `window.App` sehingga indikator durasi tontonan (`Ep X • MM:SS`) pada kartu tab **Riwayat** tampil normal.
+   - **W4 (Auto-Refresh Tab Favorit Saat Unbookmark):** Memperbaiki pengecekan `window.Tui.view() === "favorit"` (pemanggilan fungsi, bukan referensi fungsi) di `toggleModalBookmark()` agar grid tab **Favorit** otomatis menyegarkan diri ketika anime dihapus dari favorit lewat modal detail.
+   - **W5 (Sinkronisasi Badge Sumber 3-Provider):** Memperbarui `renderSourceUI()` agar menyinkronkan `#pop-src-badge` dan `#drawer-src-badge` secara akurat untuk ketiga sumber (`HiAnime`, `Otakudesu`, dan `AniChan`).
+   - **W6 (Pemulihan Mode SUB/DUB dari Riwayat):** Memperbarui `openTitle()` agar membaca `meta.mode` (`dub`/`sub`) dari kartu Riwayat dan menyinkronkan segmented control `#mode-seg`.
+   - **W7 (Guard Keyboard Navigasi Saat Modal Panduan Terbuka):** Menambahkan `$("help-overlay")` ke `isModalOpen()` di `term.js` agar tombol panah/Enter tidak menggerakkan grid di belakang modal panduan.
+   - **W8 (Deduplikasi Perintah CLI `:filter`):** Menggabungkan `case "filter":` yang terduplikasi di `term.js` sehingga `:filter` tanpa argumen membuka modal filter katalog dan `:filter reset` / `:filter key=val` mengeksekusi filter CLI.
+2. **Windows Portable (`launcher/main.go`, `frontend/js/app.js`):**
+   - **P1 (Deteksi Crash Awal Backend pada `Tatap.exe`):** Mengganti pemanggilan tidak valid `syscall.GetExitCodeProcess(syscall.Handle(pyCmd.Process.Pid), &status)` (yang mengoper PID sebagai `HANDLE`) dengan channel `procDone` berbasis `pyCmd.Wait()`.
+   - **P2 (Pemulihan Jendela Native Fullscreen Saat Menutup Player):** Menambahkan `window.tatap_set_fullscreen(false)` pada `closePlayer()` agar jendela WebView2 Windows Portable tidak terjebak dalam mode borderless fullscreen ketika pengguna menutup player secara langsung.
+   - **P3 (Graceful Shutdown Backend Saat Menutup Jendela):** Menambahkan request `POST /api/shutdown` sebelum `pyCmd.Process.Kill()` di `launcher/main.go` untuk memastikan WAL SQLite tertutup bersih.
+3. **Linux AppImage (`linux/AppRun`):**
+   - **L1 (Sanitasi Environment Saat Membuka Browser Host):** Menambahkan helper `run_sys` yang menghapus `PYTHONHOME` & `PYTHONPATH` serta memulihkan `PATH` dan `LD_LIBRARY_PATH` sistem host saat meluncurkan browser, `xdg-open`, atau dialog sistem dari dalam AppImage.
+4. **Android Mobile & Android TV (`AppUpdateManager.java`, `MainActivity.java`, `DetailActivity.java`, `PlayerActivity.java`):**
+   - **A1 (Versi Terpasang Dinamis pada Pengecek Update):** Mengganti fallback string versi `"2.9.2"` yang di-hardcode di `AppUpdateManager.java` dengan pembacaan dinamis `PackageManager.getPackageInfo(...).versionName` (`getInstalledVersion()`), mencegah false-positive notifikasi update saat mode fallback GitHub aktif.
+   - **A2 (Auto-Refresh Tab Favorit/Riwayat & Badge ditonton Saat Kembali ke Beranda):** Menambahkan lifecycle `onResume()` di `MainActivity.java` untuk menyegarkan daftar `favorit`/`riwayat` dan badge episode yang sudah ditonton setelah keluar dari `DetailActivity` atau `PlayerActivity`, serta menyelaraskan perintah `:favorit` ke `resetFiltersToTab("favorit")`.
+   - **A3 (Siklus 3 Sumber & Pembersihan Cache di Android):** Memperbarui `cmd_item_source` dan `switchDefaultSource()` di `MainActivity.java` agar mendukung penuh siklus 3 sumber (`HiAnime` → `Otakudesu` → `AniChan`) dan membersihkan `tabDataCache` saat berganti sumber.
+   - **A4 (Aktivasi Input Pencarian dari Dialog Bantuan di Android TV):** Mengganti `etSearch.requestFocus()` dengan `activateSearchInput()` pada item shortcut CLI di `showCommandHelpDialog()` agar kotak input dapat difokuskan dan membuka keyboard di Android TV.
+   - **A5 (Pelestarian Mode SUB/DUB Antar-Season):** Menambahkan `intent.putExtra("mode", mode)` pada `SeasonAdapter` di `DetailActivity.java` saat berpindah ke season/sekuel/prekuel terkait.
+   - **A6 (Sinkronisasi Label Kualitas & Subtitle Portrait + Pre-Resolve sesuai Mode Aktif):** Memastikan `btnPortraitQuality` dan `btnPortraitSub` selalu tersinkronisasi di `PlayerActivity.java`, serta menggunakan `requestMode` aktif (`sub`/`dub`) pada `executePreResolveNeighbors()`.
+
+### Tests
+- Menambahkan suite pengujian regresi lintas-platform `tests/test_multiplatform_audit_v2116.py` yang memverifikasi ke-18 perbaikan di atas.
+
+## [2.11.5] - 2026-10-23
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.11.4 -> 2.11.5)
+Kenaikan digit PATCH diterapkan sesuai kaidah Semantic Versioning 2.0.0 dan Direktif #3 [`AGENTS.md`](AGENTS.md) karena rilis ini murni berisi perbaikan bug (*backward-compatible bug fixes*) hasil audit regresi v2.11.4 pada aplikasi Android Mobile & Android TV, tanpa penambahan fitur, perubahan API backend, maupun skema database.
+
+### Fixed
+1. **Mode DUB Tertimpa Menjadi SUB di Riwayat Tontonan (`DetailActivity.java`, `PlayerActivity.java`):**
+   - Body `POST /api/history` sebelumnya meng-hardcode `"mode": "sub"`, sehingga anime yang ditonton dalam versi DUB tercatat sebagai SUB dan tombol *Lanjutkan* dari kartu Riwayat memutar versi yang salah.
+   - `DetailActivity` kini mengirim `mode` aktif, dan `PlayerActivity` (pindah episode / auto-next) mengirim `requestMode` beserta `poster` & `type`.
+2. **Regresi v2.11.4 — Tombol/Gesture Back di HP Kadang Tidak Merespons (`DetailActivity.java`):**
+   - Filter debounce back 450ms pasca `onResume()` ternyata aktif di semua perangkat. Filter kini dibatasi khusus Android TV (`TvFocusHelper.isTv`), sehingga gesture back cepat di HP kembali responsif.
+3. **Fallback Task-Root Android TV Menutup Aplikasi (`PlayerActivity.java`):**
+   - Saat `PlayerActivity` menjadi task root (Detail dipangkas OS low-memory), stack kini direkonstruksi lengkap **Beranda → Detail** via `startActivities()`, sehingga tombol Back dari Detail kembali ke Beranda alih-alih keluar dari aplikasi.
+
+### Tests
+- Menambahkan `tests/test_android_history_mode.py` (kontrak mode riwayat, debounce khusus TV, rekonstruksi stack Beranda) dan memperbarui `tests/test_android_tv_back_navigation.py`.
+
+## [2.11.4] - 2026-10-23
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.11.3 -> 2.11.4)
+Kenaikan digit PATCH diterapkan secara mutlak sesuai kaidah Semantic Versioning 2.0.0 dan Direktif #3 [`AGENTS.md`](AGENTS.md) karena rilis ini berfokus pada perbaikan bug alur navigasi remote Android TV saat keluar dari media player (`PlayerActivity.java`) menuju layar daftar episode (`DetailActivity.java`), mengeliminasi masalah pengguna terlempar langsung ke Beranda/Katalog (`MainActivity.java`), serta menambahkan proteksi debounce pulsa tombol back dan rekonstruksi otomatis task stack tanpa modifikasi arsitektur yang merusak kompatibilitas ke belakang (*backward-compatible bug fix & UX navigation polish*):
+
+1. **Pencegahan Kebocoran Pulsa Tombol Back pada Android TV (`PlayerActivity.java`):**
+   - Mengonsumsi event `KeyEvent.KEYCODE_BACK` secara tuntas di `dispatchKeyEvent`: menelan `ACTION_DOWN` (return `true`) dan mengeksekusi `handleBackAction()` pada `ACTION_UP` (return `true`), mencegah delegasi mentah ke `super.dispatchKeyEvent` yang sebelumnya membocorkan sinyal tombol remote ke activity di bawahnya.
+   - Menghilangkan trigger ganda pada predictive back callback dan menyelaraskan penutupan jendela pemutar secara bersih.
+
+2. **Garansi Rekonstruksi Stack Low-RAM Android TV (`PlayerActivity.java`):**
+   - Menambahkan guard `isTaskRoot()` pada `handleBackAction()` khusus Android TV: apabila `DetailActivity` sempat dipangkas oleh OS *low-memory killer* pada TV stick 1GB-1.5GB saat pemutaran video aktif, `PlayerActivity` secara otomatis merekonstruksi dan meluncurkan kembali `DetailActivity` dengan metadata lengkap (`slug`, `title`, `poster`, `type`, `mode`) sebelum `finish()`, menjamin pengguna selalu kembali ke daftar episode anime tersebut dan tidak pernah terlempar ke Home.
+
+3. **Filter Debounce Back & Pemulihan Fokus D-Pad TV (`DetailActivity.java`):**
+   - Mengimplementasikan filter debounce 450ms pada `dispatchKeyEvent` di `DetailActivity` berdasarkan `lastResumeTimeMs` untuk memblokir sisa pulsa back pantulan saat `PlayerActivity` ditutup.
+   - Memulihkan fokus remote D-Pad secara cerdas saat `onResume()` ke tombol **Lanjutkan Episode** (`btnQuickPlay`) atau daftar episode (`rvEpisodes`), mencegah fokus default jatuh ke `btnBack` di bagian atas layout.
+
+## [2.11.3] - 2026-10-23
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.11.2 -> 2.11.3)
+Kenaikan digit PATCH diterapkan secara mutlak sesuai kaidah Semantic Versioning 2.0.0 dan Direktif #3 [`AGENTS.md`](AGENTS.md) karena rilis ini berfokus pada perbaikan bug dan kompatibilitas platform Windows Portable Launcher (`launcher/main.go` / `Tatap.exe`) terkait penanganan mode monitor fullscreen native tanpa batas jendela (borderless fullscreen) serta isolasi rendering subtitle HTML kustom agar tidak dibajak oleh subtitle bawaan Windows Closed Captions:
+
+1. **Perbaikan Fullscreen Monitor Native Launcher Windows Portable (`launcher/main.go`):**
+   - **Native Win32 Fullscreen Bridge (`setNativeFullscreen`):** Mengimplementasikan penanganan fullscreen Win32 berbasis `GetWindowPlacement`, `GetWindowLongW` (`GWL_STYLE`), `MonitorFromWindow` (`MONITOR_DEFAULTTONEAREST`), dan `GetMonitorInfoW`. Jendela aplikasi dialihkan ke style `WS_POPUP | WS_VISIBLE` dan diposisikan menutup penuh seluruh resolusi monitor aktif via `SetWindowPos`, menyelesaikan masalah video terkurung di dalam batas jendela 1280x800.
+   - **Bidirectional Bridge `tatap_set_fullscreen`:** Menghubungkan event fullscreen DOM JavaScript webview ke host launcher Go secara instan, sehingga tombol fullscreen UI, shortcut keyboard `f`/`F`, double-click, serta tombol `Esc` secara mulus mengontrol ukuran jendela native.
+   - **Restorasi Posisi & Ukuran Jendela Bersih:** Saat keluar dari mode layar penuh, status style asli (`prevStyle`) dan posisi jendela sebelumnya (`prevPlacement`) dikembalikan secara deterministik via `SetWindowPlacement`.
+
+2. **Isolasi Rendering Subtitle Desktop & Pencegahan Pembajakan Windows Closed Captions (`frontend/js/app.js`, `style.css`, `index.html`):**
+   - **Pencegahan Aktivasi Native `<track>` di Desktop:** Di lingkungan desktop (`isDesktopEnv()`), mode track bawaan selalu disetel ke `"hidden"` agar engine Chromium / WebView2 Microsoft Edge tidak memicu rendering subs bawaan Windows Closed Captioning yang merusak tampilan.
+   - **Preservasi `#pm-subs-overlay`:** Memastikan kontainer custom subtitle HTML Tatap tetap aktif dan dirender pada mode fullscreen desktop tanpa pernah disembunyikan (`display: none`).
+   - **Suppression CSS `video::cue`:** Menambahkan aturan CSS peredaman penuh untuk `video::cue` pada WebView desktop (`visibility: hidden !important; font-size: 0px !important;`) dan membatasi kontrol native `<video>` via `controlsList="nodownload nofullscreen noremoteplayback" disablePictureInPicture`.
+
+## [2.11.2] - 2026-10-22
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.11.1 -> 2.11.2)
+Kenaikan digit PATCH diterapkan secara mutlak sesuai kaidah Semantic Versioning 2.0.0 dan Direktif #3 [`AGENTS.md`](AGENTS.md) karena rilis ini berfokus pada perbaikan kompatibilitas rendering subtitle pada perangkat Smart TV TCL (Android TV / Google TV), pencegahan respons error 403 HTML Nginx upstream pada parser subtitle, serta optimalisasi tipografi subtitle multi-line 2–3 baris seimbang (*balanced wrapping*) di layar landscape HP, TV, dan Web Desktop tanpa memperkenalkan perubahan arsitektur yang merusak kompatibilitas ke belakang (*backward-compatible platform fixes & UX refinements*):
+
+1. **Perbaikan Subtitle Smart TV TCL Lenyap Saat Kontrol Auto-Hide (`PlayerActivity.java`):**
+   - **Reparenting ke `playerView.getOverlayFrameLayout()`:** Memindahkan elemen custom subtitle `tv_subtitles` dari `fl_player_wrapper` langsung ke dalam kontainer resmi `@id/exo_overlay` Media3 di atas layer video `SurfaceView` dan di bawah `PlayerControlView`.
+   - **Elevasi Hardware UI Layer (`25dp`):** Menetapkan `tvSubtitles.setElevation(25f)` dan `tvSubtitles.setZ(25f)` serta memanggil `tvSubtitles.bringToFront()` setiap kali cue aktif berganti, mencegah Hardware Composer (HWC) chipset MediaTek/RealTek pada Smart TV TCL mem-bypass layer UI grafis saat kontrol pemutar menghilang.
+   - **Isolasi `hideSystemUi()` khusus Android TV:** Meniadakan pemanggilan berulang `hideSystemUi()` saat kontrol *auto-hide* di Android TV (`TvFocusHelper.isTv(this)`), mengeliminasi siklus window layout traversal (`performTraversals`) yang sebelumnya memicu *drop* layer UI subtitle pada TCL TV.
+
+2. **Subtitle 2–3 Tumpuk Seimbang (*Balanced Multi-Line Subtitle Wrapping*):**
+   - **Dynamic MaxWidth Constraint:** Membatasi lebar teks subtitle di mode layar miring (landscape) dan Android TV (maks ~70%–72% lebar layar, maks 560dp di HP) agar kalimat panjang tidak membentang selebar 1 baris penuh dari ujung kiri ke ujung kanan layar.
+   - **Mesin Tipografi `LineBreaker.BREAK_STRATEGY_BALANCED` (Android API 23+):** Membagi kalimat panjang secara cerdas dan seimbang menjadi 2 atau 3 baris bertumpuk rapi di tengah bawah layar tanpa memenggal kata (`HYPHENATION_FREQUENCY_NONE`).
+   - **Menu Preferensi "Lebar / Tumpukan" pada Dialog Gaya Subtitle:** Menambahkan opsi kustomisasi tumpukan (*Kompak / Sinema (2-3 Tumpuk Seimbang) [Default]*, *Sedang (~80% Layar)*, dan *Lebar Penuh*) yang tersimpan persisten di `SharedPreferences`.
+   - **Penyelarasan Web Desktop (`style.css`):** Menerapkan `max-width: min(72ch, 76%); text-wrap: balance;` pada `.subs-overlay span` untuk memberikan pengalaman membaca subtitle sinematik 2–3 tumpuk di PC/Laptop layar lebar.
+
+3. **Backend Anti-403 HTML Subtitle Validator & Prioritas Referer (`backend/main.py`):**
+   - Memperketat validator `_is_valid_sub()` pada `_fetch_sub_text` agar tidak pernah menganggap respons HTML error Nginx/Cloudflare (seperti `403 Forbidden` 548 byte dari `hls.dramahot.top`) sebagai subtitle valid.
+   - Memprioritaskan referer resmi `https://zokoanime.video/` dan `https://dramahot.top/` di urutan pertama saat menangani stream dari domain `dramahot.top` (seperti *Magic Knight Rayearth 2026 Episode 1*).
+   - Menjaga paritas identik 100% pada modul Chaquopy embedded (`android/app/src/main/python/backend/main.py`).
+
+## [2.11.1] - 2026-10-22
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.11.0 -> 2.11.1)
+Kenaikan digit PATCH diterapkan secara mutlak sesuai kaidah Semantic Versioning 2.0.0 dan Direktif #3 [`AGENTS.md`](AGENTS.md) karena rilis ini berfokus pada perbaikan bug kritis, pemulihan konektivitas streaming CDN, pencegahan infinite recovery looping, serta perbaikan navigasi remote D-Pad pada seluruh katalog Android TV tanpa memperkenalkan modul arsitektur baru atau modifikasi yang merusak kompatibilitas ke belakang (*backward-compatible bug fixes & stability patches*):
+
+1. **Navigasi D-Pad Pagination Android TV 10-Foot UI (`MainActivity.java`):**
+   - Mengintersepsi `KEYCODE_DPAD_DOWN` pada kartu baris terbawah `rvGrid` untuk mengalirkan fokus secara mulus ke tombol `btnNextPage` ("Berikutnya") dan `btnPrevPage` ("Sebelumnya"). Mengatasi masalah *directional beam miss* akibat grid 6-kolom dan floating pagination bar di tengah layar.
+   - Menambahkan navigasi `KEYCODE_DPAD_RIGHT` pada kartu paling terakhir dalam adapter untuk langsung menjangkau `btnNextPage`.
+   - Mengintersepsi `KEYCODE_DPAD_UP` dari tombol pagination agar kembali ke baris terbawah `rvGrid` tanpa mereset posisi scroll ke kartu teratas (posisi 0).
+   - Menghubungkan `KEYCODE_DPAD_LEFT` dari tombol pagination langsung kembali ke sidebar tab aktif (`getActiveTabButton()`).
+   - Sinkronisasi dinamis atribut `isFocusable` tombol `btnNextPage` dan `btnPrevPage` sesuai state aktif, mencegah cursor D-Pad terjebak pada tombol ghost nonaktif di Halaman 1 atau halaman terakhir.
+   - **Isolasi Penuh 100%:** Seluruh perubahan dibungkus dalam pengecekan `TvFocusHelper.isTv(...)`, menjamin nol dampak atau regresi pada Android Mobile dan Web Desktop.
+2. **Resiliensi CDN 403 & Pencegahan Infinite Stream Recovery Loop:**
+   - Menambahkan bypass Cloudflare DoH (`1.1.1.1`) publik pada `is_safe_ssrf_ip()` untuk mengeliminasi false positive anti-SSRF DNS poisoning pada domain MegaPlay/HiAnime.
+   - Mengintegrasikan referer dan origin wildcard/domain matching untuk host CDN baru (`eclipseharbor.space`, `embermeadow.world`, `hls1.drama1.cfd`).
+   - Membatasi batas maksimum percobaan pemulihan stream Android (`MAX_RECOVERY_ATTEMPTS = 2`) di `PlayerActivity.java` untuk memutus infinite loop auto-retry saat CDN downstream mengembalikan HTTP 403 permanen.
+   - Menurunkan TTL `episode_cache` basis data menjadi 2 jam agar URL CDN yang kadaluwarsa tersegarkan secara otomatis.
+   - Menjaga paritas ganda Chaquopy (`android/app/src/main/python/backend/`).
+
+## [2.11.0] - 2026-10-22
+
+### Justifikasi SemVer 2.0.0 (MINOR: 2.10.0 -> 2.11.0)
+Kenaikan digit MINOR diterapkan secara mutlak sesuai kaidah Semantic Versioning 2.0.0 dan Direktif #3 [`AGENTS.md`](AGENTS.md) karena memperkenalkan serangkaian penambahan modul arsitektur, provider streaming baru, dukungan Picture-in-Picture Android, Left Vertical Sidebar Android TV 10-Foot UI, Safe Mode content filter, pengayaan metadata multiplatform (Season & Tahun Rilis), serta Apple Flat UI multiplatform yang backward-compatible terhadap rilis publik stabil `v2.10.0`:
+
+1. **Provider Baru AniChan & Title-Scoped Direct HLS M3U8 Scraping (`backend/api/anichan.py`):**
+   - Implementasi modul scraper mandiri yang mengekstrak langsung master playlist HLS murni (`.m3u8`) tanpa webview/iframe eksternal.
+   - Title-Scoped Failover: Deteksi otomatis judul anime spesifik (seperti *Eyeshield 21*) untuk dialihkan ke AniChan saat sumber utama HiAnime mengalami kerusakan chunk video CDN, tanpa mempengaruhi anime lain.
+2. **Failover Jadwal & Musim Offline-Resilient (Jikan):**
+   - Sistem failover otomatis ke endpoint publik Jikan / Unofficial MyAnimeList saat AniList mengalami pemadaman (403 disabled) atau limitasi koneksi.
+3. **Android TV Left Vertical Sidebar Navigation (10-Foot UI):**
+   - Menggantikan bar menu horizontal atas dengan Left Vertical Sidebar (~200dp) pada TV layout (`tatapTV`).
+   - Autohide & Expand cerdas (64dp collapsed rail saat menjelajah kisi poster, 210dp expanded saat remote masuk ke sidebar) dengan animasi halus `DecelerateInterpolator`.
+   - Midline icon alignment pada seluruh tab sidebar TV dan eliminasi duplicate ImageSpan.
+4. **Apple Flat UI & HIG Redesign pada TV dan Desktop:**
+   - Standardisasi indikator nomor episode murni angka (*Episode Number Only*) pada detail anime.
+   - Apple Options Popover menu (`⋯` / `⚙`) untuk konsolidasi navigasi primer dan utilitas.
+   - Dual Theme Engine (Apple Light Theme & Obsidian Dark) dengan persistensi `localStorage` dan zero flicker.
+5. **Dukungan Picture-in-Picture (PiP) Android Mobile (`PlayerActivity.java`):**
+   - Mendukung Android O+ Picture-in-Picture API (`enterPictureInPictureMode`) saat pengguna menekan tombol Home atau beralih aplikasi.
+6. **Fitur Safe Mode (Mode Aman) Vulgar & Ecchi Content Filter (`safe_mode=1`):**
+   - Menyembunyikan konten bertag *ecchi*, *erotica*, dan *magical-sex-shift* dari katalog dan pencarian saat Safe Mode aktif (default: ON).
+   - Opsi beralih status secara instan via perintah `:safemode on|off` di terminal/search bar.
+   - Menjaga blacklist Hentai 100% permanen di semua layer backend dan UI (Master Directive #4).
+7. **Pengayaan & Presisi Tinggi Metadata Season & Tahun Rilis Multiplatform:**
+   - **Eliminasi Total False Matching (Tahun 1917 & 2021):** Mengganti formula overlap parsial lama dengan **Jaccard Token Similarity** ($\ge 0.70$) disertai pustaka pembersihan stopwords generik, isolasi nomor season (*Season 2/II tidak akan tertukar dengan S1*), dan *Subtitle Arc Penalty*. Mengeliminasi anomali tahun 1917 (dari *The Dull Sword*) dan tahun 2021 (dari *Long Sword*) pada kueri kata generik seperti `sword`.
+   - **Pencarian Anime (`/api/search`)**: Memperkaya hasil pencarian dengan `season` (contoh: `"Fall 2023"`) dan `year` (contoh: `2023`) secara asinkron via AniList GraphQL concurrent search matching dan pengecekan lokal `browse_cache`.
+   - **Detail Anime (`hianime_details`)**: Fallback ekstraksi musim dan tahun rilis dari baris `Aired:` saat `Premiered:` tidak tersedia.
+   - **Tampilan Web & Desktop (`term.js`, `app.js`)**: Menampilkan musim & tahun pada baris pencarian (`tr-meta`) menggantikan raw slug ID, pada kisi kartu poster (`poster-meta`), dan info baris detail (`#tm-info-line`).
+   - **Tampilan Android Mobile & TV (`AnimeAdapter.java`, `DetailActivity.java`)**: Menampilkan musim & tahun pada kartu anime (`tvMeta`) dan info baris detail (`tvInfoLine`).
+   - **Pembersihan Cache Pencarian (`search_cache`)**: Mengosongkan rekor cache pencarian lama di basis data SQLite agar hasil pencarian lama yang keliru langsung tersegarkan.
+8. **Pola Wallpaper Mac (macOS Ambient Waves & Topographic Contours):**
+   - Pola gelombang kurva Sonoma/Ventura/Monterey di `#bg-glow` berbasis SVG vektor dan pure CSS radial mesh tanpa dependensi gambar raster eksternal.
+9. **Penyempurnaan Palet Warna Soft Modern (Eliminasi AI-Slop) & Perbaikan Layout:**
+   - Menggantikan warna cyan neon menyilaukan dan rawa berlumpur dengan Soft Sky (`#38bdf8`), Cerulean Deep (`#0284c7`), dan Obsidian Slate (`#0c0d12`).
+   - Harmonisasi padding top bar dan headroom kisi katalog di semua resolusi.
+   - Full-width layout footer dan perbaikan penanganan spasi pada input pencarian.
+10. **Perbaikan Subtitle Anime Favorit (Bookmark) SQLite Cache:**
+    - Pembersihan otomatis cache episode SQLite saat anime ditambahkan/dihapus dari bookmark guna mencegah penumpukan data kadaluarsa.
+11. **Keamanan Jaringan & Kompatibilitas OS:**
+    - Mitigasi celah SSRF intranet proxy, pencegahan socket leak TLS desync, dan 16KB page alignment ready untuk Android 15 & 16.
 
 ## [2.10.0] - 2026-10-20
 

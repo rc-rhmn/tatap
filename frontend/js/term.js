@@ -12,7 +12,8 @@ var Tui = (function () {
            ($("catalog-filter-modal") && !$("catalog-filter-modal").classList.contains("hidden")) ||
            ($("drawer-panel") && !$("drawer-panel").classList.contains("hidden")) ||
            ($("backend-error-overlay") && !$("backend-error-overlay").classList.contains("hidden")) ||
-           ($("update-modal") && !$("update-modal").classList.contains("hidden"));
+           ($("update-modal") && !$("update-modal").classList.contains("hidden")) ||
+           ($("help-overlay") && !$("help-overlay").classList.contains("hidden"));
   }
 
   function log(msg,kind){
@@ -29,7 +30,7 @@ var Tui = (function () {
   function saveCmdHist(h){try{localStorage.setItem("tatap_hist",JSON.stringify(h.slice(0,50)));}catch(e){}}
 
   function cmdUsage(){
-    return "perintah:\n  cari <judul> | :musim | :lanjutan | :favorit | :katalog\n  :terbaru | :season <winter|spring|summer|fall> <tahun>\n  :switch [hianime|otaku] (ganti sumber video HiAnime / Otakudesu)\n  :filter [key=val...] | :filter reset\n  :genre <slug|title> | :genre | :genre --list | :genre reset\n  :update (cek versi rilis terbaru secara on-demand)\n  :apikey <key> | :ollama <key> | :groq <key> | :gemini <key> | :model <nama> | :apiurl <url>\n  :logs | :crt on|off|toggle | :ambient on|off|toggle\n  :riwayat | :favorit | :status | :bantuan | :q";
+    return "perintah:\n  cari <judul> | :musim | :lanjutan | :favorit | :katalog\n  :terbaru | :season <winter|spring|summer|fall> <tahun>\n  :switch [hianime|otaku] (ganti sumber video HiAnime / Otakudesu)\n  :filter [key=val...] | :filter reset\n  :genre <slug|title> | :genre | :genre --list | :genre reset\n  :subdelay <detik|reset> (sinkronisasi waktu subtitle, cth: :subdelay -0.5)\n  :tema [toggle|terang|gelap] (ganti mode terang / gelap Apple)\n  :update (cek versi rilis terbaru secara on-demand)\n  :apikey <key> | :ollama <key> | :groq <key> | :gemini <key> | :model <nama> | :apiurl <url>\n  :logs | :crt on|off|toggle | :ambient on|off|toggle\n  :riwayat | :favorit | :status | :bantuan | :q";
   }
 
   function applyFilter(){
@@ -422,12 +423,12 @@ var Tui = (function () {
               if(e.key==="Enter"||e.key===" "){
                 e.preventDefault();
                 if(typeof App==="undefined"){log("App belum siap, coba lagi","err");return;}
-                App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
+                App.openTitle(a.id||a.slug,a.title,a.poster,a.type,a.eps_counter,a);
               }
             });
             d.addEventListener("click",function(){
               if(typeof App==="undefined"){log("App belum siap, coba lagi","err");return;}
-              App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
+              App.openTitle(a.id||a.slug,a.title,a.poster,a.type,a.eps_counter,a);
             });
             frag.appendChild(d);
           } else {
@@ -476,6 +477,13 @@ var Tui = (function () {
             var subMeta2=document.createElement("div");
             subMeta2.className="tr-meta";
             var sm2=[];
+            if(a.season){
+              var sStr = a.season;
+              if(a.year && sStr.indexOf(String(a.year)) === -1) sStr += " " + a.year;
+              sm2.push(sStr);
+            } else if(a.year){
+              sm2.push(String(a.year));
+            }
             if(a.type) sm2.push(a.type);
             if(a.eps_counter){
               sm2.push("Ep " + a.eps_counter);
@@ -484,7 +492,7 @@ var Tui = (function () {
               if(a.dub) sm2.push("DUB "+a.dub);
               if(a.eps) sm2.push(a.eps+" ep");
             }
-            if(a.id) sm2.push(a.id);
+            if(a.duration) sm2.push(a.duration);
             subMeta2.textContent=sm2.join(" · ");
             infoCol2.appendChild(subMeta2);
             d2.appendChild(infoCol2);
@@ -498,12 +506,12 @@ var Tui = (function () {
               if(e.key==="Enter"||e.key===" "){
                 e.preventDefault();
                 if(typeof App==="undefined"){log("App belum siap, coba lagi","err");return;}
-                App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
+                App.openTitle(a.id||a.slug,a.title,a.poster,a.type,a.eps_counter,a);
               }
             });
             d2.addEventListener("click",function(){
               if(typeof App==="undefined"){log("App belum siap, coba lagi","err");return;}
-              App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
+              App.openTitle(a.id||a.slug,a.title,a.poster,a.type,a.eps_counter,a);
             });
             frag.appendChild(d2);
           }
@@ -524,9 +532,9 @@ var Tui = (function () {
             grid.appendChild(h);
             return;
           }
-          if(S.view==="riwayat"){
+          if(S.view==="riwayat" || S.view==="favorit"){
             if(!a.id) a.id = a.slug;
-            if(!a.badge && a.episode) a.badge = "EP " + a.episode;
+            if(!a.badge && a.episode) a.badge = String(a.episode);
           }
           var isUnavail=!a.id;
           var d=document.createElement("div");
@@ -540,7 +548,7 @@ var Tui = (function () {
             if(e.key==="Enter"||e.key===" "){
               e.preventDefault();
               if(!isUnavail){
-                App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
+                App.openTitle(a.id||a.slug,a.title,a.poster,a.type,a.eps_counter,a);
               }
             }
           });
@@ -595,7 +603,7 @@ var Tui = (function () {
             bgTag.className="pc-badge-tag"+bCls;
             var bText=a.badge;
             if(a.badge==="ONGOING"&&a.eps_counter){
-              bText="EP "+a.eps_counter;
+              bText=a.eps_counter;
             }
             bgTag.textContent=bText;
             media.appendChild(bgTag);
@@ -636,6 +644,13 @@ var Tui = (function () {
             if(a.mode)m.push(String(a.mode).toUpperCase());
             if(a.progress&&a.progress>=15&&window.App&&App.formatTimeSec)m.push(App.formatTimeSec(a.progress));
           }else{
+            if(a.season){
+              var sStr = a.season;
+              if(a.year && sStr.indexOf(String(a.year)) === -1) sStr += " " + a.year;
+              m.push(sStr);
+            } else if(a.year){
+              m.push(String(a.year));
+            }
             if(a.eps_counter){
               m.push("Ep "+a.eps_counter);
             }else if(a.eps){
@@ -648,7 +663,7 @@ var Tui = (function () {
           d.appendChild(body);
 
           if(!isUnavail){
-            d.addEventListener("click",function(){App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);});
+            d.addEventListener("click",function(){App.openTitle(a.id||a.slug,a.title,a.poster,a.type,a.eps_counter,a);});
           }
           grid.appendChild(d);
         })(S.items[j],j);
@@ -768,18 +783,23 @@ var Tui = (function () {
     var box=$("results");
     if(!box)return;
     var all=box.querySelectorAll(".poster-card, .trow");
+    var isTv = !!(window.TvNavigationManager && window.TvNavigationManager.isTvMode && window.TvNavigationManager.isTvMode());
     for(var i=0;i<all.length;i++){
       var itemIdx = parseInt(all[i].getAttribute("data-idx"), 10);
       var isUnm=all[i].classList.contains("unmapped");
       var isThis = (itemIdx === S.sel && !isUnm);
       all[i].classList.toggle("sel", isThis);
-      all[i].classList.toggle("tv-focus", isThis);
+      if(isTv){
+        all[i].classList.toggle("tv-focus", isThis);
+      } else {
+        all[i].classList.remove("tv-focus");
+      }
     }
     if(S.sel < 0) return;
     var selEl = box.querySelector('[data-idx="' + S.sel + '"]');
     if(selEl){
       selEl.scrollIntoView({block:"nearest", inline:"nearest"});
-      if(window.TvNavigationManager){
+      if(window.TvNavigationManager && isTv){
         window.TvNavigationManager.setFocus(selEl, "grid", { scroll: true });
       }
       if(document.activeElement !== selEl){
@@ -791,8 +811,9 @@ var Tui = (function () {
     if(!S.items.length||S.sel<0)return;
     var a=S.items[S.sel];
     if(!a||a.is_header)return;
-    if(!a.id){log("judul ini belum tersedia di hianime","err");return;}
-    App.openTitle(a.id,a.title,a.poster,a.type,a.eps_counter,a);
+    var targetId = a.id || a.slug;
+    if(!targetId){log("judul ini belum tersedia di hianime","err");return;}
+    App.openTitle(targetId,a.title,a.poster,a.type,a.eps_counter,a);
   }
 
   function startSearch(q){
@@ -1174,7 +1195,17 @@ var Tui = (function () {
       case "musim":setView("musim");break;
       case "lanjutan":setView("lanjutan");break;
       case "katalog":setView("katalog");break;
-      case "filter":case "cf":openCatalogFilterModal();break;
+      case "filter":case "cf":
+        if(!args){openCatalogFilterModal();break;}
+        if(args==="reset"){
+          S.filter={};S.page=1;log("filter direset","ok");applyFilter();break;
+        }
+        var f={};
+        for(var i=0;i<parts.length-1;i++){
+          var kv=parts[i+1].split("=");
+          if(kv.length===2)f[kv[0]]=kv[1];
+        }
+        S.filter=f;S.page=1;log("filter: "+JSON.stringify(f),"ok");applyFilter();break;
       case "season":cmdSeason(args);break;
       case "jadwal":case "schedule":case "terbaru":case "airing":
         var dArg = (args || "").trim().toLowerCase();
@@ -1194,15 +1225,20 @@ var Tui = (function () {
           nxt = "otakudesu";
         }else if(target === "hi" || target === "hianime"){
           nxt = "hianime";
+        }else if(target === "anichan" || target === "ani"){
+          nxt = "anichan";
         }else if(!target){
-          nxt = (curSrc === "otakudesu") ? "hianime" : "otakudesu";
+          if(curSrc === "hianime") nxt = "otakudesu";
+          else if(curSrc === "otakudesu") nxt = "anichan";
+          else nxt = "hianime";
         }else{
-          log("usage: :switch [hianime|otaku]","err");
+          log("usage: :switch [hianime|otaku|anichan]","err");
           break;
         }
         if(window.App && window.App.switchSource){
           var resSrc = window.App.switchSource(nxt);
-          log("sumber streaming beralih ke: " + (resSrc === "otakudesu" ? "Otakudesu (Sub Indo)" : "HiAnime"), "ok");
+          var srcLabel = resSrc === "otakudesu" ? "Otakudesu (Sub Indo)" : (resSrc === "anichan" ? "AniChan (Failover Stream)" : "HiAnime");
+          log("sumber streaming beralih ke: " + srcLabel, "ok");
         }else{
           if(window.Tatap && window.Tatap.setSetting){
             window.Tatap.setSetting({ preferred_source: nxt }).catch(function(){});
@@ -1211,16 +1247,6 @@ var Tui = (function () {
         }
         break;
       case "genre":cmdGenre(parts);break;
-      case "filter":
-        if(!args||args==="reset"){
-          S.filter={};S.page=1;log("filter direset","ok");applyFilter();break;
-        }
-        var f={};
-        for(var i=0;i<parts.length-1;i++){
-          var kv=parts[i+1].split("=");
-          if(kv.length===2)f[kv[0]]=kv[1];
-        }
-        S.filter=f;S.page=1;log("filter: "+JSON.stringify(f),"ok");applyFilter();break;
       case "crt":
         if(!args){log("usage: crt on|off|toggle","err");break;}
         var v1=args==="on"?"on":args==="off"?"off":null;
@@ -1302,27 +1328,63 @@ var Tui = (function () {
           }
         }
         break;
+      case "tema":case "theme":case "mode":
+        if(window.TatapTheme && window.TatapTheme.toggle){
+          var newTh = window.TatapTheme.toggle();
+          log("Tema beralih ke: " + (newTh === "light" ? "Mode Terang (Apple Light)" : "Mode Gelap (Obsidian Dark)"), "ok");
+        }
+        break;
+      case "subdelay":case "suboffset":
+        if(!args || args === "reset"){
+          if(window.App && window.App.setSubDelay) window.App.setSubDelay(0.0, true);
+          log("sinkronisasi subtitle direset ke 0.0 detik", "ok");
+        }else{
+          var dVal = parseFloat(args);
+          if(isNaN(dVal)){
+            log("usage: :subdelay <detik|reset> (cth: :subdelay -0.5 atau :subdelay +0.75)", "err");
+          }else{
+            if(window.App && window.App.setSubDelay) window.App.setSubDelay(dVal, true);
+            log("sinkronisasi subtitle disetel ke " + (dVal > 0 ? "+" : "") + dVal + " detik", "ok");
+          }
+        }
+        break;
       case "bantuan":case "help":case "?":
         $("help-overlay").classList.remove("hidden");
         $("help-body").textContent=cmdUsage();
         break;
       case "q":case "clear":
-        $("cmd").value="";clearLog();break;
+        $("cmd").value="";updateSearchClearBtn();clearLog();break;
       default:
         if(cmd.indexOf(":")===0){log("perintah tak dikenal: "+cmd+"  (ketik :bantuan)","err");}
         else{startSearch(s);}
     }
   }
 
+  function updateSearchClearBtn(){
+    var btn=$("search-clear-btn");
+    var inp=$("cmd");
+    if(!btn||!inp)return;
+    if(inp.value.length>0){
+      btn.classList.remove("hidden");
+    }else{
+      btn.classList.add("hidden");
+    }
+  }
+
   function onKey(e){
     var t=(e.target.tagName||"");
     var typing = t==="INPUT"||t==="SELECT"||t==="TEXTAREA";
-    if(e.key==="Escape" || e.key==="Backspace"){
-      if(!typing && window.TvNavigationManager && window.TvNavigationManager.handleBack(e)){return;}
+    if(e.key==="Escape"){
       if(isModalOpen()){App.onKeyPlayer(e);return;}
       if(typing){$("cmd").blur();S.promptFoc=false;return;}
       if(S.sel>=0){S.sel=-1;renderSel();return;}
-      $("cmd").value="";clearLog();e.preventDefault();return;
+      $("cmd").value="";updateSearchClearBtn();clearLog();e.preventDefault();return;
+    }
+    if(e.key==="Backspace"){
+      if(!typing && window.TvNavigationManager && window.TvNavigationManager.handleBack(e)){return;}
+      if(isModalOpen()){App.onKeyPlayer(e);return;}
+      if(!typing && S.sel>=0){S.sel=-1;renderSel();return;}
+      if(typing) return; // Mengizinkan penghapusan teks normal tanpa blur
     }
     if(isModalOpen()){App.onKeyPlayer(e);return;}
     if(e.key==="/"){e.preventDefault();focusPrompt();return;}
@@ -1380,11 +1442,17 @@ var Tui = (function () {
     var inp=$("cmd");inp.focus();
   }
   function submitPrompt(){
-    var inp=$("cmd");var raw=inp.value.trim();inp.value="";
+    var inp=$("cmd");var raw=inp.value.trim();
     if(!raw)return;
     log("tatap$ "+raw);
-    if(raw.indexOf(":")===0){handleCommand(raw.slice(1));}
-    else{handleCommand("cari "+raw);}
+    if(raw.indexOf(":")===0){
+      inp.value="";
+      updateSearchClearBtn();
+      handleCommand(raw.slice(1));
+    } else {
+      updateSearchClearBtn();
+      handleCommand("cari "+raw);
+    }
   }
 
   var _hIdx=0,_hPos=0;
@@ -1516,6 +1584,7 @@ var Tui = (function () {
   function boot(){
     var inp=$("cmd");
     inp.addEventListener("keydown",function(e){
+      e.stopPropagation();
       if(e.key==="Enter"){e.preventDefault();_hPos=loadCmdHist().length;submitPrompt();}
       else if(e.key==="Escape"){inp.blur();S.promptFoc=false;}
       else if(e.key==="ArrowDown"){
@@ -1542,16 +1611,35 @@ var Tui = (function () {
     });
     inp.addEventListener("focus",onPromptFocus);
     inp.addEventListener("blur",onPromptBlur);
-    inp.addEventListener("input",function(){if(inp.value.indexOf(":")===0){/* could show command hints */}});
+    inp.addEventListener("input",function(){
+      updateSearchClearBtn();
+      if(inp.value.indexOf(":")===0){/* could show command hints */}
+    });
     document.addEventListener("keydown",onKey);
+
+    var clearBtn = $("search-clear-btn");
+    if(clearBtn){
+      clearBtn.addEventListener("click", function(e){
+        e.stopPropagation();
+        inp.value = "";
+        updateSearchClearBtn();
+        clearLog();
+        inp.focus();
+        if(S.view === "cari"){
+          setView("musim");
+        }
+      });
+    }
 
     var searchWrap = $("search-input-wrap");
     if(searchWrap){
-      searchWrap.addEventListener("click", function(){
+      searchWrap.addEventListener("click", function(e){
+        if(e.target === clearBtn || (clearBtn && clearBtn.contains(e.target))) return;
         if(window.TvNavigationManager) window.TvNavigationManager.enterSearchTypingMode();
         else focusPrompt();
       });
       searchWrap.addEventListener("keydown", function(e){
+        if(e.target === inp || (e.target && e.target.tagName === "INPUT")) return;
         if(e.key === "Enter" || e.key === " "){
           e.preventDefault();
           if(window.TvNavigationManager) window.TvNavigationManager.enterSearchTypingMode();
@@ -1769,5 +1857,5 @@ var Tui = (function () {
     setView("katalog");
   }
 
-  return {boot:boot,log:log,clearLog:clearLog,setView:setView,loadView:loadView,moveSel:moveSel,renderSel:renderSel,openSelected:openSelected,startSearch:startSearch,doSearch:doSearch,renderResults:renderResults,renderPager:renderPager,renderRecents:renderRecents,cmdUsage:cmdUsage,openGenreModal:openGenreModal,closeGenreModal:closeGenreModal,openCatalogFilterModal:openCatalogFilterModal,closeCatalogFilterModal:closeCatalogFilterModal,getGridCols:getGridCols,applyGenreFilter:function(genreOrSlug){applyGenreFilter(slugifyGenre(genreOrSlug));},slugifyGenre:slugifyGenre,view:function(){return S.view;},state:function(){return S;}};
+  return {boot:boot,log:log,clearLog:clearLog,setView:setView,loadView:loadView,moveSel:moveSel,renderSel:renderSel,openSelected:openSelected,startSearch:startSearch,doSearch:doSearch,renderResults:renderResults,renderPager:renderPager,renderRecents:renderRecents,cmdUsage:cmdUsage,openGenreModal:openGenreModal,closeGenreModal:closeGenreModal,openCatalogFilterModal:openCatalogFilterModal,closeCatalogFilterModal:closeCatalogFilterModal,getGridCols:getGridCols,applyGenreFilter:function(genreOrSlug){applyGenreFilter(slugifyGenre(genreOrSlug));},slugifyGenre:slugifyGenre,view:function(){return S.view;},state:function(){return S;},updateSearchClearBtn:updateSearchClearBtn};
 })();

@@ -5,7 +5,20 @@ set -e
 HERE="$(dirname "$(readlink -f "${0}")")"
 export APPDIR="${HERE}"
 
-# Setup runtime environment
+# Simpan environment sistem asli agar tidak mengontaminasi browser / xdg-open / dialog sistem
+SYS_PATH="${PATH}"
+SYS_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+SYS_PYTHONHOME="${PYTHONHOME:-}"
+SYS_PYTHONPATH="${PYTHONPATH:-}"
+
+run_sys() {
+    env -u PYTHONHOME -u PYTHONPATH \
+        PATH="${SYS_PATH}" \
+        LD_LIBRARY_PATH="${SYS_LD_LIBRARY_PATH}" \
+        "$@"
+}
+
+# Setup runtime environment untuk backend Python internal AppImage
 export PATH="${HERE}/usr/bin:${PATH}"
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
 export PYTHONHOME="${HERE}/usr"
@@ -18,14 +31,25 @@ mkdir -p "${DATA_DIR}/cache"
 export TATAP_DATABASE_PATH="${DATA_DIR}/anime.db"
 export TATAP_CACHE_DIR="${DATA_DIR}/cache"
 
-# Cleanup function on exit
+# Cleanup function on exit: anggun mematikan backend server dan menutup koneksi SQLite
 cleanup() {
-    if [ -n "$SERVER_PID" ]; then
-        kill "$SERVER_PID" 2>/dev/null || true
+    if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        kill -TERM "$SERVER_PID" 2>/dev/null || true
+        # Beri toleransi hingga 2 detik agar SQLite dan FastAPI menutup koneksi secara bersih
+        for i in {1..20}; do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                break
+            fi
+            sleep 0.1
+        done
+        # Kirimkan KILL jika proses backend masih menggantung setelah 2 detik
+        if kill -0 "$SERVER_PID" 2>/dev/null; then
+            kill -KILL "$SERVER_PID" 2>/dev/null || true
+        fi
         wait "$SERVER_PID" 2>/dev/null || true
     fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT INT TERM HUP
 
 # Check if a healthy Tatap server is already running on port 8767
 ALREADY_RUNNING=0
@@ -79,13 +103,13 @@ except Exception:
         MSG="Server backend Tatap tidak dapat dimulai atau gagal merespons dalam 15 detik pada http://127.0.0.1:8767.\n\nLog Kesalahan:\n${ERR_LOG:-Tidak ada catatan error di log.}"
 
         if command -v zenity >/dev/null 2>&1; then
-            zenity --error --title="Tatap — Gagal Memulai Backend" --text="$MSG" --width=520 2>/dev/null || true
+            run_sys zenity --error --title="Tatap — Gagal Memulai Backend" --text="$MSG" --width=520 2>/dev/null || true
         elif command -v kdialog >/dev/null 2>&1; then
-            kdialog --error "$MSG" --title "Tatap — Gagal Memulai Backend" 2>/dev/null || true
+            run_sys kdialog --error "$MSG" --title "Tatap — Gagal Memulai Backend" 2>/dev/null || true
         elif command -v xmessage >/dev/null 2>&1; then
-            xmessage -center -title "Tatap — Gagal Memulai Backend" "$MSG" 2>/dev/null || true
+            run_sys xmessage -center -title "Tatap — Gagal Memulai Backend" "$MSG" 2>/dev/null || true
         elif command -v notify-send >/dev/null 2>&1; then
-            notify-send -u critical "Tatap — Gagal Memulai Backend" "Server backend gagal berjalan. Periksa log di $SERVER_LOG" 2>/dev/null || true
+            run_sys notify-send -u critical "Tatap — Gagal Memulai Backend" "Server backend gagal berjalan. Periksa log di $SERVER_LOG" 2>/dev/null || true
         fi
 
         echo -e "$MSG" >&2
@@ -112,7 +136,7 @@ if [ -n "$BROWSER_CMD" ]; then
         --user-data-dir="$CHROME_DATA_DIR"
         --app="$APP_URL"
         --window-size=1280,720
-        --class=tatap
+        --class=Tatap
         # Hardware acceleration & GPU decoding (Mesa VAAPI / NVDEC / Vulkan)
         --enable-features=VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,CanvasOopRasterization
         --enable-gpu-rasterization
@@ -131,24 +155,31 @@ if [ -n "$BROWSER_CMD" ]; then
         --disable-features=Translate,OptimizationHints,MediaRouter
         --audio-buffer-size=2048
     )
-    "$BROWSER_CMD" "${CHROME_FLAGS[@]}" >/dev/null 2>&1 &
+    run_sys "$BROWSER_CMD" "${CHROME_FLAGS[@]}" >/dev/null 2>&1 &
     BROWSER_PID=$!
 
-    # Fail-safe monitoring: check if browser process is still alive or delegated
-    sleep 1.5
-    if kill -0 "$BROWSER_PID" 2>/dev/null; then
-        wait "$BROWSER_PID"
-    else
-        # Browser delegated to existing session, keep backend server alive
-        wait "$SERVER_PID"
-    fi
+    # Tunggu sampai jendela aplikasi Tatap ditutup oleh pengguna.
+    # Dengan --user-data-dir terisolasi, $BROWSER_PID merupakan proses window utama
+    # sehingga saat window ditutup, skrip selesai dan memicu trap cleanup untuk mematikan server.
+    wait "$BROWSER_PID" 2>/dev/null || true
 else
-    # Fallback to default system browser
+    # Fallback to default system browser (non-Chromium)
+    echo "================================================================="
+    echo " Tatap: Browser berbasis Chromium tidak ditemukan."
+    echo " Membuka peramban default via xdg-open: $APP_URL"
+    echo " Server backend berjalan di latar belakang (PID: $SERVER_PID)."
+    echo " Tekan Ctrl+C pada terminal ini untuk mematikan server Tatap."
+    echo "================================================================="
     if command -v xdg-open >/dev/null 2>&1; then
-        xdg-open "$APP_URL" >/dev/null 2>&1 || true
+        run_sys xdg-open "$APP_URL" >/dev/null 2>&1 || true
     elif command -v sensible-browser >/dev/null 2>&1; then
-        sensible-browser "$APP_URL" >/dev/null 2>&1 || true
+        run_sys sensible-browser "$APP_URL" >/dev/null 2>&1 || true
     fi
-    # Wait for backend process
-    wait "$SERVER_PID"
+    if command -v notify-send >/dev/null 2>&1; then
+        run_sys notify-send "Tatap Anime" "Server berjalan di $APP_URL. Tutup terminal atau kirim sinyal untuk mematikan backend." 2>/dev/null || true
+    fi
+
+    # Menjaga server tetap aktif saat mode xdg-open sampai pengguna menekan Ctrl+C (INT/TERM)
+    # yang kemudian memicu trap cleanup secara otomatis
+    wait "$SERVER_PID" 2>/dev/null || true
 fi

@@ -16,6 +16,10 @@ import android.text.TextWatcher;
 import android.transition.AutoTransition;
 import android.transition.TransitionManager;
 import android.util.Log;
+import android.animation.ValueAnimator;
+import android.view.animation.DecelerateInterpolator;
+import android.view.ViewParent;
+import android.view.FocusFinder;
 import android.view.HapticFeedbackConstants;
 import android.content.SharedPreferences;
 import android.view.KeyEvent;
@@ -76,6 +80,15 @@ public class MainActivity extends Activity {
     private ViewGroup layoutHeaderRoot;
     private View layoutSearchBox;
     private TextView btnToggleMenu;
+
+    // Android TV Docked Sidebar (Autohide / Collapsed Rail 64dp <-> Expanded 210dp)
+    private View layoutTvSidebar;
+    private View layoutTvBrand;
+    private TextView tvAppLogo;
+    private TextView tvBadgeTv;
+    private LinearLayout layoutTvBottomControls;
+    private boolean isTvSidebarExpanded = true;
+    private ValueAnimator tvSidebarAnimator;
 
     // In-memory tab cache untuk peralihan instan (<1ms) & race condition tokenization
     private static class TabCacheEntry {
@@ -153,6 +166,8 @@ public class MainActivity extends Activity {
     private String filterCatalogType = "";
     private String filterCatalogStatus = "";
     private long lastBackPressTime = 0L;
+    private String currentPreferredSource = "hianime";
+    private boolean isFirstResume = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -162,6 +177,12 @@ public class MainActivity extends Activity {
         layoutHeaderRoot = findViewById(R.id.layout_header_root);
         layoutSearchBox = findViewById(R.id.layout_search_box);
         btnToggleMenu = findViewById(R.id.btn_toggle_menu);
+
+        layoutTvSidebar = findViewById(R.id.layout_tv_sidebar);
+        layoutTvBrand = findViewById(R.id.layout_tv_brand);
+        tvAppLogo = findViewById(R.id.tv_app_logo);
+        tvBadgeTv = findViewById(R.id.tv_badge_tv);
+        layoutTvBottomControls = findViewById(R.id.layout_tv_bottom_controls);
 
         etSearch = findViewById(R.id.et_search);
         btnClearSearch = findViewById(R.id.btn_clear_search);
@@ -217,7 +238,11 @@ public class MainActivity extends Activity {
                     TvFocusHelper.attachFocusScale(chip, 1.06f, 4f);
                     chip.setNextFocusUpId(R.id.btn_tab_jadwal);
                     chip.setNextFocusDownId(R.id.rv_anime_grid);
-                    if (i > 0 && scheduleChips[i - 1] != null) chip.setNextFocusLeftId(scheduleChips[i - 1].getId());
+                    if (i > 0 && scheduleChips[i - 1] != null) {
+                        chip.setNextFocusLeftId(scheduleChips[i - 1].getId());
+                    } else {
+                        chip.setNextFocusLeftId(R.id.btn_tab_jadwal);
+                    }
                     if (i < scheduleChips.length - 1 && scheduleChips[i + 1] != null) chip.setNextFocusRightId(scheduleChips[i + 1].getId());
                 }
             }
@@ -286,6 +311,7 @@ public class MainActivity extends Activity {
 
         if (TvFocusHelper.isTv(this)) {
             applyTvTopBarCompression();
+            setupTvSidebarFocusListener();
             btnTabMusim.post(() -> btnTabMusim.requestFocus());
         }
 
@@ -314,8 +340,222 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void setupTvSidebarFocusListener() {
+        if (layoutTvSidebar == null || !TvFocusHelper.isTv(this)) return;
+        layoutTvSidebar.getViewTreeObserver().addOnGlobalFocusChangeListener((oldFocus, newFocus) -> {
+            if (newFocus == null || !TvFocusHelper.isTv(this)) return;
+            boolean insideSidebar = isViewDescendantOf(newFocus, layoutTvSidebar);
+            if (insideSidebar && !isTvSidebarExpanded) {
+                setTvSidebarExpanded(true, true);
+            } else if (!insideSidebar && isTvSidebarExpanded) {
+                setTvSidebarExpanded(false, true);
+            }
+        });
+    }
+
+    private boolean isViewDescendantOf(View child, View parent) {
+        if (child == null || parent == null) return false;
+        if (child == parent) return true;
+        ViewParent p = child.getParent();
+        while (p != null) {
+            if (p == parent) return true;
+            p = p.getParent();
+        }
+        return false;
+    }
+
+    private void setTvSidebarExpanded(boolean expand, boolean animate) {
+        if (layoutTvSidebar == null || !TvFocusHelper.isTv(this)) return;
+        isTvSidebarExpanded = expand;
+
+        int targetWidth = expand ? dpToPx(210) : dpToPx(64);
+        int targetPaddingStart = expand ? dpToPx(16) : dpToPx(8);
+        int targetPaddingEnd = expand ? dpToPx(12) : dpToPx(8);
+
+        if (tvSidebarAnimator != null && tvSidebarAnimator.isRunning()) {
+            tvSidebarAnimator.cancel();
+        }
+
+        if (animate) {
+            int startWidth = layoutTvSidebar.getWidth();
+            if (startWidth <= 0) startWidth = expand ? dpToPx(64) : dpToPx(210);
+            tvSidebarAnimator = ValueAnimator.ofInt(startWidth, targetWidth);
+            tvSidebarAnimator.setDuration(200);
+            tvSidebarAnimator.setInterpolator(new DecelerateInterpolator());
+            tvSidebarAnimator.addUpdateListener(anim -> {
+                int val = (Integer) anim.getAnimatedValue();
+                ViewGroup.LayoutParams lp = layoutTvSidebar.getLayoutParams();
+                if (lp != null) {
+                    lp.width = val;
+                    layoutTvSidebar.setLayoutParams(lp);
+                }
+            });
+            tvSidebarAnimator.start();
+        } else {
+            ViewGroup.LayoutParams lp = layoutTvSidebar.getLayoutParams();
+            if (lp != null) {
+                lp.width = targetWidth;
+                layoutTvSidebar.setLayoutParams(lp);
+            }
+        }
+
+        layoutTvSidebar.setPadding(targetPaddingStart, dpToPx(20), targetPaddingEnd, dpToPx(16));
+
+        // 1. App Brand Logo
+        if (layoutTvBrand != null && tvAppLogo != null) {
+            if (expand) {
+                tvAppLogo.setText("TATAP");
+                if (tvBadgeTv != null) tvBadgeTv.setVisibility(View.VISIBLE);
+                if (layoutTvBrand instanceof LinearLayout) {
+                    ((LinearLayout) layoutTvBrand).setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+                }
+                layoutTvBrand.setPadding(dpToPx(6), 0, dpToPx(6), 0);
+            } else {
+                tvAppLogo.setText("T");
+                if (tvBadgeTv != null) tvBadgeTv.setVisibility(View.GONE);
+                if (layoutTvBrand instanceof LinearLayout) {
+                    ((LinearLayout) layoutTvBrand).setGravity(Gravity.CENTER);
+                }
+                layoutTvBrand.setPadding(0, 0, 0, 0);
+            }
+        }
+
+        // 2. Quick Search Box
+        if (layoutSearchBox != null && etSearch != null) {
+            if (expand) {
+                etSearch.setHint("Cari anime...");
+                layoutSearchBox.setPadding(dpToPx(10), 0, dpToPx(10), 0);
+                etSearch.setPadding(0, 0, 0, 0);
+                etSearch.setCompoundDrawablePadding(dpToPx(6));
+                if (btnClearSearch != null) {
+                    btnClearSearch.setVisibility(etSearch.getText().length() > 0 ? View.VISIBLE : View.GONE);
+                }
+            } else {
+                etSearch.setHint("");
+                layoutSearchBox.setPadding(0, 0, 0, 0);
+                int searchPad = (dpToPx(48) - dpToPx(15)) / 2;
+                etSearch.setPadding(searchPad, 0, searchPad, 0);
+                etSearch.setCompoundDrawablePadding(0);
+                if (btnClearSearch != null) {
+                    btnClearSearch.setVisibility(View.GONE);
+                }
+            }
+        }
+
+        // 3. Navigation Tabs
+        TextView[] tvTabs = new TextView[]{btnTabMusim, btnTabAiring, btnTabJadwal, btnTabRiwayat, btnTabFavorit, btnTabKatalog, btnTabGenre};
+        int tabPad = (dpToPx(48) - dpToPx(15)) / 2;
+        for (TextView tab : tvTabs) {
+            if (tab == null) continue;
+            if (expand) {
+                tab.setText(getTabTitleString(tab));
+                tab.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+                tab.setPadding(dpToPx(10), 0, dpToPx(10), 0);
+                tab.setCompoundDrawablePadding(dpToPx(8));
+            } else {
+                tab.setText("");
+                tab.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+                tab.setPadding(tabPad, 0, tabPad, 0);
+                tab.setCompoundDrawablePadding(0);
+            }
+        }
+
+        // 4. Bottom Controls (Server Status & Menu)
+        if (layoutTvBottomControls != null && btnStatusPower != null && btnToggleMenu != null) {
+            if (expand) {
+                layoutTvBottomControls.setOrientation(LinearLayout.HORIZONTAL);
+                layoutTvBottomControls.setGravity(Gravity.CENTER_VERTICAL);
+
+                LinearLayout.LayoutParams lpPower = new LinearLayout.LayoutParams(dpToPx(36), dpToPx(36));
+                btnStatusPower.setLayoutParams(lpPower);
+                btnStatusPower.setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8));
+
+                LinearLayout.LayoutParams lpMenu = new LinearLayout.LayoutParams(0, dpToPx(36), 1.0f);
+                lpMenu.setMarginStart(dpToPx(8));
+                btnToggleMenu.setLayoutParams(lpMenu);
+                btnToggleMenu.setText("Menu");
+                btnToggleMenu.setGravity(Gravity.CENTER);
+                btnToggleMenu.setPadding(0, 0, 0, 0);
+                btnToggleMenu.setCompoundDrawablePadding(dpToPx(4));
+
+                btnStatusPower.setNextFocusRightId(R.id.btn_toggle_menu);
+                btnStatusPower.setNextFocusDownId(R.id.btn_status_power);
+                btnToggleMenu.setNextFocusLeftId(R.id.btn_status_power);
+                btnToggleMenu.setNextFocusUpId(R.id.btn_tab_genre);
+                btnToggleMenu.setNextFocusRightId(R.id.rv_anime_grid);
+                btnToggleMenu.setNextFocusDownId(R.id.btn_toggle_menu);
+            } else {
+                layoutTvBottomControls.setOrientation(LinearLayout.VERTICAL);
+                layoutTvBottomControls.setGravity(Gravity.CENTER_HORIZONTAL);
+
+                LinearLayout.LayoutParams lpPower = new LinearLayout.LayoutParams(dpToPx(38), dpToPx(38));
+                lpPower.gravity = Gravity.CENTER_HORIZONTAL;
+                btnStatusPower.setLayoutParams(lpPower);
+                btnStatusPower.setPadding(dpToPx(9), dpToPx(9), dpToPx(9), dpToPx(9));
+
+                LinearLayout.LayoutParams lpMenu = new LinearLayout.LayoutParams(dpToPx(38), dpToPx(38));
+                lpMenu.gravity = Gravity.CENTER_HORIZONTAL;
+                lpMenu.topMargin = dpToPx(8);
+                btnToggleMenu.setLayoutParams(lpMenu);
+                btnToggleMenu.setText("");
+                int menuPad = (dpToPx(38) - dpToPx(15)) / 2;
+                btnToggleMenu.setPadding(menuPad, 0, menuPad, 0);
+                btnToggleMenu.setCompoundDrawablePadding(0);
+                btnToggleMenu.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+
+                btnStatusPower.setNextFocusDownId(R.id.btn_toggle_menu);
+                btnStatusPower.setNextFocusRightId(R.id.rv_anime_grid);
+                btnToggleMenu.setNextFocusUpId(R.id.btn_status_power);
+                btnToggleMenu.setNextFocusLeftId(R.id.btn_toggle_menu);
+                btnToggleMenu.setNextFocusRightId(R.id.rv_anime_grid);
+                btnToggleMenu.setNextFocusDownId(R.id.btn_toggle_menu);
+            }
+        }
+    }
+
     private void applyTvTopBarCompression() {
         if (!TvFocusHelper.isTv(this)) return;
+
+        boolean isVerticalSidebar = (layoutTabsContainer != null && layoutTabsContainer.getOrientation() == LinearLayout.VERTICAL);
+        if (isVerticalSidebar) {
+            // Android TV Left Sidebar (Apple Flat 10-Foot UI):
+            TextView[] tvTabs = new TextView[]{btnTabMusim, btnTabAiring, btnTabJadwal, btnTabRiwayat, btnTabFavorit, btnTabKatalog, btnTabGenre};
+            for (int i = 0; i < tvTabs.length; i++) {
+                TextView tab = tvTabs[i];
+                if (tab != null) {
+                    LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(38));
+                    tlp.setMargins(0, dpToPx(2), 0, dpToPx(2));
+                    tab.setLayoutParams(tlp);
+                    tab.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+                    tab.setNextFocusRightId(R.id.rv_anime_grid);
+                    tab.setNextFocusLeftId(tab.getId());
+                    tab.setNextFocusUpId(i == 0 ? R.id.layout_search_box : tvTabs[i - 1].getId());
+                    tab.setNextFocusDownId(i == tvTabs.length - 1 ? R.id.btn_status_power : tvTabs[i + 1].getId());
+                }
+            }
+
+            if (layoutSearchBox != null) {
+                layoutSearchBox.setNextFocusUpId(R.id.layout_search_box);
+                layoutSearchBox.setNextFocusDownId(R.id.btn_tab_musim);
+                layoutSearchBox.setNextFocusRightId(R.id.rv_anime_grid);
+                layoutSearchBox.setNextFocusLeftId(R.id.layout_search_box);
+            }
+            if (btnStatusPower != null) {
+                btnStatusPower.setNextFocusUpId(R.id.btn_tab_genre);
+                btnStatusPower.setNextFocusRightId(isTvSidebarExpanded ? R.id.btn_toggle_menu : R.id.rv_anime_grid);
+                btnStatusPower.setNextFocusLeftId(R.id.btn_status_power);
+                btnStatusPower.setNextFocusDownId(isTvSidebarExpanded ? R.id.btn_status_power : R.id.btn_toggle_menu);
+            }
+            if (btnToggleMenu != null) {
+                btnToggleMenu.setNextFocusUpId(isTvSidebarExpanded ? R.id.btn_tab_genre : R.id.btn_status_power);
+                btnToggleMenu.setNextFocusLeftId(isTvSidebarExpanded ? R.id.btn_status_power : R.id.btn_toggle_menu);
+                btnToggleMenu.setNextFocusRightId(R.id.rv_anime_grid);
+                btnToggleMenu.setNextFocusDownId(R.id.btn_toggle_menu);
+            }
+            setTvSidebarExpanded(isTvSidebarExpanded, false);
+            updateTabButtons();
+            return;
+        }
 
         if (layoutHeaderRoot != null) {
             ViewGroup.LayoutParams lp = layoutHeaderRoot.getLayoutParams();
@@ -347,6 +587,7 @@ public class MainActivity extends Activity {
             }
             layoutTabsSegmented.setPadding(0, 0, 0, 0);
         }
+
         if (layoutTabsContainer != null) {
             ViewGroup.LayoutParams clp = layoutTabsContainer.getLayoutParams();
             if (clp != null) {
@@ -355,7 +596,7 @@ public class MainActivity extends Activity {
                 layoutTabsContainer.setLayoutParams(clp);
             }
         }
-        // Pada Android TV, seluruh 7 tab (Musim Ini, Masih Tayang, Jadwal, Riwayat, Favorit, Katalog, Genre)
+        // Pada Android TV horizontal layout (fallback), seluruh 7 tab
         // dibagikan rata (weight=1.0f) membentang penuh 100% menyesuaikan lebar layar TV (10-Foot UI)
         TextView[] tvTabs = new TextView[]{btnTabMusim, btnTabAiring, btnTabJadwal, btnTabRiwayat, btnTabFavorit, btnTabKatalog, btnTabGenre};
         for (int i = 0; i < tvTabs.length; i++) {
@@ -491,6 +732,11 @@ public class MainActivity extends Activity {
                     if (raw.startsWith(":") || raw.startsWith("/")) {
                         executeCommand(raw.substring(1).trim());
                     } else {
+                        if (isSafeModeEnabled() && isVulgarKeyword(raw)) {
+                            showCommandOutput("> tatap$ Kata kunci dibatasi dalam Mode Aman. Matikan dengan :safemode off", true);
+                            Toast.makeText(this, "Pencarian dibatasi dalam Mode Aman (:safemode off)", Toast.LENGTH_SHORT).show();
+                            return true;
+                        }
                         currentView = "cari";
                         currentSearchQuery = raw;
                         currentPage = 1;
@@ -743,6 +989,11 @@ public class MainActivity extends Activity {
         if (btnTabGenre != null) TvFocusHelper.attachFocusScale(btnTabGenre, 1.06f, 6f);
         TvFocusHelper.attachFocusScale(btnPrevPage, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnNextPage, 1.1f, 6f);
+        if (TvFocusHelper.isTv(this)) {
+            btnPrevPage.setEnabled(false);
+            btnPrevPage.setFocusable(false);
+            btnPrevPage.setAlpha(0.4f);
+        }
         TvFocusHelper.attachFocusScale(btnEmptyRetry, 1.08f, 6f);
         TvFocusHelper.attachFocusScale(btnClearFilter, 1.1f, 6f);
         TvFocusHelper.attachFocusScale(btnClearHistoryAll, 1.1f, 6f);
@@ -755,6 +1006,9 @@ public class MainActivity extends Activity {
                 if (TvFocusHelper.isTv(this)) {
                     dBtn.setNextFocusUpId(R.id.btn_tab_jadwal);
                     dBtn.setNextFocusDownId(R.id.rv_anime_grid);
+                    if (dBtn == btnDaySenin) {
+                        dBtn.setNextFocusLeftId(R.id.btn_tab_jadwal);
+                    }
                 }
             }
         }
@@ -768,6 +1022,17 @@ public class MainActivity extends Activity {
         showCommandHelpDialog();
     }
 
+    private TextView getActiveTabButton() {
+        if ("musim".equals(currentView)) return btnTabMusim;
+        if ("airing".equals(currentView)) return btnTabAiring;
+        if ("jadwal".equals(currentView)) return btnTabJadwal;
+        if ("katalog".equals(currentView)) return btnTabKatalog;
+        if ("genre".equals(currentView)) return btnTabGenre;
+        if ("riwayat".equals(currentView)) return btnTabRiwayat;
+        if ("favorit".equals(currentView)) return btnTabFavorit;
+        return btnTabMusim;
+    }
+
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
@@ -778,6 +1043,134 @@ public class MainActivity extends Activity {
             } else if (keyCode == KeyEvent.KEYCODE_SEARCH) {
                 activateSearchInput();
                 return true;
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && TvFocusHelper.isTv(this)) {
+                View focused = getCurrentFocus();
+                if (focused != null) {
+                    if (rvGrid != null && isViewDescendantOf(focused, rvGrid)) {
+                        View foundLeft = FocusFinder.getInstance().findNextFocus(rvGrid, focused, View.FOCUS_LEFT);
+                        if (foundLeft == null) {
+                            TextView activeTab = getActiveTabButton();
+                            if (activeTab != null) {
+                                activeTab.requestFocus();
+                                return true;
+                            }
+                        }
+                    } else if (focused == btnNextPage) {
+                        if (btnPrevPage != null && btnPrevPage.isEnabled() && btnPrevPage.isFocusable()) {
+                            btnPrevPage.requestFocus();
+                            return true;
+                        } else {
+                            TextView activeTab = getActiveTabButton();
+                            if (activeTab != null) {
+                                activeTab.requestFocus();
+                                return true;
+                            }
+                        }
+                    } else if (focused == btnPrevPage || isViewDescendantOf(focused, layoutPagination)) {
+                        TextView activeTab = getActiveTabButton();
+                        if (activeTab != null) {
+                            activeTab.requestFocus();
+                            return true;
+                        }
+                    }
+                }
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && TvFocusHelper.isTv(this)) {
+                View focused = getCurrentFocus();
+                if (focused != null) {
+                    if (focused == btnPrevPage) {
+                        if (btnNextPage != null && btnNextPage.isEnabled() && btnNextPage.isFocusable()) {
+                            btnNextPage.requestFocus();
+                            return true;
+                        }
+                    } else if (rvGrid != null && isViewDescendantOf(focused, rvGrid)) {
+                        View foundRight = FocusFinder.getInstance().findNextFocus(rvGrid, focused, View.FOCUS_RIGHT);
+                        if (foundRight == null) {
+                            View itemRoot = rvGrid.findContainingItemView(focused);
+                            int pos = (itemRoot != null) ? rvGrid.getChildAdapterPosition(itemRoot) : -1;
+                            if (pos >= 0 && adapter != null && pos == adapter.getItemCount() - 1) {
+                                if (layoutPagination != null && layoutPagination.getVisibility() == View.VISIBLE) {
+                                    if (btnNextPage != null && btnNextPage.isEnabled() && btnNextPage.isFocusable()) {
+                                        btnNextPage.requestFocus();
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN && TvFocusHelper.isTv(this)) {
+                View focused = getCurrentFocus();
+                if (focused != null && rvGrid != null && isViewDescendantOf(focused, rvGrid)) {
+                    View foundDown = FocusFinder.getInstance().findNextFocus(rvGrid, focused, View.FOCUS_DOWN);
+                    if (foundDown == null) {
+                        if (layoutPagination != null && layoutPagination.getVisibility() == View.VISIBLE) {
+                            View itemRoot = rvGrid.findContainingItemView(focused);
+                            int pos = (itemRoot != null) ? rvGrid.getChildAdapterPosition(itemRoot) : -1;
+                            int spanIndex = 0;
+                            int spanCount = 1;
+                            if (rvGrid.getLayoutManager() instanceof GridLayoutManager) {
+                                GridLayoutManager glm = (GridLayoutManager) rvGrid.getLayoutManager();
+                                spanCount = glm.getSpanCount();
+                                if (pos >= 0) {
+                                    spanIndex = glm.getSpanSizeLookup().getSpanIndex(pos, spanCount);
+                                }
+                            }
+                            boolean nextEnabled = (btnNextPage != null && btnNextPage.isEnabled() && btnNextPage.isFocusable());
+                            boolean prevEnabled = (btnPrevPage != null && btnPrevPage.isEnabled() && btnPrevPage.isFocusable());
+
+                            View target = null;
+                            if (spanIndex < spanCount / 2) {
+                                if (prevEnabled) {
+                                    target = btnPrevPage;
+                                } else if (nextEnabled) {
+                                    target = btnNextPage;
+                                }
+                            } else {
+                                if (nextEnabled) {
+                                    target = btnNextPage;
+                                } else if (prevEnabled) {
+                                    target = btnPrevPage;
+                                }
+                            }
+
+                            if (target != null) {
+                                target.requestFocus();
+                                return true;
+                            }
+                        }
+                    }
+                }
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP && TvFocusHelper.isTv(this)) {
+                View focused = getCurrentFocus();
+                if (focused != null && (focused == btnNextPage || focused == btnPrevPage || isViewDescendantOf(focused, layoutPagination))) {
+                    if (rvGrid != null && rvGrid.getVisibility() == View.VISIBLE && rvGrid.getLayoutManager() instanceof GridLayoutManager) {
+                        GridLayoutManager glm = (GridLayoutManager) rvGrid.getLayoutManager();
+                        int lastPos = glm.findLastVisibleItemPosition();
+                        if (lastPos != RecyclerView.NO_POSITION && adapter != null && lastPos < adapter.getItemCount()) {
+                            int targetPos = lastPos;
+                            if (focused == btnPrevPage) {
+                                int spanCount = glm.getSpanCount();
+                                int spanIndex = glm.getSpanSizeLookup().getSpanIndex(lastPos, spanCount);
+                                targetPos = Math.max(0, lastPos - spanIndex);
+                            }
+                            RecyclerView.ViewHolder vh = rvGrid.findViewHolderForAdapterPosition(targetPos);
+                            if (vh != null && vh.itemView != null) {
+                                vh.itemView.requestFocus();
+                                return true;
+                            } else {
+                                rvGrid.scrollToPosition(targetPos);
+                                final int fTarget = targetPos;
+                                rvGrid.post(() -> {
+                                    RecyclerView.ViewHolder delayedVh = rvGrid.findViewHolderForAdapterPosition(fTarget);
+                                    if (delayedVh != null && delayedVh.itemView != null) {
+                                        delayedVh.itemView.requestFocus();
+                                    }
+                                });
+                                return true;
+                            }
+                        }
+                    }
+                }
             }
         }
         return super.dispatchKeyEvent(event);
@@ -1026,6 +1419,11 @@ public class MainActivity extends Activity {
             case "cari":
             case "search":
                 if (!args.isEmpty()) {
+                    if (isSafeModeEnabled() && isVulgarKeyword(args)) {
+                        showCommandOutput("> tatap$ :cari [Dibatasi: Mode Aman aktif. Matikan dengan :safemode off]", true);
+                        Toast.makeText(this, "Pencarian dibatasi dalam Mode Aman (:safemode off)", Toast.LENGTH_SHORT).show();
+                        break;
+                    }
                     currentView = "cari";
                     currentSearchQuery = args;
                     currentPage = 1;
@@ -1099,7 +1497,7 @@ public class MainActivity extends Activity {
             case "favorit":
             case "bookmark":
             case "bookmarks":
-                switchView("favorit");
+                resetFiltersToTab("favorit");
                 showCommandOutput("> tatap$ :favorit [Menampilkan Anime Favorit]", false);
                 break;
 
@@ -1116,6 +1514,12 @@ public class MainActivity extends Activity {
             case "haptic":
             case "getar":
                 handleHapticCommand(args);
+                break;
+
+            case "safemode":
+            case "safe":
+            case "aman":
+                handleSafeModeCommand(args);
                 break;
 
             default:
@@ -1174,6 +1578,96 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "Getaran Sentuh UI: " + (target ? "Aktif" : "Mati"), Toast.LENGTH_SHORT).show();
     }
 
+    public boolean isSafeModeEnabled() {
+        SharedPreferences sp = getSharedPreferences("tatap_player_prefs", MODE_PRIVATE);
+        return sp.getBoolean("pref_safemode", true);
+    }
+
+    public boolean isVulgarKeyword(String text) {
+        if (text == null) return false;
+        String t = text.toLowerCase().trim();
+        String[] vulgar = new String[]{"ecchi", "erotica", "hentai", "magical-sex-shift", "oppai"};
+        for (String v : vulgar) {
+            if (t.contains(v)) return true;
+        }
+        return false;
+    }
+
+    public boolean isAdultAnime(JSONObject anime) {
+        if (anime == null) return false;
+        if (anime.optBoolean("is_adult", false) || anime.optBoolean("isAdult", false) || anime.optBoolean("nsfw", false)) {
+            return true;
+        }
+        String rating = anime.optString("rating", "").toLowerCase();
+        if (rating.contains("rx") || rating.contains("18+")) {
+            return true;
+        }
+        String title = anime.optString("title", "").toLowerCase();
+        String slug = anime.optString("slug", anime.optString("id", "")).toLowerCase();
+        JSONArray genresArr = anime.optJSONArray("genres");
+        List<String> genres = new ArrayList<>();
+        if (genresArr != null) {
+            for (int i = 0; i < genresArr.length(); i++) {
+                genres.add(genresArr.optString(i, "").toLowerCase());
+            }
+        }
+        String genresStr = anime.optString("genre", anime.optString("genres", "")).toLowerCase();
+
+        String[] blockedTags = new String[]{"ecchi", "erotica", "hentai", "magical-sex-shift"};
+        for (String tag : blockedTags) {
+            if (title.contains(tag) || slug.contains(tag) || genresStr.contains(tag)) {
+                return true;
+            }
+            for (String g : genres) {
+                if (g.contains(tag)) return true;
+            }
+        }
+        return false;
+    }
+
+    private void handleSafeModeCommand(String args) {
+        SharedPreferences sp = getSharedPreferences("tatap_player_prefs", MODE_PRIVATE);
+        String trimmed = (args != null) ? args.trim().toLowerCase() : "";
+        boolean current = sp.getBoolean("pref_safemode", true);
+        boolean target;
+        if ("on".equalsIgnoreCase(trimmed) || "aktif".equalsIgnoreCase(trimmed) || "1".equals(trimmed)) {
+            target = true;
+        } else if ("off".equalsIgnoreCase(trimmed) || "mati".equalsIgnoreCase(trimmed) || "0".equals(trimmed)) {
+            target = false;
+        } else {
+            target = !current;
+        }
+        sp.edit().putBoolean("pref_safemode", target).apply();
+        if (target && btnToggleMenu != null) {
+            HapticHelper.performHeavyClick(btnToggleMenu);
+        }
+        tabDataCache.clear();
+        syncBackendSafeMode(target);
+        String statusStr = target ? "AKTIF" : "MATI";
+        showCommandOutput("> tatap$ :safemode " + (target ? "on" : "off") + " [Mode Aman: " + statusStr + (target ? " - Konten vulgar/ecchi disembunyikan" : " - Konten ecchi/dewasa diizinkan") + "]", false);
+        Toast.makeText(this, "Mode Aman: " + (target ? "Aktif" : "Mati"), Toast.LENGTH_SHORT).show();
+        fetchData();
+    }
+
+    private void syncBackendSafeMode(boolean enabled) {
+        new Thread(() -> {
+            try {
+                URL url = new URL("http://127.0.0.1:8767/api/settings");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(4000);
+                JSONObject body = new JSONObject();
+                body.put("safe_mode", enabled ? "1" : "0");
+                byte[] out = body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                conn.getOutputStream().write(out);
+                conn.getResponseCode();
+                conn.disconnect();
+            } catch (Exception ignored) {}
+        }).start();
+    }
+
     private void handleSeasonFilterCommand(String[] parts) {
         // Format: :season <winter|spring|summer|fall> [tahun]
         if (parts.length >= 2) {
@@ -1203,8 +1697,14 @@ public class MainActivity extends Activity {
     }
 
     private void setGenreFilter(String genreSlugOrTitle) {
+        String slug = genreSlugOrTitle.toLowerCase().trim().replace(" ", "-");
+        if (isSafeModeEnabled() && (slug.contains("ecchi") || slug.contains("erotica") || slug.contains("magical-sex-shift") || slug.contains("hentai"))) {
+            showCommandOutput("> tatap$ Genre ini disembunyikan dalam Mode Aman. Matikan dengan :safemode off", true);
+            Toast.makeText(this, "Genre disembunyikan dalam Mode Aman (:safemode off)", Toast.LENGTH_SHORT).show();
+            return;
+        }
         currentView = "genre";
-        currentGenre = genreSlugOrTitle.toLowerCase().trim().replace(" ", "-");
+        currentGenre = slug;
         currentPage = 1;
         updateTabButtons();
         updateActiveFilterBar();
@@ -1261,7 +1761,7 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             List<GenreItem> list = new ArrayList<>();
             try {
-                HttpURLConnection conn = (HttpURLConnection) new URL("http://127.0.0.1:8767/api/genres").openConnection();
+                HttpURLConnection conn = (HttpURLConnection) new URL("http://127.0.0.1:8767/api/genres?safe_mode=" + (isSafeModeEnabled() ? "1" : "0")).openConnection();
                 conn.setConnectTimeout(6000);
                 BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                 StringBuilder sb = new StringBuilder();
@@ -1272,12 +1772,21 @@ public class MainActivity extends Activity {
                 JSONObject res = new JSONObject(sb.toString());
                 if (res.optBoolean("success")) {
                     JSONArray arr = res.getJSONObject("data").getJSONArray("list");
+                    boolean safe = isSafeModeEnabled();
                     for (int i = 0; i < arr.length(); i++) {
                         JSONObject g = arr.getJSONObject(i);
                         String slug = g.optString("slug", "");
                         String title = g.optString("title", "");
                         if ("hentai".equalsIgnoreCase(slug) || title.toLowerCase().contains("hentai")) {
                             continue;
+                        }
+                        if (safe) {
+                            String sl = slug.toLowerCase();
+                            String tl = title.toLowerCase();
+                            if (sl.contains("ecchi") || sl.contains("erotica") || sl.contains("magical-sex-shift") ||
+                                tl.contains("ecchi") || tl.contains("erotica")) {
+                                continue;
+                            }
                         }
                         list.add(new GenreItem(title, slug));
                     }
@@ -1458,13 +1967,13 @@ public class MainActivity extends Activity {
             dialog.dismiss();
             etSearch.setText(":season fall 2024");
             etSearch.setSelection(etSearch.getText().length());
-            etSearch.requestFocus();
+            activateSearchInput();
             showCommandOutput("> tatap$ Silakan tentukan musim & tahun lalu tekan Enter", false);
         });
 
         dialog.findViewById(R.id.cmd_item_source).setOnClickListener(v -> {
             dialog.dismiss();
-            switchDefaultSource("otakudesu");
+            switchDefaultSource("");
         });
 
         dialog.findViewById(R.id.cmd_item_ping).setOnClickListener(v -> {
@@ -1486,7 +1995,7 @@ public class MainActivity extends Activity {
             dialog.dismiss();
             etSearch.setText(":gemini ");
             etSearch.setSelection(8);
-            etSearch.requestFocus();
+            activateSearchInput();
             showCommandOutput("> tatap$ Masukkan API key Google AI Studio (AQ...) Anda", false);
         });
 
@@ -1494,7 +2003,7 @@ public class MainActivity extends Activity {
             dialog.dismiss();
             etSearch.setText(":groq ");
             etSearch.setSelection(6);
-            etSearch.requestFocus();
+            activateSearchInput();
             showCommandOutput("> tatap$ Masukkan API key Groq Cloud (gsk_...) Anda", false);
         });
 
@@ -1502,7 +2011,7 @@ public class MainActivity extends Activity {
             dialog.dismiss();
             etSearch.setText(":ollama ");
             etSearch.setSelection(8);
-            etSearch.requestFocus();
+            activateSearchInput();
             showCommandOutput("> tatap$ Masukkan API key Ollama Cloud Anda", false);
         });
 
@@ -1515,6 +2024,41 @@ public class MainActivity extends Activity {
             dialog.dismiss();
             showTranslateLogsDialog();
         });
+
+        View itemSafeMode = dialog.findViewById(R.id.cmd_item_safemode);
+        if (itemSafeMode != null) {
+            TextView tvBadge = dialog.findViewById(R.id.tv_safemode_badge);
+            TextView tvDesc = dialog.findViewById(R.id.tv_safemode_desc);
+            SharedPreferences sp = getSharedPreferences("tatap_player_prefs", MODE_PRIVATE);
+            Runnable updateSafeModeUI = () -> {
+                boolean isEnabled = sp.getBoolean("pref_safemode", true);
+                if (tvBadge != null) {
+                    tvBadge.setText(isEnabled ? "AKTIF" : "MATI");
+                    tvBadge.setTextColor(isEnabled ? 0xFF38BDF8 : 0xFFEF4444);
+                }
+                if (tvDesc != null) {
+                    tvDesc.setText(isEnabled
+                        ? "Mode Aman AKTIF: Konten vulgar & ecchi disembunyikan dari katalog & pencarian (ketuk untuk matikan)"
+                        : "Mode Aman MATI: Konten ecchi & dewasa diizinkan tampil (ketuk untuk aktifkan)");
+                }
+            };
+            updateSafeModeUI.run();
+
+            itemSafeMode.setOnClickListener(v -> {
+                boolean current = sp.getBoolean("pref_safemode", true);
+                boolean newSafeMode = !current;
+                sp.edit().putBoolean("pref_safemode", newSafeMode).apply();
+                updateSafeModeUI.run();
+                if (newSafeMode) {
+                    HapticHelper.performHeavyClick(v);
+                }
+                tabDataCache.clear();
+                syncBackendSafeMode(newSafeMode);
+                showCommandOutput("> tatap$ :safemode " + (newSafeMode ? "on" : "off") + " [Mode Aman: " + (newSafeMode ? "AKTIF" : "MATI") + "]", false);
+                Toast.makeText(this, "Mode Aman: " + (newSafeMode ? "Aktif" : "Mati"), Toast.LENGTH_SHORT).show();
+                fetchData();
+            });
+        }
 
         View itemHaptic = dialog.findViewById(R.id.cmd_item_haptic);
         if (itemHaptic != null) {
@@ -1568,7 +2112,7 @@ public class MainActivity extends Activity {
             R.id.cmd_item_ping, R.id.cmd_item_ai, R.id.cmd_item_apikey,
             R.id.cmd_item_gemini, R.id.cmd_item_groq, R.id.cmd_item_ollama,
             R.id.cmd_item_model, R.id.cmd_item_logs,
-            R.id.cmd_item_haptic, R.id.cmd_item_update, R.id.cmd_item_clear
+            R.id.cmd_item_safemode, R.id.cmd_item_haptic, R.id.cmd_item_update, R.id.cmd_item_clear
         };
         for (int id : cmdItemIds) {
             View item = dialog.findViewById(id);
@@ -1914,8 +2458,20 @@ public class MainActivity extends Activity {
     }
 
     private void switchDefaultSource(String target) {
-        String s = target.toLowerCase().trim();
-        String newSrc = s.contains("otaku") ? "otakudesu" : "hianime";
+        String s = target != null ? target.toLowerCase().trim() : "";
+        final String newSrc;
+        if (s.isEmpty()) {
+            if ("hianime".equals(currentPreferredSource)) newSrc = "otakudesu";
+            else if ("otakudesu".equals(currentPreferredSource)) newSrc = "anichan";
+            else newSrc = "hianime";
+        } else if (s.contains("otaku")) {
+            newSrc = "otakudesu";
+        } else if (s.contains("anichan") || s.equals("ani")) {
+            newSrc = "anichan";
+        } else {
+            newSrc = "hianime";
+        }
+        currentPreferredSource = newSrc;
 
         showCommandOutput("> tatap$ :source " + newSrc + " [Mengalihkan sumber...]", false);
 
@@ -1930,8 +2486,12 @@ public class MainActivity extends Activity {
                 conn.getOutputStream().write(body.toString().getBytes("UTF-8"));
                 conn.getInputStream().close();
                 runOnUiThread(() -> {
-                    String label = newSrc.equals("otakudesu") ? "Otakudesu (Sub Indo)" : "HiAnime (Multi-Sub)";
+                    String label;
+                    if ("otakudesu".equals(newSrc)) label = "Otakudesu (Sub Indo)";
+                    else if ("anichan".equals(newSrc)) label = "AniChan (Sub Indo)";
+                    else label = "HiAnime (Multi-Sub)";
                     showCommandOutput("> tatap$ [OK] Sumber default berhasil diubah ke " + label, false);
+                    tabDataCache.clear();
                     fetchData();
                 });
             } catch (Exception e) {
@@ -1982,13 +2542,26 @@ public class MainActivity extends Activity {
 
     private void setTabAppearance(TextView tab, boolean active) {
         if (tab == null) return;
-        tab.setBackgroundResource(active ? R.drawable.bg_tab_active : R.drawable.bg_tab_inactive);
-        int color = active ? 0xFFFFFFFF : 0xFF8892B0;
+        boolean isVerticalSidebar = (layoutTabsContainer != null && layoutTabsContainer.getOrientation() == LinearLayout.VERTICAL);
+        if (isVerticalSidebar) {
+            tab.setBackgroundResource(R.drawable.bg_tv_sidebar_item);
+            tab.setSelected(active);
+        } else {
+            tab.setBackgroundResource(active ? R.drawable.bg_tab_active : R.drawable.bg_tab_inactive);
+        }
+        int color = active ? 0xFFFFFFFF : 0xFFA1A1A6;
         tab.setTextColor(color);
-        if (TvFocusHelper.isTv(this)) {
+        if (TvFocusHelper.isTv(this) && !isVerticalSidebar) {
             updateTvTabSpannable(tab, active);
         } else {
             tab.setCompoundDrawableTintList(android.content.res.ColorStateList.valueOf(color));
+        }
+        if (isVerticalSidebar) {
+            tab.setText(isTvSidebarExpanded ? getTabTitleString(tab) : "");
+            tab.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+            int tabPad = isTvSidebarExpanded ? dpToPx(10) : (dpToPx(48) - dpToPx(15)) / 2;
+            tab.setPadding(tabPad, 0, tabPad, 0);
+            tab.setCompoundDrawablePadding(isTvSidebarExpanded ? dpToPx(8) : 0);
         }
     }
 
@@ -2060,7 +2633,13 @@ public class MainActivity extends Activity {
         setTabAppearance(btnTabGenre, isGenre);
 
         if (btnTabJadwal != null && TvFocusHelper.isTv(this)) {
-            btnTabJadwal.setNextFocusDownId(isJadwal ? R.id.btn_day_senin : R.id.rv_anime_grid);
+            boolean isVerticalSidebar = (layoutTabsContainer != null && layoutTabsContainer.getOrientation() == LinearLayout.VERTICAL);
+            if (isVerticalSidebar) {
+                btnTabJadwal.setNextFocusDownId(R.id.btn_tab_riwayat);
+                btnTabJadwal.setNextFocusRightId(isJadwal ? R.id.btn_day_senin : R.id.rv_anime_grid);
+            } else {
+                btnTabJadwal.setNextFocusDownId(isJadwal ? R.id.btn_day_senin : R.id.rv_anime_grid);
+            }
         }
 
         if (layoutScheduleDays != null) {
@@ -2246,6 +2825,9 @@ public class MainActivity extends Activity {
         }
         btnPrevPage.setEnabled(currentPage > 1);
         btnPrevPage.setAlpha(currentPage > 1 ? 1.0f : 0.4f);
+        if (TvFocusHelper.isTv(this)) {
+            btnPrevPage.setFocusable(currentPage > 1);
+        }
 
         String title;
         String endpoint;
@@ -2292,12 +2874,20 @@ public class MainActivity extends Activity {
             endpoint = "/api/search?q=" + URLEncoder.encode(currentSearchQuery) + "&page=" + currentPage + "&limit=24";
         }
 
+        final boolean safeModeActive = isSafeModeEnabled();
+        final String finalEndpoint;
+        if (!endpoint.contains("?")) {
+            finalEndpoint = endpoint + "?safe_mode=" + (safeModeActive ? "1" : "0");
+        } else {
+            finalEndpoint = endpoint + "&safe_mode=" + (safeModeActive ? "1" : "0");
+        }
+
         tvSectionTitle.setText(title);
         if (layoutPagination != null) {
             layoutPagination.setVisibility("riwayat".equals(currentView) || "jadwal".equals(currentView) || "favorit".equals(currentView) ? View.GONE : View.VISIBLE);
         }
 
-        final String cacheKey = currentView + ":" + currentPage + ":" + currentGenre + ":" + currentSeasonName + ":" + currentSeasonYear + ":" + currentScheduleDay + ":" + filterCatalogSort + ":" + filterCatalogYear + ":" + filterCatalogSeason + ":" + filterCatalogMonth + ":" + filterCatalogType + ":" + filterCatalogStatus;
+        final String cacheKey = currentView + ":" + currentPage + ":" + currentGenre + ":" + currentSeasonName + ":" + currentSeasonYear + ":" + currentScheduleDay + ":" + filterCatalogSort + ":" + filterCatalogYear + ":" + filterCatalogSeason + ":" + filterCatalogMonth + ":" + filterCatalogType + ":" + filterCatalogStatus + ":safe=" + (safeModeActive ? "1" : "0");
         final boolean canCache = !"cari".equals(currentView) && !"riwayat".equals(currentView) && !"favorit".equals(currentView);
 
         // 1. Cek In-Memory Cache untuk peralihan instan (<1ms)
@@ -2319,7 +2909,7 @@ public class MainActivity extends Activity {
 
         new Thread(() -> {
             try {
-                String u = "http://127.0.0.1:8767" + endpoint;
+                String u = "http://127.0.0.1:8767" + finalEndpoint;
                 HttpURLConnection conn = (HttpURLConnection) new URL(u).openConnection();
                 conn.setConnectTimeout(12000);
                 conn.setReadTimeout(15000);
@@ -2345,8 +2935,13 @@ public class MainActivity extends Activity {
                     if (arr == null) arr = new JSONArray();
 
                     List<JSONObject> list = new ArrayList<>();
+                    boolean safeMode = isSafeModeEnabled();
                     for (int i = 0; i < arr.length(); i++) {
-                        list.add(arr.getJSONObject(i));
+                        JSONObject it = arr.getJSONObject(i);
+                        if (safeMode && isAdultAnime(it)) {
+                            continue;
+                        }
+                        list.add(it);
                     }
 
                     final int count = list.size();
@@ -2460,10 +3055,16 @@ public class MainActivity extends Activity {
             }
             btnNextPage.setEnabled(canNext);
             btnNextPage.setAlpha(canNext ? 1.0f : 0.4f);
+            if (TvFocusHelper.isTv(MainActivity.this)) {
+                btnNextPage.setFocusable(canNext);
+            }
         }
         if (btnPrevPage != null) {
             btnPrevPage.setEnabled(currentPage > 1);
             btnPrevPage.setAlpha(currentPage > 1 ? 1.0f : 0.4f);
+            if (TvFocusHelper.isTv(MainActivity.this)) {
+                btnPrevPage.setFocusable(currentPage > 1);
+            }
         }
         if (tvPageIndicator != null) {
             if (totalPages > 1) {
@@ -2650,5 +3251,30 @@ public class MainActivity extends Activity {
                 }).start();
             }
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (isFirstResume) {
+            isFirstResume = false;
+            return;
+        }
+        tabDataCache.remove("favorit_1");
+        tabDataCache.remove("riwayat_1");
+        if ("favorit".equals(currentView) || "riwayat".equals(currentView)) {
+            fetchData();
+        } else if (adapter != null) {
+            adapter.notifyDataSetChanged();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (tvSidebarAnimator != null) {
+            tvSidebarAnimator.cancel();
+            tvSidebarAnimator = null;
+        }
+        super.onDestroy();
     }
 }

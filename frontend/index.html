@@ -1,14 +1,20 @@
 <!DOCTYPE html>
-<html lang="id" style="background:#000000;color:#f0f3f6;">
+<html lang="id">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#07080a">
 <title>Tatap — nonton santai di lokal</title>
+<script>
+  (function(){
+    var t = localStorage.getItem("tatap_theme") || "dark";
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
 <link rel="stylesheet" href="/css/style.css">
 <link rel="icon" type="image/x-icon" href="/favicon.ico">
 <link rel="icon" type="image/png" sizes="192x192" href="/assets/icon-192.png">
 <link rel="apple-touch-icon" href="/assets/icon-512.png">
 </head>
-<body class="no-crt" style="background:#000000;color:#f0f3f6;">
+<body class="no-crt">
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none" id="tatap-icons">
   <defs>
     <!-- Brand Mark: Sleek Geometric Viewfinder Eye (Tatap) -->
@@ -20,9 +26,24 @@
     <symbol id="icon-menu" viewBox="0 0 24 24">
       <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
     </symbol>
+    <!-- Gear / Settings (Apple Flat UI) -->
+    <symbol id="icon-gear" viewBox="0 0 24 24">
+      <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" stroke="currentColor" stroke-width="2" fill="none"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </symbol>
+    <!-- Moon / Dark Mode -->
+    <symbol id="icon-moon" viewBox="0 0 24 24">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </symbol>
     <!-- Close: clean X -->
     <symbol id="icon-close" viewBox="0 0 24 24">
       <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+    </symbol>
+    <!-- More Options / Ellipsis Horizontal -->
+    <symbol id="icon-more-options" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="2.2" fill="currentColor"/>
+      <circle cx="19" cy="12" r="2.2" fill="currentColor"/>
+      <circle cx="5" cy="12" r="2.2" fill="currentColor"/>
     </symbol>
     <!-- Search: magnifying glass -->
     <symbol id="icon-search" viewBox="0 0 24 24">
@@ -207,7 +228,34 @@
   </defs>
 </svg>
 <div id="crt" aria-hidden="true"></div>
-<div id="bg-glow" aria-hidden="true"></div>
+<div id="bg-glow" aria-hidden="true">
+  <svg class="mac-wallpaper-svg" viewBox="0 0 1920 1080" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+    <defs>
+      <linearGradient id="macWaveGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="var(--mac-wave-1)" />
+        <stop offset="100%" stop-color="var(--mac-wave-1-end)" />
+      </linearGradient>
+      <linearGradient id="macWaveGrad2" x1="100%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="var(--mac-wave-2)" />
+        <stop offset="100%" stop-color="var(--mac-wave-2-end)" />
+      </linearGradient>
+      <linearGradient id="macWaveGrad3" x1="0%" y1="100%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="var(--mac-wave-3)" />
+        <stop offset="100%" stop-color="transparent" />
+      </linearGradient>
+    </defs>
+    <!-- macOS Fluid Ribbon Waves -->
+    <path d="M0 340 C 380 180, 720 540, 1160 360 C 1520 220, 1740 380, 1920 290 L 1920 1080 L 0 1080 Z" fill="url(#macWaveGrad1)" />
+    <path d="M0 720 C 460 580, 840 920, 1340 680 C 1680 520, 1820 640, 1920 560 L 1920 1080 L 0 1080 Z" fill="url(#macWaveGrad2)" />
+    <path d="M0 0 L 1920 0 L 1920 180 C 1580 320, 1260 140, 880 260 C 480 380, 220 120, 0 200 Z" fill="url(#macWaveGrad3)" />
+    <!-- Topographic Contour Lines -->
+    <path d="M0 320 C 380 160, 720 520, 1160 340 C 1520 200, 1740 360, 1920 270" stroke="var(--mac-contour-1)" stroke-width="1.2" stroke-linecap="round" />
+    <path d="M0 360 C 380 200, 720 560, 1160 380 C 1520 240, 1740 400, 1920 310" stroke="var(--mac-contour-1)" stroke-width="1" stroke-dasharray="5 5" opacity="0.6" />
+    <path d="M0 700 C 460 560, 840 900, 1340 660 C 1680 500, 1820 620, 1920 540" stroke="var(--mac-contour-2)" stroke-width="1.2" stroke-linecap="round" />
+    <path d="M0 740 C 460 600, 840 940, 1340 700 C 1680 540, 1820 660, 1920 580" stroke="var(--mac-contour-2)" stroke-width="1" stroke-dasharray="5 5" opacity="0.6" />
+    <path d="M0 220 C 220 140, 480 400, 880 280 C 1260 160, 1580 340, 1920 200" stroke="var(--mac-contour-3)" stroke-width="1" stroke-linecap="round" />
+  </svg>
+</div>
 
 <header class="tui-head">
   <div class="head-brand" id="head-brand" title="Kembali ke Beranda (Katalog Anime)" role="button" tabindex="0" aria-label="Tatap Beranda">
@@ -215,7 +263,7 @@
       <use href="#icon-brand-mark"/>
     </svg>
     <span class="brand-name">TATAP</span>
-    <span class="brand-ver" id="brand-ver">v2.10.3</span>
+    <span class="brand-ver" id="brand-ver">v2.12.2</span>
   </div>
   <nav class="nav-tabs-bar" id="nav-tabs-bar" role="navigation" aria-label="Navigasi Utama">
     <button class="nav-tab-btn active" data-view="katalog" id="tab-nav-katalog" tabindex="0">Katalog</button>
@@ -226,11 +274,59 @@
     <button class="nav-tab-btn" data-view="favorit" id="tab-nav-favorit" tabindex="0">Favorit</button>
   </nav>
   <div class="head-actions">
-    <button id="btn-drawer-head" class="icon-btn header-drawer-btn" title="Buka Menu & Navigasi (☰)" aria-label="Menu" tabindex="0">
-      <span class="drawer-btn-icon"><svg class="ui-icon"><use href="#icon-menu"/></svg></span>
+    <button id="btn-drawer-head" class="icon-btn header-drawer-btn" title="Pengaturan &amp; Menu" aria-label="Pengaturan" tabindex="0">
+      <span class="drawer-btn-icon"><svg class="ui-icon"><use href="#icon-gear"/></svg></span>
     </button>
   </div>
 </header>
+
+<!-- APPLE OPTIONS POPOVER (Desktop Utility Menu, Anti-Menu Ganda) -->
+<div id="apple-options-popover" class="apple-popover hidden" role="menu" aria-label="Menu Opsi Tatap">
+  <div class="popover-section">
+    <div class="popover-section-label">PENYARINGAN</div>
+    <button class="popover-item" id="pop-catalog-filter" role="menuitem" tabindex="0">
+      <svg class="ui-icon"><use href="#icon-filter"/></svg>
+      <span class="popover-item-label">Cross Filter Katalog</span>
+      <span class="popover-shortcut">⌘F</span>
+    </button>
+    <button class="popover-item" id="pop-genre-filter" role="menuitem" tabindex="0">
+      <svg class="ui-icon"><use href="#icon-tag"/></svg>
+      <span class="popover-item-label">Filter Genre</span>
+      <span class="popover-shortcut">⌘G</span>
+    </button>
+  </div>
+  <div class="popover-divider"></div>
+  <div class="popover-section">
+    <div class="popover-section-label">PEMUTARAN &amp; SUMBER</div>
+    <button class="popover-item" id="pop-switch-source" role="menuitem" tabindex="0">
+      <svg class="ui-icon"><use href="#icon-switch"/></svg>
+      <span class="popover-item-label">Sumber Video</span>
+      <span class="popover-value" id="pop-src-badge">HiAnime</span>
+    </button>
+  </div>
+  <div class="popover-divider"></div>
+  <div class="popover-section">
+    <div class="popover-section-label">TAMPILAN</div>
+    <button class="popover-item" id="pop-toggle-theme" role="menuitem" tabindex="0">
+      <svg class="ui-icon" id="pop-theme-icon"><use href="#icon-sun"/></svg>
+      <span class="popover-item-label" id="pop-theme-label">Mode Terang</span>
+      <span class="popover-shortcut">⌘T</span>
+    </button>
+  </div>
+  <div class="popover-divider"></div>
+  <div class="popover-section">
+    <div class="popover-section-label">APLIKASI</div>
+    <button class="popover-item highlight" id="pop-update" role="menuitem" tabindex="0">
+      <svg class="ui-icon"><use href="#icon-update"/></svg>
+      <span class="popover-item-label">Periksa Pembaruan</span>
+    </button>
+    <button class="popover-item" id="pop-help" role="menuitem" tabindex="0">
+      <svg class="ui-icon"><use href="#icon-help"/></svg>
+      <span class="popover-item-label">Bantuan &amp; Perintah</span>
+      <span class="popover-shortcut">?</span>
+    </button>
+  </div>
+</div>
 
 <main>
   <section id="continue-sec" class="hidden" style="display:none">
@@ -263,8 +359,8 @@
       <button id="pg-next" class="pager-btn" title="Halaman berikutnya (])">Berikutnya <svg class="ui-icon"><use href="#icon-next"/></svg></button>
     </div>
     <div id="empty-state" class="empty">
-      <div class="empty-art">[ ]</div>
-      <p>ketik judul lalu <b>Enter</b>. <span class="dim">(:bantuan untuk daftar perintah, :update untuk cek pembaruan)</span></p>
+      <div class="empty-art"><svg class="ui-icon empty-icon" viewBox="0 0 24 24" style="width:36px;height:36px;color:var(--accent);opacity:0.85;"><use href="#icon-brand-mark"/></svg></div>
+      <p>Ketik judul anime lalu tekan <b>Enter</b> atau <b>/</b> untuk mencari. <span class="dim">(:bantuan untuk daftar perintah)</span></p>
     </div>
   </section>
 </main>
@@ -276,7 +372,7 @@
     <div class="drawer-head">
       <div class="drawer-title">
         <span class="brand-name">TATAP</span>
-        <span class="dim small">v2.10.3</span>
+        <span class="dim small">v2.12.2</span>
       </div>
       <button class="icon-btn big" id="drawer-close" title="Tutup Menu (Esc)"><svg class="ui-icon"><use href="#icon-close"/></svg></button>
     </div>
@@ -342,6 +438,15 @@
           <span class="drawer-item-icon"><svg class="ui-icon"><use href="#icon-help"/></svg></span>
           <span class="drawer-item-label">Daftar Perintah Terminal</span>
           <span class="drawer-item-badge">:bantuan</span>
+        </button>
+      </div>
+
+      <div class="drawer-group">
+        <div class="drawer-group-label">TAMPILAN &amp; TEMA</div>
+        <button class="drawer-item" id="drawer-toggle-theme">
+          <span class="drawer-item-icon"><svg class="ui-icon" id="drawer-theme-icon"><use href="#icon-sun"/></svg></span>
+          <span class="drawer-item-label" id="drawer-theme-label">Mode Terang</span>
+          <span class="drawer-item-badge" id="drawer-theme-badge">Gelap</span>
         </button>
       </div>
 
@@ -570,22 +675,22 @@
 
 <footer class="bottom-bar">
   <div class="bottom-search-row">
-    <div class="search-input-wrap" id="search-input-wrap" tabindex="0" role="searchbox" aria-label="Cari anime">
+    <div class="search-input-wrap" id="search-input-wrap" role="search" aria-label="Cari anime">
       <svg class="ui-icon search-lead-icon" aria-hidden="true"><use href="#icon-search"/></svg>
-      <span class="prompt-ps1">tatap$</span>
-      <input id="cmd" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="cari judul anime, atau :perintah (cth: :update, :musim, :bantuan)" readonly>
-      <span class="caret" aria-hidden="true"></span>
-      <kbd class="search-kbd-hint" title="Pintasan keyboard: tekan '/' untuk cari">/</kbd>
+      <input id="cmd" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="Cari anime, genre, atau tekan ⌘K untuk perintah..." readonly>
+      <button type="button" id="search-clear-btn" class="search-clear-btn hidden" title="Hapus pencarian (Esc)" aria-label="Hapus teks">
+        <svg class="ui-icon"><use href="#icon-close"/></svg>
+      </button>
+      <kbd class="search-kbd-hint" title="Pintasan keyboard: ⌘K atau /">⌘K</kbd>
     </div>
   </div>
   <div class="statusbar">
     <div class="sb-shortcuts">
+      <span><b>⌘K</b> cari</span>
       <span><b>↑↓←→</b> pilih</span>
       <span><b>enter</b> buka</span>
-      <span><b>tab</b> ganti tampilan</span>
       <span><b>[ ]</b> halaman</span>
       <span><b>esc</b> reset</span>
-      <span><b>:update</b> cek rilis</span>
     </div>
     <div class="sb-meta">
       <button id="sb-source" class="sb-source" title="Sumber streaming aktif. Klik atau ketik :switch untuk beralih">src: hianime <svg class="ui-icon" style="margin-left:3px;"><use href="#icon-switch"/></svg></button>
@@ -666,7 +771,7 @@
     <div class="ambient-stage">
       <div id="ambient-fallback" aria-hidden="true"></div>
       <canvas id="ambient" width="96" height="54" aria-hidden="true"></canvas>
-      <video id="vid" controls playsinline preload="auto"></video>
+      <video id="vid" controls controlsList="nodownload nofullscreen noremoteplayback" disablePictureInPicture playsinline preload="auto"></video>
       <div id="pm-gesture-stage" class="gesture-stage" aria-hidden="true">
         <div id="pm-ripple-left" class="gesture-ripple left"><span class="ripple-icon"><svg class="ui-icon"><use href="#icon-rewind"/></svg></span><span class="ripple-text">-10s</span></div>
         <div id="pm-ripple-right" class="gesture-ripple right"><span class="ripple-icon"><svg class="ui-icon"><use href="#icon-forward"/></svg></span><span class="ripple-text">+10s</span></div>
@@ -690,9 +795,14 @@
       <div id="pm-subs-wrap" class="sub-picker hidden" title="Pilih Subtitle">
         <span class="sub-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-subtitles"/></svg></span>
         <select id="pm-subs" aria-label="Subtitle"></select>
-        <input type="file" id="pm-custom-sub-file" accept=".vtt,.srt" style="display:none">
+        <input type="file" id="pm-custom-sub-file" accept=".vtt,.srt,.ass,.ssa" style="display:none">
         <div class="sub-size" role="group" aria-label="Ukuran subtitle">
           <button data-subsize="s" title="Subtitle kecil">S</button><button data-subsize="m" title="Subtitle sedang">M</button><button data-subsize="l" title="Subtitle besar">L</button>
+        </div>
+        <div class="sub-delay-ctrl" role="group" aria-label="Sinkronisasi waktu subtitle">
+          <button type="button" id="pm-sub-delay-minus" title="Mundurkan subtitle -0.25s (Pintasan: ,)">-</button>
+          <span id="pm-sub-delay-val" class="sub-delay-val" title="Klik untuk reset offset subtitle ke 0.0s">0.0s</span>
+          <button type="button" id="pm-sub-delay-plus" title="Majukan subtitle +0.25s (Pintasan: .)">+</button>
         </div>
         <button id="pm-translate" class="sub-translate" data-on="0" aria-label="Toggle translate ID">
           <svg class="ui-icon"><use href="#icon-globe"/></svg><span class="tr-label">ID</span>
@@ -700,7 +810,7 @@
       </div>
       <button id="pm-next" title="Episode berikutnya (n)">NEXT <svg class="ui-icon"><use href="#icon-step-next"/></svg></button>
     </div>
-    <div class="player-hint dim small">Space play/pause · ←/→ seek 5 dtk · f fullscreen · [ / ] kecepatan · n/p ganti episode · m mute · Esc tutup</div>
+    <div class="player-hint dim small">Space play/pause · ←/→ seek 5 dtk · , / . sinkronisasi sub · f fullscreen · [ / ] kecepatan · n/p ganti episode · m mute · Esc tutup</div>
   </div>
 </div>
 

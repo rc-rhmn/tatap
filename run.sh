@@ -9,4 +9,9 @@ if curl -s --max-time 2 -o /dev/null -x http://127.0.0.1:8899 https://www.cloudf
 else
   unset WARP_PROXY
 fi
-exec ./venv/bin/python backend/main.py
+
+PYTHON_BIN="./venv/bin/python"
+if [ ! -x "$PYTHON_BIN" ]; then
+  PYTHON_BIN="python3"
+fi
+exec "$PYTHON_BIN" backend/main.py

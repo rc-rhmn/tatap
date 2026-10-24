@@ -3,12 +3,43 @@ var cur = {slug:"", title:"", ep:1, mode:"sub", quality:"best", res:null, eps:[]
             activeSub:null,       // URL track subtitle yang sedang aktif (live switch)
             cues:[],              // cue subtitle hasil parse VTT (render overlay milik app)
             subSize:"m",          // ukuran subtitle overlay: s|m|l
+            subDelay:0.0,         // sinkronisasi waktu subtitle (detik, mis. -0.5, +0.5)
             translate:false,      // toggle translate subtitle Indonesia (persist localStorage)
-            eps_counter:""
+            eps_counter:"",
+            intro:null,           // {start, end} opening
+            outro:null,           // {start, end} ending
+            hasAutoSkippedIntro:false,
+            hasAutoSkippedOutro:false,
+            activeSkipTarget:0,
+            autoSkip:false
            };
+window.settings = window.settings || {};
 var _playTokenCounter = 0;
 var PLAYBACK_SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 var currentPlaybackSpeed = 1.0;
+
+function setSubDelay(sec, notify){
+  var val = parseFloat(sec);
+  if(isNaN(val)) val = 0.0;
+  val = Math.round(val * 4) / 4; // presisi 0.25s
+  val = Math.max(-30.0, Math.min(30.0, val));
+  cur.subDelay = val;
+  var el = $("pm-sub-delay-val");
+  if(el){
+    var sign = val > 0 ? "+" : "";
+    el.textContent = sign + val.toFixed(val % 0.5 === 0 ? 1 : 2) + "s";
+    el.classList.toggle("active", Math.abs(val) > 0.01);
+  }
+  paintCue();
+  if(notify){
+    var signStr = val > 0 ? "+" : "";
+    toast("Sinkronisasi Subtitle: " + signStr + val.toFixed(2) + " detik", 1500);
+  }
+}
+
+function adjustSubDelay(delta){
+  setSubDelay((cur.subDelay || 0.0) + delta, true);
+}
 
 function setPlaySpeed(spd, notify){
   var num = parseFloat(spd);
@@ -101,10 +132,11 @@ var TvNavigationManager = (function(){
     for(var i = 0; i < oldFocused.length; i++){
       if(oldFocused[i] !== el) oldFocused[i].classList.remove("tv-focus");
     }
-    el.classList.add("tv-focus");
+    if(isTvMode()){
+      el.classList.add("tv-focus");
+    }
     currentFocusedElement = el;
     if(zone) activeZone = zone;
-    _isTvDetected = true;
 
     if(options.scroll !== false){
       try {
@@ -520,7 +552,7 @@ function loadPrefs(){
 }
 
 function updateBookmarkBtn(isBookmarked){
-  var btn = $("tm-bookmark-btn");
+  var btn = $("tm-bookmark-btn") || $("bookmarkBtn");
   if(!btn) return;
   btn.classList.toggle("bookmarked", !!isBookmarked);
   var starSvg = isBookmarked ? '<svg class="ui-icon"><use href="#icon-star-filled"/></svg>' : '<svg class="ui-icon"><use href="#icon-star"/></svg>';
@@ -540,7 +572,7 @@ function checkModalBookmark(slug){
 function toggleModalBookmark(){
   var slug = cur.slug;
   if(!slug) return;
-  var btn = $("tm-bookmark-btn");
+  var btn = $("tm-bookmark-btn") || $("bookmarkBtn");
   var currentlyBookmarked = btn && btn.classList.contains("bookmarked");
   var nextState = !currentlyBookmarked;
   updateBookmarkBtn(nextState);
@@ -552,18 +584,30 @@ function toggleModalBookmark(){
       type: cur.type || "TV",
       score: 0.0
     }).then(function(){
-      if(window.Tui && window.Tui.state && window.Tui.state.view === "favorit"){
+      if(window.Tui && ((typeof window.Tui.view === "function" && window.Tui.view() === "favorit") || (typeof window.Tui.state === "function" && window.Tui.state().view === "favorit"))){
         window.Tui.setView("favorit");
       }
     });
   } else {
     window.Tatap.removeBookmark(slug).then(function(){
-      if(window.Tui && window.Tui.state && window.Tui.state.view === "favorit"){
+      if(window.Tui && ((typeof window.Tui.view === "function" && window.Tui.view() === "favorit") || (typeof window.Tui.state === "function" && window.Tui.state().view === "favorit"))){
         window.Tui.setView("favorit");
+      }
+      // Unbookmark Subtitle Auto-Recovery:
+      // Jika saat unbookmark episode sedang aktif dengan cur.mode === "sub" tetapi subtitle kosong (cur.cues.length === 0),
+      // panggil ulang pemuatan episode/subtitle dengan parameter forceRefresh=true (refresh=1)
+      var pm = $("player-modal");
+      if(pm && !pm.classList.contains("hidden") && cur.mode === "sub" && (!cur.cues || cur.cues.length === 0) && cur.ep){
+        var curTime = 0;
+        var v = $("vid");
+        if(v && !isNaN(v.currentTime)) curTime = v.currentTime;
+        openPlayer(cur.ep, curTime, true);
       }
     });
   }
 }
+var toggleBookmark = toggleModalBookmark;
+window.toggleBookmark = toggleModalBookmark;
 
 function renderDetailMeta(meta){
   var box = $("tm-detail-meta");
@@ -621,7 +665,15 @@ function renderDetailMeta(meta){
   if(infoEl){
     var parts = [];
     if(meta.studio) parts.push("Studio: " + meta.studio);
-    if(meta.season) parts.push(meta.season);
+    if(meta.season){
+      var sTxt = meta.season;
+      if(meta.year && sTxt.indexOf(String(meta.year)) === -1){
+        sTxt += " " + meta.year;
+      }
+      parts.push(sTxt);
+    } else if(meta.year){
+      parts.push(String(meta.year));
+    }
     if(meta.source) parts.push("Sumber: " + meta.source);
     if(parts.length > 0){
       infoEl.textContent = parts.join(" · ");
@@ -715,6 +767,16 @@ function openTitle(slug,title,poster,type,epsCounter,meta){
   cur.watched={};
   cur.activeEpRange=null;
   cur.meta=meta||null;
+  cur.res=null; // Bersihkan stream cache lama agar snapshot bookmark tidak menimpa state stream
+  if(meta && meta.sub){
+    cur.subCount = meta.sub; // Simpan metadata jumlah episode subbed ke properti terpisah
+  }
+  if(meta && (meta.mode === "dub" || meta.mode === "sub")){
+    cur.mode = meta.mode;
+  } else if(!cur.mode || (cur.mode !== "dub" && cur.mode !== "sub")){
+    cur.mode = "sub";
+  }
+  syncSeg("mode-seg", "mode", cur.mode);
   setPlaySpeed(1.0, false);
   renderSourceUI();
   $("tm-title").textContent=title;
@@ -1218,6 +1280,13 @@ function openPlayer(ep, resumeTime, forceRefresh){
   }
 
   cur.ep=ep;
+  cur.intro=null;
+  cur.outro=null;
+  cur.hasAutoSkippedIntro=false;
+  cur.hasAutoSkippedOutro=false;
+  cur.activeSkipTarget=0;
+  var initSkipBtn=$("pm-skip-btn");
+  if(initSkipBtn) initSkipBtn.classList.add("hidden");
   cur.playerOpenedAt=Date.now();
   var token = ++_playTokenCounter;
   cur.playToken = token;
@@ -1243,19 +1312,26 @@ function openPlayer(ep, resumeTime, forceRefresh){
         return;
       }
       $("pm-spinner").classList.add("hidden");
-      $("pm-status").innerHTML="ERROR: "+esc(r && r.error ? r.error : "gagal resolve stream")+" · <button id='pm-retry-btn' class='server-badge' style='background:rgba(255,255,255,0.1);border:1px solid var(--cyan,#00dbeb);color:var(--cyan,#00dbeb);cursor:pointer;border-radius:4px;padding:2px 8px;font:inherit;'>Coba Lagi ↻</button>";
+      $("pm-status").innerHTML="ERROR: "+esc(r && r.error ? r.error : "gagal resolve stream")+" · <button id='pm-retry-btn' class='server-badge' style='background:rgba(255,255,255,0.1);border:1px solid var(--accent);color:var(--accent);cursor:pointer;border-radius:4px;padding:2px 8px;font:inherit;'>Coba Lagi ↻</button>";
       var rb=$("pm-retry-btn"); if(rb) rb.onclick=function(){ openPlayer(ep, resumeTime, true); };
       toast("Gagal resolve stream: "+(r && r.error ? r.error : "unknown"));
       return;
     }
     cur.res=r.data;
-    cur.intro=(r.data&&r.data.intro)||{start:0,end:0};
-    cur.outro=(r.data&&r.data.outro)||{start:0,end:0};
+    if(r.data && r.data.is_failover){
+      toast("CDN "+(r.data.failover_from==="otakudesu"?"Otakudesu":"HiAnime")+" tidak aktif · Otomatis memutar cadangan AniChan");
+    }
+    function isValidSkipInterval(inv){
+      return !!(inv && typeof inv.start === "number" && typeof inv.end === "number" &&
+                inv.end > inv.start && inv.end > 0 && (inv.end - inv.start) >= 5.0);
+    }
+    cur.intro=(r.data && isValidSkipInterval(r.data.intro)) ? r.data.intro : null;
+    cur.outro=(r.data && isValidSkipInterval(r.data.outro)) ? r.data.outro : null;
     cur.activeSkipTarget=0;
     cur.source=r.data.source||"hianime";
     var picked=r.data.picked||(r.data.variants&&r.data.variants[0])||{q:"HD",url:r.data.master||""};
     var srvText=r.data.server||"";
-    $("pm-meta").innerHTML="ep "+ep+" · "+cur.mode.toUpperCase()+" · "+picked.q+" · <button id='pm-source-btn' class='server-badge' title='Klik untuk switch sumber' style='background:none;border:1px solid rgba(255,255,255,0.25);color:var(--cyan,#00dbeb);cursor:pointer;border-radius:4px;padding:1px 6px;font:inherit;'>"+esc(srvText)+" ⇄</button>"+(r.data.cached?" · cached":" · "+(Date.now()-t0)+"ms");
+    $("pm-meta").innerHTML="ep "+ep+" · "+cur.mode.toUpperCase()+" · "+picked.q+" · <button id='pm-source-btn' class='server-badge' title='Klik untuk switch sumber' style='background:none;border:1px solid rgba(255,255,255,0.25);color:var(--accent);cursor:pointer;border-radius:4px;padding:1px 6px;font:inherit;'>"+esc(srvText)+" ⇄</button>"+(r.data.cached?" · cached":" · "+(Date.now()-t0)+"ms");
     var srvBtn=$("pm-source-btn");
     if(srvBtn){
       srvBtn.onclick=function(){
@@ -1264,8 +1340,13 @@ function openPlayer(ep, resumeTime, forceRefresh){
       };
     }
     renderVariants();
-    cur.activeSub = pickSubtitleUrl(r.data.subtitles || [], cur.subLang);
-    renderSubtitles(r.data.subtitles || [], cur.activeSub);
+    var subs = (r.data.subtitles && Array.isArray(r.data.subtitles)) ? r.data.subtitles : [];
+    if(!subs.length && r.data.sub && typeof r.data.sub === "string" && !/^\d+$/.test(r.data.sub.trim())){
+      subs = [{url: r.data.sub, lang: r.data.sub_lang || "English", label: r.data.sub_lang || "English", default: true}];
+      r.data.subtitles = subs;
+    }
+    cur.activeSub = pickSubtitleUrl(subs, cur.subLang);
+    renderSubtitles(subs, cur.activeSub);
     if(cur.activeSub){
       prefetchSubtitleTrack(cur.activeSub, r.data.referer);
     }
@@ -1288,7 +1369,7 @@ function openPlayer(ep, resumeTime, forceRefresh){
       return;
     }
     $("pm-spinner").classList.add("hidden");
-    $("pm-status").innerHTML="KONEKSI GAGAL: "+esc(err&&err.message||err)+" · <button id='pm-retry-btn-err' class='server-badge' style='background:rgba(255,255,255,0.1);border:1px solid var(--cyan,#00dbeb);color:var(--cyan,#00dbeb);cursor:pointer;border-radius:4px;padding:2px 8px;font:inherit;'>Coba Lagi ↻</button>";
+    $("pm-status").innerHTML="KONEKSI GAGAL: "+esc(err&&err.message||err)+" · <button id='pm-retry-btn-err' class='server-badge' style='background:rgba(255,255,255,0.1);border:1px solid var(--accent);color:var(--accent);cursor:pointer;border-radius:4px;padding:2px 8px;font:inherit;'>Coba Lagi ↻</button>";
     var rb2=$("pm-retry-btn-err"); if(rb2) rb2.onclick=function(){ openPlayer(ep, resumeTime, true); };
     toast("Koneksi gagal saat resolve: "+(err&&err.message||err));
   });
@@ -1368,8 +1449,8 @@ function pickSubtitleUrl(subtitles, preferLang){
       }
     }
     // Kalau prefer Indonesian / translate on dan tidak ada track ID asli:
-    // auto-pilih track GTX+, AI Fansub, atau Pure GTX translate dari track English.
-    if((low==="indonesian"||low==="id"||low==="indonesian (gtx+)"||low==="indonesian (aigtx)"||low==="indonesian (ai)"||low==="indonesian (gtx)"||cur.translate)){
+    // auto-pilih track Smart Fansub & Merge atau AI Fansub dari track English.
+    if((low==="indonesian"||low==="id"||low==="indonesian (smart fansub & merge)"||low==="indonesian (opensubtitles)"||low==="indonesian (gtx+)"||low==="indonesian (gtx+ bilingual)"||low==="indonesian (aigtx)"||low==="indonesian (ai)"||low==="indonesian (gtx)"||low==="indonesian (opensubtitles bilingual)"||cur.translate)){
       var enTrack=null;
       for(var e=0;e<subtitles.length;e++){
         if(isExactEnglishSubTrack(subtitles[e])){
@@ -1384,9 +1465,8 @@ function pickSubtitleUrl(subtitles, preferLang){
         }
       }
       if(enTrack&&enTrack.url){
-        if(low==="indonesian (gtx+)"||low==="indonesian (aigtx)") return "gtx+:"+enTrack.url;
         if(low==="indonesian (ai)") return "ai:"+enTrack.url;
-        return "gtx:"+enTrack.url;
+        return "os_merge:"+enTrack.url;
       }
     }
   }
@@ -1470,23 +1550,15 @@ function renderSubtitles(subtitles, activeUrl){
   }
   var englishTrack=exactEnTrack||anyEnTrack;
   if(englishTrack&&englishTrack.url){
-    var gtxOpt=document.createElement("option");
-    gtxOpt.value="gtx:"+englishTrack.url;
-    gtxOpt.textContent="Indonesian (Google GTX)";
-    gtxOpt.setAttribute("data-gtx-source",englishTrack.url);
-    if(activeUrl&&(activeUrl===gtxOpt.value||(activeUrl.indexOf("gtx:")===0&&activeUrl.slice(4)===englishTrack.url))){
-      gtxOpt.selected=true;
+    // Smart Fansub & Merge: Cari AnimeTosho ID -> OpenSubtitles ID -> Builtin + GTX+,
+    // seluruhnya terintegrasi Smart Lexicon + Smart Scene Detector + Smart Merge.
+    var osMergeOpt=document.createElement("option");
+    osMergeOpt.value="os_merge:"+englishTrack.url;
+    osMergeOpt.textContent="Indonesian (Smart Fansub & Merge)";
+    if(activeUrl&&(activeUrl===osMergeOpt.value||activeUrl.indexOf("os_merge:")===0||activeUrl.indexOf("gtx+:")===0||activeUrl.indexOf("gtx:")===0||activeUrl.indexOf("os_dual:")===0||activeUrl.indexOf("gtx+_dual:")===0)){
+      osMergeOpt.selected=true;
     }
-    sel.appendChild(gtxOpt);
-
-    var gtxplusOpt=document.createElement("option");
-    gtxplusOpt.value="gtx+:"+englishTrack.url;
-    gtxplusOpt.textContent="Indonesian (GTX+)";
-    gtxplusOpt.setAttribute("data-gtxplus-source",englishTrack.url);
-    if(activeUrl&&(activeUrl===gtxplusOpt.value||(activeUrl.indexOf("gtx+:")===0&&activeUrl.slice(5)===englishTrack.url)||(activeUrl.indexOf("aigtx:")===0&&activeUrl.slice(6)===englishTrack.url))){
-      gtxplusOpt.selected=true;
-    }
-    sel.appendChild(gtxplusOpt);
+    sel.appendChild(osMergeOpt);
 
     var aiOpt=document.createElement("option");
     aiOpt.value="ai:"+englishTrack.url;
@@ -1498,10 +1570,15 @@ function renderSubtitles(subtitles, activeUrl){
     sel.appendChild(aiOpt);
   }
 
+  var optOsSearch=document.createElement("option");
+  optOsSearch.value="__opensubtitles_search__";
+  optOsSearch.textContent="🔍 [+] Cari Subtitle Bahasa Indonesia (AnimeTosho & OpenSubtitles)...";
+  sel.appendChild(optOsSearch);
+
   // Opsi custom subtitle eksternal
   var optCustomFile=document.createElement("option");
   optCustomFile.value="__custom_file__";
-  optCustomFile.textContent="📁 [+] Muat File Subtitle (.srt / .vtt)...";
+  optCustomFile.textContent="📁 [+] Muat File Subtitle (.srt / .vtt / .ass)...";
   sel.appendChild(optCustomFile);
 
   var optCustomUrl=document.createElement("option");
@@ -1553,7 +1630,7 @@ function renderSubtitles(subtitles, activeUrl){
     }
     if(url==="__custom_url__"){
       sel.value=activeUrl||"";
-      var inUrl=prompt("Masukkan URL Subtitle (.srt / .vtt):");
+      var inUrl=prompt("Masukkan URL Subtitle (.srt / .vtt / .ass):");
       if(inUrl&&inUrl.trim()){
         inUrl=inUrl.trim();
         toast("Mengunduh subtitle dari URL...");
@@ -1575,13 +1652,20 @@ function renderSubtitles(subtitles, activeUrl){
       return;
     }
 
+    if(url==="__opensubtitles_search__"){
+      sel.value=activeUrl||"";
+      openOpenSubtitlesPicker(subtitles, englishTrack ? englishTrack.url : "");
+      return;
+    }
+
     cur.activeSub=url||null;
-    // Track GTX+: synthetic URL "gtx+:<url>" (atau legacy "aigtx:<url>").
-    if(url&&(url.indexOf("gtx+:")===0||url.indexOf("aigtx:")===0)){
+    // Track Smart Fansub & Merge: synthetic URL "os_merge:<url>"
+    if(url&&(url.indexOf("os_merge:")===0||url.indexOf("os_dual:")===0||url.indexOf("gtx+:")===0||url.indexOf("gtx:")===0||url.indexOf("gtx+_dual:")===0||url.indexOf("aigtx:")===0)){
       cur.translate=false;
-      switchSubtitleTrack(url,"id");
-      cur.subLang="Indonesian (GTX+)";
-      window.Tatap.setSetting({sub_lang:"Indonesian (GTX+)"}).then(function(){}).catch(function(){});
+      var cleanTarget="os_merge:"+url.replace(/^(os_merge|os_dual|gtx\+_dual|gtx\+|gtx|aigtx):/,"");
+      switchSubtitleTrack(cleanTarget,"id");
+      cur.subLang="Indonesian (Smart Fansub & Merge)";
+      window.Tatap.setSetting({sub_lang:cur.subLang}).then(function(){}).catch(function(){});
       return;
     }
     // Track AI Fansub: synthetic URL "ai:<url>". Extract realUrl + panggil translate.
@@ -1592,14 +1676,6 @@ function renderSubtitles(subtitles, activeUrl){
       switchSubtitleTrack(url,"id");
       cur.subLang="Indonesian (AI)";
       window.Tatap.setSetting({sub_lang:"Indonesian (AI)"}).then(function(){}).catch(function(){});
-      return;
-    }
-    // Track Google GTX: synthetic URL "gtx:<url>".
-    if(url&&url.indexOf("gtx:")===0){
-      cur.translate=false;
-      switchSubtitleTrack(url,"id");
-      cur.subLang="Indonesian (GTX)";
-      window.Tatap.setSetting({sub_lang:"Indonesian (GTX)"}).then(function(){}).catch(function(){});
       return;
     }
     // Update <track> live tanpa pause/reload video.
@@ -1623,11 +1699,91 @@ function renderSubtitles(subtitles, activeUrl){
   };
 }
 
+function closeOpenSubtitlesPicker(){
+  var old=document.getElementById("os-picker");
+  if(old&&old.parentNode)old.parentNode.removeChild(old);
+}
+
+function openOpenSubtitlesPicker(subtitles, baseSubUrl){
+  // Daftar rilis subtitle khusus Bahasa Indonesia (AnimeTosho & OpenSubtitles) untuk episode aktif.
+  // Rilis yang dipilih diunduh lalu di-merge dengan subtitle bawaan anime (baseSubUrl) di backend.
+  closeOpenSubtitlesPicker();
+  var host=document.querySelector(".ambient-stage")||document.body;
+  var box=document.createElement("div");
+  box.id="os-picker";
+  box.className="os-picker";
+  box.setAttribute("role","dialog");
+  box.innerHTML='<div class="os-picker-card"><div class="os-picker-head"><span>Subtitle Bahasa Indonesia · Ep '+esc(String(cur.ep||1))+'</span><button type="button" class="os-picker-close" aria-label="Tutup">✕</button></div><div class="os-picker-body"><div class="os-picker-status">Mencari subtitle di AnimeTosho & OpenSubtitles...</div></div></div>';
+  host.appendChild(box);
+  var body=box.querySelector(".os-picker-body");
+  box.querySelector(".os-picker-close").onclick=closeOpenSubtitlesPicker;
+  box.addEventListener("click",function(e){ if(e.target===box) closeOpenSubtitlesPicker(); });
+  box.addEventListener("keydown",function(e){
+    if(e.key==="Escape"){ e.preventDefault(); e.stopPropagation(); closeOpenSubtitlesPicker(); }
+  });
+  var token=cur.playToken;
+  window.Tatap.searchOpenSubtitles(cur.title, cur.slug, cur.ep, "id").then(function(res){
+    if(cur.playToken!==token||!document.getElementById("os-picker"))return;
+    var items=(res&&res.success&&res.data&&res.data.items)||[];
+    if(!items.length){
+      body.innerHTML='<div class="os-picker-status">Belum ada subtitle Bahasa Indonesia untuk episode ini di AnimeTosho maupun OpenSubtitles.</div>';
+      return;
+    }
+    body.innerHTML="";
+    var note=document.createElement("div");
+    note.className="os-picker-status";
+    note.textContent=baseSubUrl?"Pilih subtitle Bahasa Indonesia — akan di-merge otomatis dengan subtitle bawaan (sync waktu + isi sign/OP/ED).":"Pilih subtitle Bahasa Indonesia (stream ini tidak punya subtitle bawaan untuk di-merge).";
+    body.appendChild(note);
+    items.slice(0,25).forEach(function(it){
+      var btn=document.createElement("button");
+      btn.type="button";
+      btn.className="os-picker-item";
+      var provTag = (it.source || (it.id && it.id.indexOf("at_") === 0 ? "AnimeTosho" : "OpenSubtitles"));
+      btn.innerHTML='<span class="os-lang">'+esc(provTag)+'</span><span class="os-name">'+esc(it.filename||("Subtitle #"+it.file_id))+'</span>'+(it.downloads?'<span class="os-dl">'+esc(String(it.downloads))+'×</span>':'');
+      btn.onclick=function(){
+        body.innerHTML='<div class="os-picker-status">Mengunduh & merge subtitle Bahasa Indonesia...</div>';
+        window.Tatap.mergeOpenSubtitle({
+          file_id:it.file_id, os_url:it.url, backup_url:it.backup_url,
+          filename:it.filename, cand_lang:"id", lang:"id", source:provTag,
+          base_sub_url:baseSubUrl||"", referer:(cur.res&&cur.res.referer)||"", merge_mode:"hybrid"
+        }).then(function(r){
+          closeOpenSubtitlesPicker();
+          if(cur.playToken!==token)return;
+          if(r&&r.success&&r.data){
+            var st=r.data.stats||{};
+            toast("Subtitle "+provTag+" dimuat: "+r.data.cues_count+" baris (offset "+(st.offset||0)+"s, "+(st.gap_filled||0)+" sign/OP/ED dari bawaan)",5000);
+            var newTrack={label:r.data.label,url:r.data.url,lang:r.data.lang};
+            subtitles.push(newTrack);
+            cur.activeSub=r.data.url;
+            renderSubtitles(subtitles,r.data.url);
+            switchSubtitleTrack(r.data.url);
+          }else{
+            toast("Gagal merge subtitle: "+((r&&r.error)||"tidak diketahui"),5000);
+          }
+        }).catch(function(err){
+          closeOpenSubtitlesPicker();
+          toast("Gagal merge subtitle: "+err,5000);
+        });
+      };
+      body.appendChild(btn);
+    });
+    var first=body.querySelector(".os-picker-item");
+    if(first)try{first.focus();}catch(_){}
+  }).catch(function(err){
+    if(!document.getElementById("os-picker"))return;
+    body.innerHTML='<div class="os-picker-status">Gagal mencari subtitle: '+esc(String(err))+'</div>';
+  });
+}
+
 function vttTime(s){
   var m=/^(?:(\d+):)?([0-5]?\d):([0-5]\d)(?:[.,](\d{1,3}))?$/.exec((s||"").trim());
   if(!m)return -1;
   var ms=m[4]?parseInt((m[4]+"000").slice(0,3),10):0;
   return (m[1]?parseInt(m[1],10)*3600:0)+parseInt(m[2],10)*60+parseInt(m[3],10)+ms/1000;
+}
+function cleanAssLine(s){
+  if(!s)return "";
+  return String(s).replace(/\{[^}]*\}/g,"").replace(/\\N/g,"\n").replace(/\\n/g,"\n").replace(/\\h/g," ");
 }
 function parseVtt(text){
   var out=[];
@@ -1637,10 +1793,13 @@ function parseVtt(text){
   var start=-1,end=-1,buf=[];
   var flush=function(){
     if(start>=0&&end>start&&buf.length){
-      var plain=buf.map(function(x){return x.replace(/<[^>]+>/g,"");}).join("\n");
-      var html=buf.map(function(x){return esc(x);}).join("<br>");
-      html=html.replace(/&lt;[^&]*?&gt;/g,"");
-      out.push({start:start,end:end,html:html,plain:plain});
+      var cleaned=buf.map(cleanAssLine).join("\n").split("\n").map(function(x){return x.trim();}).filter(Boolean);
+      if(cleaned.length){
+        var plain=cleaned.map(function(x){return x.replace(/<[^>]+>/g,"");}).join("\n");
+        var html=cleaned.map(function(x){return esc(x);}).join("<br>");
+        html=html.replace(/&lt;[^&]*?&gt;/g,"");
+        out.push({start:start,end:end,html:html,plain:plain});
+      }
     }
     start=-1;end=-1;buf=[];
   };
@@ -1665,6 +1824,12 @@ function clearOverlay(){
   var s=box.querySelector("span");
   if(s){s.innerHTML="";s._last="";}
 }
+function isDesktopEnv(){
+  if(typeof window.tatap_set_fullscreen === "function") return true;
+  var ua = (navigator.userAgent || "").toLowerCase();
+  var isMobile = /android|iphone|ipad|ipod|windows phone|blackberry|mobile/i.test(ua);
+  return !isMobile;
+}
 function isVideoFullscreen(){
   var v=$("vid");
   if(!v)return false;
@@ -1681,13 +1846,17 @@ function isFullscreenActive(){
   return false;
 }
 function syncFullscreenSubtitles(){
+  var isFs = isFullscreenActive();
+  if(typeof window.tatap_set_fullscreen === "function"){
+    try{ window.tatap_set_fullscreen(isFs); }catch(_){}
+  }
   var v=$("vid");
   if(!v||!v.textTracks)return;
   var isVidFs=isVideoFullscreen();
   for(var i=0;i<v.textTracks.length;i++){
     var t=v.textTracks[i];
     if(t.label&&t.label.indexOf("Tatap")>=0){
-      t.mode=isVidFs?"showing":"hidden";
+      t.mode=(isVidFs && !isDesktopEnv())?"showing":"hidden";
     }
   }
   paintCue();
@@ -1736,7 +1905,7 @@ function syncNativeTextTrack(vttText, cues, langCode){
 
     var applyMode=function(){
       if(trackEl.track){
-        trackEl.track.mode=isVideoFullscreen()?"showing":"hidden";
+        trackEl.track.mode=(isVideoFullscreen() && !isDesktopEnv())?"showing":"hidden";
       }
     };
 
@@ -1778,6 +1947,9 @@ function toggleFullscreen(){
     }
     if(v&&v.webkitExitFullscreen&&v.webkitDisplayingFullscreen){
       try{v.webkitExitFullscreen();}catch(e){}
+    }
+    if(typeof window.tatap_set_fullscreen === "function"){
+      try{ window.tatap_set_fullscreen(false); }catch(_){}
     }
     return;
   }
@@ -1841,15 +2013,20 @@ function paintCue(){
   if(!s)return;
   if($("player-modal").classList.contains("hidden")){s.innerHTML="";return;}
   var t=v.currentTime||0;
-  if(isVideoFullscreen()){
+  var subTime = t - (cur.subDelay || 0.0);
+  if(isVideoFullscreen() && !isDesktopEnv()){
     if(s._last!==""){s.innerHTML="";s._last="";}
     box.style.display="none";
   }else{
     box.style.display="";
-    var html="";
+    var activeParts=[];
     for(var i=0;i<cur.cues.length;i++){
-      if(t>=cur.cues[i].start&&t<=cur.cues[i].end){html=cur.cues[i].html;break;}
+      if(subTime>=cur.cues[i].start&&subTime<=cur.cues[i].end){
+        var h=cur.cues[i].html;
+        if(h && activeParts.indexOf(h)===-1) activeParts.push(h);
+      }
     }
+    var html=activeParts.join("<br>");
     if(s._last!==html){s.innerHTML=html;s._last=html;}
   }
   checkSkipTimes(t);
@@ -1858,36 +2035,65 @@ function paintCue(){
 function checkSkipTimes(currentTime){
   var btn=$("pm-skip-btn");
   var label=$("pm-skip-label");
-  if(!btn||!cur.res){return;}
-  var intro=cur.intro||(cur.res&&cur.res.intro)||{start:0,end:0};
-  var outro=cur.outro||(cur.res&&cur.res.outro)||{start:0,end:0};
+  if(!btn){return;}
+  var v=$("vid");
+  var intro=cur.intro;
+  var outro=cur.outro;
+  var isAutoSkip = !!(window.settings && window.settings.autoSkip !== undefined ? window.settings.autoSkip : cur.autoSkip);
 
-  var inIntro=(intro.end>intro.start&&(intro.end-intro.start)>=10&&currentTime>=intro.start&&currentTime<intro.end);
-  var inOutro=(outro.end>outro.start&&(outro.end-outro.start)>=10&&currentTime>=outro.start&&currentTime<outro.end);
+  var inIntro=(intro && intro.end > intro.start && intro.end > 0 && currentTime >= intro.start && currentTime < (intro.end - 0.5));
+  var inOutro=(outro && outro.end > outro.start && outro.end > 0 && currentTime >= outro.start && currentTime < (outro.end - 0.5));
 
   if(inIntro){
-    cur.activeSkipTarget=intro.end+0.5;
-    if(label)label.textContent="Lewati Opening (S)";
+    cur.activeSkipTarget = Math.min((v && v.duration) || Infinity, intro.end + 0.5);
+    if(isAutoSkip && !cur.hasAutoSkippedIntro){
+      cur.hasAutoSkippedIntro = true;
+      if(v){
+        v.currentTime = cur.activeSkipTarget;
+        btn.classList.add("hidden");
+        cur.activeSkipTarget = 0;
+        toast("⏩ Lewati Opening otomatis", 1500);
+        return;
+      }
+    }
+    if(label) label.textContent = "Lewati Opening (S)";
     btn.classList.remove("hidden");
   }else if(inOutro){
-    cur.activeSkipTarget=outro.end+0.5;
-    if(label)label.textContent="Lewati Ending (S)";
+    cur.activeSkipTarget = Math.min((v && v.duration) || Infinity, outro.end + 0.5);
+    if(isAutoSkip && !cur.hasAutoSkippedOutro){
+      cur.hasAutoSkippedOutro = true;
+      if(v){
+        v.currentTime = cur.activeSkipTarget;
+        btn.classList.add("hidden");
+        cur.activeSkipTarget = 0;
+        toast("⏩ Lewati Ending otomatis", 1500);
+        return;
+      }
+    }
+    if(label) label.textContent = "Lewati Ending (S)";
     btn.classList.remove("hidden");
   }else{
-    cur.activeSkipTarget=0;
+    cur.activeSkipTarget = 0;
     btn.classList.add("hidden");
   }
 }
 
 function doSkip(){
-  if(cur.activeSkipTarget&&cur.activeSkipTarget>0){
+  if(cur.activeSkipTarget && cur.activeSkipTarget > 0){
     var v=$("vid");
     if(v){
-      v.currentTime=cur.activeSkipTarget;
+      var t = v.currentTime;
+      if(cur.intro && t >= cur.intro.start && t < cur.intro.end){
+        cur.hasAutoSkippedIntro = true;
+      }
+      if(cur.outro && t >= cur.outro.start && t < cur.outro.end){
+        cur.hasAutoSkippedOutro = true;
+      }
+      v.currentTime = cur.activeSkipTarget;
       var btn=$("pm-skip-btn");
-      if(btn)btn.classList.add("hidden");
-      toast("⏩ Melompat ke "+formatTime(v.currentTime),1500);
-      cur.activeSkipTarget=0;
+      if(btn) btn.classList.add("hidden");
+      toast("⏩ Melompat ke "+formatTime(v.currentTime), 1500);
+      cur.activeSkipTarget = 0;
       return true;
     }
   }
@@ -1905,7 +2111,24 @@ function prefetchSubtitleTrack(url, ref, langCode){
   var targetUrl = url;
   var targetLang = langCode || "";
   var mode = "";
-  if(targetUrl.indexOf("gtx+:")===0){
+  var isDual = false;
+  var isOs = false;
+  if(targetUrl.indexOf("os_merge:")===0){
+    targetUrl = targetUrl.slice(9);
+    if(!targetLang) targetLang = "id";
+    mode = "os_merge";
+    isOs = true;
+  }else if(targetUrl.indexOf("os_dual:")===0){
+    targetUrl = targetUrl.slice(8);
+    if(!targetLang) targetLang = "id";
+    mode = "os_dual";
+    isOs = true;
+  }else if(targetUrl.indexOf("gtx+_dual:")===0){
+    targetUrl = targetUrl.slice(10);
+    if(!targetLang) targetLang = "id";
+    mode = "gtx+_dual";
+    isDual = true;
+  }else if(targetUrl.indexOf("gtx+:")===0){
     targetUrl = targetUrl.slice(5);
     if(!targetLang) targetLang = "id";
     mode = "gtx+";
@@ -1925,6 +2148,11 @@ function prefetchSubtitleTrack(url, ref, langCode){
   var qs = "url=" + encodeURIComponent(targetUrl) + "&referer=" + encodeURIComponent(ref || "");
   if(targetLang) qs += "&lang=" + encodeURIComponent(targetLang);
   if(mode) qs += "&mode=" + encodeURIComponent(mode);
+  if(isDual) qs += "&dual=true";
+  if(isOs){
+    // Konteks judul & episode agar backend dapat mencari rilis yang cocok di OpenSubtitles
+    qs += "&title=" + encodeURIComponent(cur.title || "") + "&slug=" + encodeURIComponent(cur.slug || "") + "&ep=" + encodeURIComponent(cur.ep || 1);
+  }
   var prox = "/api/player/sub?" + qs;
 
   // Cek apakah promise untuk URL yang sama sudah berjalan
@@ -1939,8 +2167,10 @@ function prefetchSubtitleTrack(url, ref, langCode){
     var trModel=r.headers.get("X-Translate-Model")||"";
     var trMixed=r.headers.get("X-Translate-Mixed")||"";
     var trBg=r.headers.get("X-Translate-Background")||"";
+    var osFile=r.headers.get("X-OpenSubtitles-File")||"";
+    var osMerge=r.headers.get("X-OpenSubtitles-Merge")||"";
     return r.text().then(function(t){
-      return {text:t, tier:tier, error:trErr, model:trModel, mixed:trMixed, bg:trBg};
+      return {text:t, tier:tier, error:trErr, model:trModel, mixed:trMixed, bg:trBg, osFile:osFile, osMerge:osMerge};
     });
   });
 
@@ -1963,10 +2193,24 @@ function switchSubtitleTrack(url, langCode){
     clearTimeout(cur._subUpgradeTimer);
     cur._subUpgradeTimer = null;
   }
-  if(!url)return;
+  if(!url || typeof url !== "string") return;
+  var cleanSubUrl = url.trim();
+  if(/^\d+$/.test(cleanSubUrl)) return;
   var originalUrl = url;
   var trackMode = "none";
-  if(url.indexOf("gtx+:")===0){
+  if(url.indexOf("os_merge:")===0){
+    url=url.slice(9);
+    if(!langCode) langCode="id";
+    trackMode = "os_merge";
+  }else if(url.indexOf("os_dual:")===0){
+    url=url.slice(8);
+    if(!langCode) langCode="id";
+    trackMode = "os_dual";
+  }else if(url.indexOf("gtx+_dual:")===0){
+    url=url.slice(10);
+    if(!langCode) langCode="id";
+    trackMode = "gtx+_dual";
+  }else if(url.indexOf("gtx+:")===0){
     url=url.slice(5);
     if(!langCode) langCode="id";
     trackMode = "gtx+";
@@ -1985,7 +2229,10 @@ function switchSubtitleTrack(url, langCode){
   }
   if(langCode==="id"){
     var waitMsg = "Menerjemahkan subtitle AI ke bahasa Indonesia...";
-    if(trackMode==="gtx+"||trackMode==="aigtx") waitMsg = "Menerjemahkan subtitle GTX+ (Smart Fansub & Scene Detection)...";
+    if(trackMode==="os_merge") waitMsg = "Mengunduh subtitle OpenSubtitles & merge dengan subtitle bawaan...";
+    else if(trackMode==="os_dual") waitMsg = "Mengunduh OpenSubtitles & menyusun bilingual dengan subtitle bawaan...";
+    else if(trackMode==="gtx+_dual") waitMsg = "Menerjemahkan subtitle GTX+ Bilingual (ID + EN)...";
+    else if(trackMode==="gtx+"||trackMode==="aigtx") waitMsg = "Menerjemahkan subtitle GTX+ (Smart Fansub & Scene Detection)...";
     else if(trackMode==="gtx") waitMsg = "Menerjemahkan subtitle Google GTX...";
     toast(waitMsg, 3000);
     var obox=$("pm-subs-overlay");
@@ -2013,7 +2260,13 @@ function switchSubtitleTrack(url, langCode){
         toast(msg, 6000);
       }else{
         var tierLabel = "AI Fansub" + (res.model ? " · "+res.model : "");
-        if(res.tier === "gtx+" || res.tier === "cached-gtx+" || res.tier === "aigtx" || res.tier === "cached-aigtx"){
+        if(res.tier === "os_merge" || res.tier === "os_dual" || res.tier === "smart_merge"){
+          tierLabel = "Smart Fansub & Merge" + (res.osFile ? " · " + res.osFile : "");
+        }else if(res.tier === "cached-os_merge" || res.tier === "cached-os_dual" || res.tier === "cached-smart_merge"){
+          tierLabel = "Smart Fansub & Merge, tersimpan";
+        }else if(res.tier === "os_fallback_gtx+"){
+          tierLabel = "Smart GTX+ Bawaan";
+        }else if(res.tier === "gtx+" || res.tier === "cached-gtx+" || res.tier === "aigtx" || res.tier === "cached-aigtx"){
           tierLabel = (res.tier === "cached-gtx+" || res.tier === "cached-aigtx") ? "GTX+, tersimpan" : "GTX+ Translate";
         }else if(res.tier === "tier2"){
           tierLabel = trackMode === "gtx" ? "Google GTX" : "GTX+ (Instan)";
@@ -2275,7 +2528,8 @@ function playUrl(url,referrer,sub,subRef,resumeTime,token){
   }catch(e){}
   // Bersihkan <track> lama lalu pasang track subtitle aktif (live switch).
   // Fungsi switchSubtitleTrack() menhandle Off (hapus semua) dan replace.
-  switchSubtitleTrack(sub || null);
+  var validSub = (typeof sub === "string" && !/^\d+$/.test(sub.trim())) ? sub : null;
+  switchSubtitleTrack(validSub);
   $("pm-spinner").classList.remove("hidden");
   $("pm-status").textContent="buffering...";
   var onCan=function(){
@@ -2503,7 +2757,8 @@ function switchQ(q){
     if(cur.res.variants[i].q.toLowerCase()===qLow){
       cur.res.picked=cur.res.variants[i];
       renderVariants();
-      playUrl(cur.res.variants[i].url,cur.res.referer,cur.activeSub||cur.res.sub,cur.res.referer,curTime);
+      var validFallbackSub = (cur.res && cur.res.sub && typeof cur.res.sub === "string" && !/^\d+$/.test(cur.res.sub.trim())) ? cur.res.sub : null;
+      playUrl(cur.res.variants[i].url,cur.res.referer,cur.activeSub||validFallbackSub,cur.res.referer,curTime);
       toast("Resolusi: "+cur.res.variants[i].q.toUpperCase());
       return;
     }
@@ -2532,6 +2787,7 @@ function closePlayer(){
   // 1. Invalidate all pending async playback tokens immediately
   cur.playToken = ++_playTokenCounter;
   TvNavigationManager.hidePlayerControls();
+  closeOpenSubtitlesPicker();
 
   // 2. Safely stop and destroy video & HLS stream
   var v=$("vid");
@@ -2556,6 +2812,11 @@ function closePlayer(){
       if(document.exitFullscreen) document.exitFullscreen();
       else if(document.webkitExitFullscreen) document.webkitExitFullscreen();
     }catch(e){}
+  }
+  var stageEl = document.querySelector(".ambient-stage");
+  if(stageEl) stageEl.classList.remove("is-fullscreen");
+  if(typeof window.tatap_set_fullscreen === "function"){
+    try{ window.tatap_set_fullscreen(false); }catch(e){}
   }
 
   // 5. Perilaku post-watch: kembalikan user ke list episode anime dengan marker last watch yang aktif
@@ -2624,7 +2885,7 @@ function renderContinue(){
         // Floating Episode Badge
         var epBadge=document.createElement("span");
         epBadge.className="hist-ep-badge";
-        epBadge.textContent="EP "+(x.episode||"1");
+        epBadge.textContent=String(x.episode||"1");
         thumbWrap.appendChild(epBadge);
 
         // Hover Play Badge
@@ -2966,16 +3227,20 @@ function onKeyPlayer(e){
   else if(e.key==="f"||e.key==="F"){e.preventDefault();toggleFullscreen();}
   else if(e.key==="n")stepEp(1);
   else if(e.key==="p")stepEp(-1);
+  else if(e.key===","||e.key==="<"){e.preventDefault();adjustSubDelay(-0.25);}
+  else if(e.key==="."||e.key===">"){e.preventDefault();adjustSubDelay(0.25);}
   else if(e.key==="["||e.key==="{"){e.preventDefault();adjustPlaySpeed(-1);}
   else if(e.key==="]"||e.key==="}"){e.preventDefault();adjustPlaySpeed(1);}
   else if(e.key==="m"||e.key==="M"){e.preventDefault();v.muted=!v.muted;}
   else if(e.key==="s"||e.key==="S"){
-    if(cur.activeSkipTarget&&cur.activeSkipTarget>0){
+    var skipBtn = $("pm-skip-btn");
+    var isSkipActive = skipBtn && !skipBtn.classList.contains("hidden") && cur.activeSkipTarget > 0;
+    if(isSkipActive){
       e.preventDefault();
       doSkip();
-    }else{
-      switchSource();
+      return;
     }
+    switchSource();
   }
   else if(e.key==="ArrowRight"){e.preventDefault();v.currentTime+=5;}
   else if(e.key==="ArrowLeft"){e.preventDefault();v.currentTime-=5;}
@@ -3034,8 +3299,10 @@ function setTranslate(on){
 function renderSourceUI(){
   var s = cur.source || "hianime";
   var isOtaku = (s === "otakudesu");
-  var txt = isOtaku ? "src: otakudesu (sub indo) ⇄" : "src: hianime ⇄";
-  var badgeTxt = isOtaku ? "OTAKUDESU (SUB INDO) ⇄" : "HIANIME ⇄";
+  var isAnichan = (s === "anichan");
+  var txt = isOtaku ? "src: otakudesu (sub indo) ⇄" : (isAnichan ? "src: anichan (failover) ⇄" : "src: hianime ⇄");
+  var badgeTxt = isOtaku ? "OTAKUDESU (SUB INDO) ⇄" : (isAnichan ? "ANICHAN (FAILOVER) ⇄" : "HIANIME ⇄");
+  var shortLabel = isOtaku ? "Otakudesu" : (isAnichan ? "AniChan" : "HiAnime");
   var sb = $("sb-source");
   if(sb){
     sb.textContent = txt;
@@ -3046,6 +3313,10 @@ function renderSourceUI(){
     tm.textContent = "SRC: " + badgeTxt;
     tm.classList.toggle("otaku", isOtaku);
   }
+  var popBadge = $("pop-src-badge");
+  if(popBadge) popBadge.textContent = shortLabel;
+  var drawerBadge = $("drawer-src-badge");
+  if(drawerBadge) drawerBadge.textContent = shortLabel;
 }
 
 function switchSource(targetSource){
@@ -3053,14 +3324,16 @@ function switchSource(targetSource){
   var curTime = (v && !isNaN(v.currentTime)) ? v.currentTime : 0;
   var nextSource = targetSource;
   if(!nextSource){
-    nextSource = (cur.source === "otakudesu") ? "hianime" : "otakudesu";
+    if(cur.source === "hianime") nextSource = "otakudesu";
+    else if(cur.source === "otakudesu") nextSource = "anichan";
+    else nextSource = "hianime";
   }
   cur.source = nextSource;
   renderSourceUI();
   if(window.Tatap && window.Tatap.setSetting){
     window.Tatap.setSetting({ preferred_source: nextSource }).catch(function(){});
   }
-  var label = nextSource === "otakudesu" ? "Otakudesu (Sub Indo)" : "HiAnime";
+  var label = nextSource === "otakudesu" ? "Otakudesu (Sub Indo)" : (nextSource === "anichan" ? "AniChan (Failover)" : "HiAnime");
   toast("Sumber: " + label);
   if(!$("player-modal").classList.contains("hidden") && cur.ep){
     openPlayer(cur.ep, curTime);
@@ -3167,8 +3440,10 @@ App = {
   TvNavigationManager: TvNavigationManager,
   openTitle:openTitle, openPlayer:openPlayer, playMPV:playMPV,
   renderContinue:renderContinue, onKeyPlayer:onKeyPlayer,
+  formatTimeSec:formatTimeSec,
   switchSource:switchSource,
   setPlaySpeed:setPlaySpeed, adjustPlaySpeed:adjustPlaySpeed,
+  setSubDelay:setSubDelay, adjustSubDelay:adjustSubDelay,
   openDrawer:openDrawer, closeDrawer:closeDrawer,
   openUpdateModal:openUpdateModal, closeUpdateModal:closeUpdateModal,
   checkForUpdate:checkForUpdate,
@@ -3180,7 +3455,42 @@ App = {
   }
 };
 
+var TatapTheme = (function(){
+  function getTheme(){
+    return localStorage.getItem("tatap_theme") || "dark";
+  }
+  function setTheme(t){
+    var theme = (t === "light") ? "light" : "dark";
+    localStorage.setItem("tatap_theme", theme);
+    document.documentElement.setAttribute("data-theme", theme);
+    document.body.setAttribute("data-theme", theme);
+
+    var isLight = theme === "light";
+    var popIcon = $("pop-theme-icon");
+    if(popIcon) popIcon.innerHTML = '<use href="#icon-' + (isLight ? 'moon' : 'sun') + '"/>';
+    var popLabel = $("pop-theme-label");
+    if(popLabel) popLabel.textContent = isLight ? "Mode Gelap" : "Mode Terang";
+
+    var drawerIcon = $("drawer-theme-icon");
+    if(drawerIcon) drawerIcon.innerHTML = '<use href="#icon-' + (isLight ? 'moon' : 'sun') + '"/>';
+    var drawerLabel = $("drawer-theme-label");
+    if(drawerLabel) drawerLabel.textContent = isLight ? "Mode Gelap" : "Mode Terang";
+    var drawerBadge = $("drawer-theme-badge");
+    if(drawerBadge) drawerBadge.textContent = isLight ? "Terang" : "Gelap";
+
+    var metaTheme = document.querySelector('meta[name="theme-color"]');
+    if(metaTheme) metaTheme.setAttribute("content", isLight ? "#f5f5f7" : "#07080a");
+    return theme;
+  }
+  function toggle(){
+    return setTheme(getTheme() === "light" ? "dark" : "light");
+  }
+  return { get: getTheme, set: setTheme, toggle: toggle };
+})();
+window.TatapTheme = TatapTheme;
+
 function init(){
+  TatapTheme.set(TatapTheme.get());
   loadPrefs();
   try{
     var sz=localStorage.getItem("tatap_subsize");
@@ -3198,6 +3508,12 @@ function init(){
   document.querySelectorAll(".sub-size button").forEach(function(b){
     b.addEventListener("click",function(){setSubSize(b.getAttribute("data-subsize"));});
   });
+  var sdMinus=$("pm-sub-delay-minus");
+  if(sdMinus) sdMinus.addEventListener("click",function(){adjustSubDelay(-0.25);});
+  var sdPlus=$("pm-sub-delay-plus");
+  if(sdPlus) sdPlus.addEventListener("click",function(){adjustSubDelay(0.25);});
+  var sdVal=$("pm-sub-delay-val");
+  if(sdVal) sdVal.addEventListener("click",function(){setSubDelay(0.0, true);});
   var v=$("vid");
   if(v){
     v.addEventListener("timeupdate",function(){
@@ -3294,6 +3610,10 @@ function init(){
         if(r.data.quality) cur.quality=r.data.quality;
         if(r.data.mode) {cur.mode=r.data.mode; syncSeg();}
         if(r.data.preferred_source) {cur.source=r.data.preferred_source; renderSourceUI();}
+        if(r.data.auto_skip !== undefined) {
+          cur.autoSkip = !!r.data.auto_skip;
+          window.settings.autoSkip = cur.autoSkip;
+        }
       }
     }).catch(function(){});
   }
@@ -3348,7 +3668,85 @@ function init(){
   var btnDrawer = $("btn-drawer");
   if(btnDrawer) btnDrawer.addEventListener("click", openDrawer);
   var btnDrawerHead = $("btn-drawer-head");
-  if(btnDrawerHead) btnDrawerHead.addEventListener("click", openDrawer);
+  function closePopover(){
+    var pop = $("apple-options-popover");
+    if(pop) pop.classList.add("hidden");
+  }
+  if(btnDrawerHead){
+    btnDrawerHead.addEventListener("click", function(e){
+      e.stopPropagation();
+      if(window.innerWidth >= 769){
+        var pop = $("apple-options-popover");
+        if(pop) pop.classList.toggle("hidden");
+      } else {
+        openDrawer();
+      }
+    });
+  }
+  document.addEventListener("click", function(e){
+    var pop = $("apple-options-popover");
+    if(pop && !pop.classList.contains("hidden")){
+      if(!pop.contains(e.target) && e.target !== btnDrawerHead && !(btnDrawerHead && btnDrawerHead.contains(e.target))){
+        pop.classList.add("hidden");
+      }
+    }
+  });
+
+  // Apple Options Popover button listeners
+  var popCatFilter = $("pop-catalog-filter");
+  if(popCatFilter) popCatFilter.addEventListener("click", function(){
+    closePopover();
+    if(window.Tui && window.Tui.openCatalogFilterModal) window.Tui.openCatalogFilterModal();
+  });
+  var popGenre = $("pop-genre-filter");
+  if(popGenre) popGenre.addEventListener("click", function(){
+    closePopover();
+    if(window.Tui && window.Tui.openGenreModal) window.Tui.openGenreModal();
+  });
+  var popSrc = $("pop-switch-source");
+  if(popSrc) popSrc.addEventListener("click", function(){
+    closePopover();
+    switchSource();
+  });
+  var popTheme = $("pop-toggle-theme");
+  if(popTheme) popTheme.addEventListener("click", function(){
+    closePopover();
+    var t = TatapTheme.toggle();
+    toast(t === "light" ? "Mode Terang Aktif" : "Mode Gelap Aktif", 1200);
+  });
+  var popUpdate = $("pop-update");
+  if(popUpdate) popUpdate.addEventListener("click", function(){
+    closePopover();
+    checkForUpdate(true);
+  });
+  var popHelp = $("pop-help");
+  if(popHelp) popHelp.addEventListener("click", function(){
+    closePopover();
+    var ho = $("help-overlay");
+    if(ho) ho.classList.remove("hidden");
+    var hb = $("help-body");
+    if(hb && window.Tui && typeof window.Tui.cmdUsage === "function") hb.textContent = window.Tui.cmdUsage();
+  });
+
+  // Global ⌘K / Ctrl+K spotlight shortcut & ⌘T theme toggle
+  window.addEventListener("keydown", function(e){
+    if((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k"){
+      e.preventDefault();
+      var cmd = $("cmd");
+      if(cmd){
+        cmd.removeAttribute("readonly");
+        cmd.focus();
+        cmd.select();
+      }
+    } else if((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "t"){
+      e.preventDefault();
+      var t = TatapTheme.toggle();
+      toast(t === "light" ? "Mode Terang Aktif" : "Mode Gelap Aktif", 1200);
+    } else if(e.key === "Escape"){
+      closePopover();
+    }
+  });
+
   var btnDrawerClose = $("drawer-close");
   if(btnDrawerClose) btnDrawerClose.addEventListener("click", closeDrawer);
   var drawerBackdrop = $("drawer-backdrop");
@@ -3392,6 +3790,17 @@ function init(){
     });
   }
 
+  // Desktop instant search interactivity
+  var cmdInput = $("cmd");
+  if(cmdInput && !(window.TvNavigationManager && window.TvNavigationManager.isTvMode())){
+    cmdInput.removeAttribute("readonly");
+    cmdInput.addEventListener("click", function(e){
+      e.stopPropagation();
+      cmdInput.removeAttribute("readonly");
+      cmdInput.focus();
+    });
+  }
+
   var drawerGenre = $("drawer-genre");
   if(drawerGenre) drawerGenre.addEventListener("click", function(){
     closeDrawer();
@@ -3407,8 +3816,6 @@ function init(){
   var drawerSrc = $("drawer-switch-source");
   if(drawerSrc) drawerSrc.addEventListener("click", function(){
     switchSource();
-    var b = $("drawer-src-badge");
-    if(b) b.textContent = cur.source === "otakudesu" ? "Otakudesu" : "HiAnime";
   });
 
   var drawerHelp = $("drawer-help");
@@ -3418,6 +3825,13 @@ function init(){
     if(ho) ho.classList.remove("hidden");
     var hb = $("help-body");
     if(hb && window.Tui) hb.textContent = window.Tui.cmdUsage();
+  });
+
+  var drawerToggleTheme = $("drawer-toggle-theme");
+  if(drawerToggleTheme) drawerToggleTheme.addEventListener("click", function(){
+    closeDrawer();
+    var t = TatapTheme.toggle();
+    toast(t === "light" ? "Mode Terang Aktif" : "Mode Gelap Aktif", 1200);
   });
 
   var drawerUpd = $("drawer-update");

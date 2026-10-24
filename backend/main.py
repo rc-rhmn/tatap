@@ -6,12 +6,15 @@ from fastapi.responses import JSONResponse, FileResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from config import APP_PORT, APP_HOST, HI_BASE, HI_UA
-from database import init_db, get_search_cache, set_search_cache, get_episode_cache, set_episode_cache, delete_episode_cache, add_history, get_history, clear_history, save_progress, get_progress, clear_progress, add_bookmark, remove_bookmark, get_bookmarks, is_bookmarked, clear_bookmarks, get_setting, set_setting, get_browse_cache, set_browse_cache, get_slug_map, set_slug_map, get_subtitle_cache, set_subtitle_cache, delete_subtitle_cache, get_today_char_count, add_today_char_count
+from database import init_db, get_search_cache, set_search_cache, get_episode_cache, set_episode_cache, delete_episode_cache, clear_episode_cache_for_slug, get_cached_episode, cache_episode, add_history, get_history, clear_history, save_progress, get_progress, clear_progress, add_bookmark, remove_bookmark, get_bookmarks, is_bookmarked, clear_bookmarks, get_setting, set_setting, get_browse_cache, set_browse_cache, get_slug_map, set_slug_map, get_subtitle_cache, set_subtitle_cache, delete_subtitle_cache, get_today_char_count, add_today_char_count
 from api import hianime as hi
 from api import anilist as al
 from api import otakudesu as otaku
 from api import aniskip
+from api import anichan
 import httpx
+
+_ANIME_FAILOVER_CACHE: dict = {}
 
 frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
 
@@ -42,6 +45,11 @@ async def lifespan(app: FastAPI):
         close_otaku_client()
     except Exception:
         pass
+    try:
+        from api.anichan import close_anichan_client
+        close_anichan_client()
+    except Exception:
+        pass
 
 from version import __version__ as CURRENT_VERSION
 app = FastAPI(title="Tatap", version=CURRENT_VERSION, lifespan=lifespan)
@@ -53,6 +61,18 @@ def fail(msg):
 
 def _clean(s: str) -> str:
     return html.unescape(s or "").strip()
+
+def _parse_safe_mode(val) -> int:
+    if isinstance(val, int):
+        return val
+    if isinstance(val, str):
+        val = val.strip().lower()
+        if val in ("0", "false", "off", "mati"):
+            return 0
+        return 1
+    if hasattr(val, "default"):
+        return _parse_safe_mode(val.default)
+    return 1
 
 @app.get("/api/ping")
 async def ping():
@@ -261,14 +281,133 @@ async def health():
             reachable = False
     return ok({"hianime": HI_BASE, "reachable": reachable})
 
+_META_STOPWORDS = {
+    'the', 'a', 'an', 'of', 'in', 'to', 'and', 'und', 'der', 'die', 'das',
+    'no', 'wa', 'ga', 'ni', 'de', 'part', 'season', 'arc', 'cour', 'hen',
+    'chapter', 'edition', 'series', 'ver', 'version'
+}
+
+def _extract_season_from_title(t: str) -> int:
+    t = (t or '').lower()
+    m = re.search(r'\b(?:season|s)\s*(\d+)\b', t)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            pass
+    m_roman = re.search(r'\b(ii|iii|iv|v|vi)\b', t)
+    if m_roman:
+        return {'ii': 2, 'iii': 3, 'iv': 4, 'v': 5, 'vi': 6}.get(m_roman.group(1), 1)
+    return 1
+
+def _clean_title_tokens_for_meta(t: str) -> set:
+    t = (t or '').lower()
+    t = re.sub(r'[^a-zA-Z0-9\s]', ' ', t)
+    return {w for w in t.split() if w and w not in _META_STOPWORDS}
+
+def _calculate_title_match_score(target: str, candidate: str) -> float:
+    # 1. Exact normalized alphanumeric match
+    norm_t = re.sub(r'[^a-zA-Z0-9]', '', target.lower())
+    norm_c = re.sub(r'[^a-zA-Z0-9]', '', candidate.lower())
+    if norm_t and norm_t == norm_c:
+        return 1.0
+
+    # 2. Season isolation (mencegah Season 2 match ke Season 1)
+    s_t = _extract_season_from_title(target)
+    s_c = _extract_season_from_title(candidate)
+    if (s_t > 1 or s_c > 1) and s_t != s_c:
+        return 0.0
+
+    tok_t = _clean_title_tokens_for_meta(target)
+    tok_c = _clean_title_tokens_for_meta(candidate)
+    if not tok_t or not tok_c:
+        return 0.0
+
+    common = tok_t & tok_c
+    if not common:
+        return 0.0
+
+    union = tok_t | tok_c
+    jaccard = len(common) / len(union)
+
+    # 3. Subtitle / Arc penalty: jika salah satu memiliki kata penting yang tidak dimiliki yang lain
+    if (tok_t - tok_c) and (len(common) / len(tok_t) < 0.85):
+        return jaccard * 0.5
+    if (tok_c - tok_t) and (len(common) / len(tok_c) < 0.85):
+        return jaccard * 0.5
+
+    return jaccard
+
+async def _enrich_search_results_with_metadata(items: list, al_meta_list: list):
+    """Perkaya item hasil pencarian dengan metadata season dan tahun akurat tanpa salah mencocokkan."""
+    if not items:
+        return
+    for it in items:
+        if it.get("season") and it.get("year"):
+            continue
+
+        slug = it.get("id") or it.get("slug") or ""
+        # 1. Cek detail lokal dari browse_cache jika pernah dibuka
+        if slug:
+            try:
+                cached = await get_browse_cache(f"detail_v2|{slug}")
+                if cached and cached.get("year"):
+                    it["year"] = cached["year"]
+                    it["season"] = cached.get("season") or str(cached["year"])
+                    continue
+            except Exception:
+                pass
+
+        # 2. Cocokkan dengan AniList secara presisi (Jaccard >= 0.70)
+        title = (it.get("title") or "").strip()
+        best_match = None
+        best_score = 0.0
+        if al_meta_list and title:
+            for al_m in al_meta_list:
+                t_obj = al_m.get("title") or {}
+                al_titles = [t_obj.get("english"), t_obj.get("romaji"), t_obj.get("native")]
+                for at in al_titles:
+                    if not at:
+                        continue
+                    score = _calculate_title_match_score(title, at)
+                    if score > best_score:
+                        best_score = score
+                        best_match = al_m
+
+        if best_match and best_score >= 0.70:
+            s_name = (best_match.get("season") or "").title()
+            s_year = best_match.get("seasonYear") or (best_match.get("startDate") or {}).get("year") or 0
+            if s_name and s_year:
+                it["season"] = f"{s_name} {s_year}".strip()
+                it["year"] = s_year
+            elif s_year:
+                it["year"] = s_year
+                it["season"] = str(s_year)
+            elif s_name:
+                it["season"] = s_name
+
+        # 3. Cek tahun parentesis eksplisit di judul (misal '(2023)')
+        if not it.get("year"):
+            m_yr = re.search(r'[\(\[]\s*(19\d\d|20\d\d)\s*[\)\]]', title)
+            if m_yr:
+                it["year"] = int(m_yr.group(1))
+                if not it.get("season"):
+                    it["season"] = str(it["year"])
+
 @app.get("/api/search")
-async def search(q: str = Query(""), page: int = Query(1, ge=1, le=100), limit: int = 24, source: str = Query("")):
+async def search(q: str = Query(""), page: int = Query(1, ge=1, le=100), limit: int = 24, source: str = Query(""), safe_mode: int = Query(1)):
     q = (q if isinstance(q, str) else "").strip()
     if not q:
         return fail("missing q")
     if q.lower() == "hentai" or "hentai" in q.lower().split():
         return ok({"results": [], "page": page, "total_pages": 1, "has_next": False, "cached": False})
     
+    safe_mode_int = _parse_safe_mode(safe_mode)
+    if safe_mode_int == 1:
+        vulgar_words = {"ecchi", "erotica", "hentai", "magical-sex-shift"}
+        if any(w in q.lower() for w in vulgar_words):
+            return ok({"results": [], "page": page, "total_pages": 1, "has_next": False, "cached": False})
+
     src = (source if isinstance(source, str) else "").strip().lower()
     c_page = page if isinstance(page, int) and page >= 1 else 1
     c_limit = limit if isinstance(limit, int) and limit >= 1 else 24
@@ -278,12 +417,26 @@ async def search(q: str = Query(""), page: int = Query(1, ge=1, le=100), limit: 
         if hit:
             if isinstance(hit, dict) and any(bool(x.get("poster")) for x in hit.get("results", [])):
                 hit_copy = dict(hit)
+                if safe_mode_int == 1 and hit_copy.get("results"):
+                    adult_tags = ("ecchi", "erotica", "hentai", "magical-sex-shift")
+                    hit_copy["results"] = [
+                        it for it in hit_copy["results"]
+                        if not any(tag in (it.get("id") or "").lower() or tag in (it.get("title") or "").lower() for tag in adult_tags)
+                    ]
                 hit_copy["cached"] = True
                 return ok(hit_copy)
             elif isinstance(hit, list) and any(bool(x.get("poster")) for x in hit):
-                return ok({"results": hit, "page": c_page, "total_pages": 1, "has_next": False, "cached": True})
+                results = list(hit)
+                if safe_mode_int == 1:
+                    adult_tags = ("ecchi", "erotica", "hentai", "magical-sex-shift")
+                    results = [
+                        it for it in results
+                        if not any(tag in (it.get("id") or "").lower() or tag in (it.get("title") or "").lower() for tag in adult_tags)
+                    ]
+                return ok({"results": results, "page": c_page, "total_pages": 1, "has_next": False, "cached": True})
         
         loop = asyncio.get_running_loop()
+        al_meta_task = loop.run_in_executor(None, lambda: al.search_anime_metadata(q, per_page=15))
         paged_res = None
         if src == "otakudesu":
             from api import otakudesu as ot
@@ -307,10 +460,24 @@ async def search(q: str = Query(""), page: int = Query(1, ge=1, le=100), limit: 
         
         if not paged_res:
             paged_res = {"results": [], "page": c_page, "total_pages": 1, "has_next": False}
+
+        if paged_res.get("results"):
+            try:
+                al_meta_list = await al_meta_task
+                await _enrich_search_results_with_metadata(paged_res["results"], al_meta_list)
+            except Exception:
+                pass
             
         paged_res["cached"] = False
         if paged_res.get("results"):
             await set_search_cache(cache_key, paged_res)
+        if safe_mode_int == 1 and paged_res.get("results"):
+            adult_tags = ("ecchi", "erotica", "hentai", "magical-sex-shift")
+            paged_res = dict(paged_res)
+            paged_res["results"] = [
+                it for it in paged_res["results"]
+                if not any(tag in (it.get("id") or "").lower() or tag in (it.get("title") or "").lower() for tag in adult_tags)
+            ]
         return ok(paged_res)
     except Exception as e:
         return fail(str(e))
@@ -320,37 +487,54 @@ async def filters():
     return ok(hi.FILTERS)
 
 @app.get("/api/catalog")
-async def catalog(page: int = Query(1, ge=1, le=100)):
+async def catalog(page: int = Query(1, ge=1, le=100), safe_mode: int = Query(1)):
     """Katalog umum: semua judul, default urut populer."""
     try:
         import json as _json
         key = f"catalog|page={page}"
         hit = await get_browse_cache(key)
         if hit:
-            hit["cached"] = True
-            return ok(hit)
-        loop = asyncio.get_running_loop()
-        res = await loop.run_in_executor(None, lambda: hi.browse({}, page))
-        await set_browse_cache(key, res)
-        res["cached"] = False
+            res = dict(hit)
+            res["cached"] = True
+        else:
+            loop = asyncio.get_running_loop()
+            res = await loop.run_in_executor(None, lambda: hi.browse({}, page))
+            await set_browse_cache(key, res)
+            res = dict(res)
+            res["cached"] = False
+        safe_mode_int = _parse_safe_mode(safe_mode)
+        if safe_mode_int == 1 and res and res.get("items"):
+            adult_tags = ("ecchi", "erotica", "magical-sex-shift")
+            res["items"] = [
+                it for it in res["items"]
+                if not any(tag in (it.get("id") or "").lower() or tag in (it.get("title") or "").lower() for tag in adult_tags)
+            ]
         return ok(res)
     except Exception as e:
         return fail(str(e))
 
 @app.get("/api/genres")
-async def genres():
+async def genres(safe_mode: int = 1):
     """Daftar genre dari hianime /browse sidebar. Cache 24 jam."""
     try:
         key = "genres|list"
         hit = await get_browse_cache(key, ttl=24*3600)
         if hit and hit.get("list"):
-            filtered = [g for g in hit["list"] if (g.get("slug") or "").lower() != "hentai" and "hentai" not in (g.get("title") or "").lower()]
-            return ok({"list": filtered, "cached": True})
-        loop = asyncio.get_running_loop()
-        out = await loop.run_in_executor(None, hi.scrape_genres)
-        filtered = [g for g in out if (g.get("slug") or "").lower() != "hentai" and "hentai" not in (g.get("title") or "").lower()]
-        await set_browse_cache(key, {"list": filtered})
-        return ok({"list": filtered, "cached": False})
+            base_list = hit["list"]
+            cached = True
+        else:
+            loop = asyncio.get_running_loop()
+            out = await loop.run_in_executor(None, hi.scrape_genres)
+            base_list = out
+            await set_browse_cache(key, {"list": out})
+            cached = False
+
+        filtered = [g for g in base_list if (g.get("slug") or "").lower() != "hentai" and "hentai" not in (g.get("title") or "").lower()]
+        safe_mode_int = _parse_safe_mode(safe_mode)
+        if safe_mode_int == 1:
+            adult_tags = {"ecchi", "erotica", "magical-sex-shift"}
+            filtered = [g for g in filtered if (g.get("slug") or "").lower() not in adult_tags and not any(tag in (g.get("title") or "").lower() for tag in adult_tags)]
+        return ok({"list": filtered, "cached": cached})
     except Exception as e:
         return fail(str(e))
 
@@ -634,19 +818,33 @@ async def seasonal(which: str = Query("", pattern="^(now|prev|airing)$|^$"),
             })
 
         # Fallback jika AniList diblokir ISP / offline / kosong
+        hi_total_pages = 1
         if not items_out:
-            fallback_filter = {"status": "releasing", "sort": "trending"} if which == "now" else {"status": "releasing"}
+            fallback_filter = {"status": "releasing", "sort": "trending"} if which == "now" else {}
             if season and year:
-                fallback_filter["season"] = season_name
-                if not is_future:
-                    fallback_filter["status"] = "releasing"
+                fallback_filter["season"] = str(season_name).lower()
+                fallback_filter["sy"] = str(season_year)
+                fallback_filter["ey"] = str(season_year)
+                if is_future:
+                    fallback_filter["status"] = "upcoming"
+            elif which == "now":
+                fallback_filter = {"status": "releasing", "sort": "trending"}
+            elif which == "prev":
+                fallback_filter = {"season": str(season_name).lower(), "sy": str(season_year), "ey": str(season_year)}
             hi_data = await loop.run_in_executor(None, lambda: hi.browse(fallback_filter, page))
             if hi_data and hi_data.get("items"):
                 items_out = hi_data.get("items")
+                hi_total_pages = hi_data.get("total_pages", 1)
+
+        if which == "now" and items_out:
+            items_out = [it for it in items_out if it.get("badge") != "TAMAT" and it.get("is_finished") is not True and (it.get("status") or "").lower() != "finished"]
 
         page_info = (page_data or {}).get("pageInfo") or {}
         has_next = bool(page_info.get("hasNextPage"))
         total_p = max(1, page_info.get("lastPage") or 1)
+        if hi_total_pages > 1:
+            total_p = max(total_p, hi_total_pages)
+            has_next = total_p > page
         if has_next and total_p <= page:
             total_p = page + 1
         result = {
@@ -1009,15 +1207,20 @@ async def browse_ep(
     sy: str = Query(""), sm: str = Query(""), ey: str = Query(""), em: str = Query(""),
     year: str = Query(""), month: str = Query(""),
     page: int = Query(1, ge=1, le=100),
+    safe_mode: int = Query(1),
 ):
     """Filter bebas — semua parameter sesuai form filter (mendukung cross-filter sort, year, month)."""
     try:
         def _to_str(val):
             return val.strip() if isinstance(val, str) else ""
 
+        safe_mode_int = _parse_safe_mode(safe_mode)
         c_genre = _to_str(genre)
         if c_genre.lower() == "hentai" or "hentai" in c_genre.lower():
             return ok({"items": [], "page": 1, "total_pages": 1, "params": {"genre": "hentai"}, "cached": False})
+
+        if safe_mode_int == 1 and c_genre.lower() in ("ecchi", "erotica", "magical-sex-shift"):
+            return ok({"items": [], "page": 1, "total_pages": 1, "params": {"genre": c_genre}, "cached": False})
 
         c_sy = _to_str(sy)
         c_ey = _to_str(ey)
@@ -1062,6 +1265,12 @@ async def browse_ep(
         res = await loop.run_in_executor(None, lambda: hi.browse(params, c_page))
         await set_browse_cache(key, res)
         res["cached"] = False
+        if safe_mode_int == 1 and res and res.get("items"):
+            adult_tags = ("ecchi", "erotica", "magical-sex-shift")
+            res["items"] = [
+                it for it in res["items"]
+                if not any(tag in (it.get("id") or "").lower() or tag in (it.get("title") or "").lower() for tag in adult_tags)
+            ]
         return ok(res)
     except Exception as e:
         return fail(str(e))
@@ -1088,6 +1297,13 @@ async def episodes(slug: str):
                     eps = [{"ep": e["ep"], "ep_id": str(e["ep"])} for e in otaku_eps]
             except Exception:
                 pass
+            if not eps:
+                try:
+                    anichan_eps = await loop.run_in_executor(None, lambda: anichan.get_episodes(slug))
+                    if anichan_eps:
+                        eps = anichan_eps
+                except Exception:
+                    pass
         if not eps:
             return fail("Daftar episode tidak ditemukan")
         syn_val = ""
@@ -1153,50 +1369,101 @@ async def anime_relations_endpoint(slug: str, title: str = Query("")):
         raw_relations = await loop.run_in_executor(None, lambda: al.anime_relations(search_query))
 
         results = []
-        for r in raw_relations:
-            rel_type = r.get("relation", "")
-            r_title = r.get("title", "")
-            r_romaji = r.get("title_romaji", "")
-            r_year = r.get("year")
-            r_fmt = r.get("format", "TV")
-            r_poster = r.get("poster", "")
-            is_origin = r.get("is_origin", False)
+        if not raw_relations:
+            # Fallback jika AniList API offline / 403 / rate limited:
+            # Cari franchise langsung via HiAnime search
+            clean_q = re.sub(r'(?i)\s*[:\-]?\s*\b(der film|the movie|movie|season \d+|part \d+|ova|special|saishuushou)\b.*', '', search_query).strip()
+            franchise_q = clean_q if len(clean_q) >= 3 else search_query
+            hi_candidates = await loop.run_in_executor(None, lambda: hi.hianime_search(franchise_q, limit=20))
+            if not hi_candidates and franchise_q != search_query:
+                hi_candidates = await loop.run_in_executor(None, lambda: hi.hianime_search(search_query, limit=20))
+            
+            seen_cand = set()
+            for cand in (hi_candidates or []):
+                c_slug = cand.get("id") or ""
+                if not c_slug or c_slug == slug or c_slug in seen_cand:
+                    continue
+                seen_cand.add(c_slug)
+                c_title = cand.get("title") or ""
+                if c_slug == "girls-und-panzer-2670" or c_title == "Girls & Panzer":
+                    c_title = "Girls und Panzer"
+                c_poster = cand.get("poster") or ""
+                c_type = (cand.get("type") or "").upper()
+                if "film" in c_slug or "movie" in c_title.lower() or "film" in c_title.lower():
+                    c_fmt = "MOVIE"
+                elif c_type in ("MOVIE", "OVA", "ONA", "SPECIAL", "TV"):
+                    c_fmt = c_type
+                else:
+                    c_fmt = "TV"
 
-            # Cari slug HiAnime yang cocok untuk relasi ini
-            matched_slug = await _match_slug_one(loop, r_title, r_romaji)
-            if not matched_slug and r_romaji:
-                matched_slug = await _match_slug_one(loop, r_romaji, r_title)
+                c_label = "Terkait"
+                c_season = _extract_season_num(c_title)
+                if c_fmt == "MOVIE":
+                    part_m = re.search(r'\bpart\s*(\d+)\b', c_title, re.I)
+                    c_label = f"Movie Part {part_m.group(1)}" if part_m else "Movie"
+                elif c_fmt in ("OVA", "ONA", "SPECIAL"):
+                    c_label = "Special" if c_fmt == "SPECIAL" else c_fmt
+                elif c_season and c_season > 1:
+                    c_label = f"Season {c_season}"
+                else:
+                    c_label = "Season 1"
 
-            # Jika sekuel belum memiliki video atau belum rilis (tidak punya slug), lewati agar tidak menyesatkan
-            if rel_type in ("SEQUEL", "ALTERNATIVE", "SUMMARY") and not matched_slug:
-                continue
+                results.append({
+                    "relation": "ALTERNATIVE" if c_fmt == "MOVIE" else "SIDE_STORY",
+                    "label": c_label,
+                    "title": c_title,
+                    "title_romaji": c_title,
+                    "year": None,
+                    "format": c_fmt,
+                    "poster": c_poster,
+                    "slug": c_slug,
+                    "is_origin": (c_label == "Season 1")
+                })
+        else:
+            for r in raw_relations:
+                rel_type = r.get("relation", "")
+                r_title = r.get("title", "")
+                r_romaji = r.get("title_romaji", "")
+                r_year = r.get("year")
+                r_fmt = r.get("format", "TV")
+                r_poster = r.get("poster", "")
+                is_origin = r.get("is_origin", False)
 
-            # Buat label yang mudah dimengerti user (misal: "Season 1", "Prekuel", "Sekuel", "Movie", "OVA")
-            label = "Terkait"
-            season_num = _extract_season_num(r_title) or _extract_season_num(r_romaji)
-            if r_fmt == "MOVIE":
-                part_m = re.search(r'\bpart\s*(\d+)\b', r_title, re.I)
-                label = f"Movie Part {part_m.group(1)}" if part_m else "Movie"
-            elif r_fmt in ("OVA", "ONA", "SPECIAL"):
-                label = "Special" if r_fmt == "SPECIAL" else r_fmt
-            elif is_origin or (rel_type == "PREQUEL" and season_num == 1 and "season" not in r_title.lower()):
-                label = "Season 1"
-            elif rel_type == "PREQUEL":
-                label = f"Season {season_num}" if season_num > 1 else "Prekuel"
-            elif rel_type == "SEQUEL":
-                label = f"Season {season_num}" if season_num > 1 else "Sekuel"
+                # Cari slug HiAnime yang cocok untuk relasi ini
+                matched_slug = await _match_slug_one(loop, r_title, r_romaji)
+                if not matched_slug and r_romaji:
+                    matched_slug = await _match_slug_one(loop, r_romaji, r_title)
 
-            results.append({
-                "relation": rel_type,
-                "label": label,
-                "title": r_title,
-                "title_romaji": r_romaji,
-                "year": r_year,
-                "format": r_fmt,
-                "poster": r_poster,
-                "slug": matched_slug,
-                "is_origin": is_origin
-            })
+                # Jika sekuel belum memiliki video atau belum rilis (tidak punya slug), lewati agar tidak menyesatkan
+                if rel_type in ("SEQUEL", "ALTERNATIVE", "SUMMARY") and not matched_slug:
+                    continue
+
+                # Buat label yang mudah dimengerti user (misal: "Season 1", "Prekuel", "Sekuel", "Movie", "OVA")
+                label = "Terkait"
+                season_num = _extract_season_num(r_title) or _extract_season_num(r_romaji)
+                if r_fmt == "MOVIE":
+                    part_m = re.search(r'\bpart\s*(\d+)\b', r_title, re.I)
+                    label = f"Movie Part {part_m.group(1)}" if part_m else "Movie"
+                elif r_fmt in ("OVA", "ONA", "SPECIAL"):
+                    label = "Special" if r_fmt == "SPECIAL" else r_fmt
+                elif is_origin or (rel_type == "PREQUEL" and season_num == 1 and "season" not in r_title.lower()):
+                    label = "Season 1"
+                elif rel_type == "PREQUEL":
+                    label = f"Season {season_num}" if season_num > 1 else "Prekuel"
+                elif rel_type == "SEQUEL":
+                    label = f"Season {season_num}" if season_num > 1 else "Sekuel"
+
+                results.append({
+                    "relation": rel_type,
+                    "label": label,
+                    "title": r_title,
+                    "title_romaji": r_romaji,
+                    "year": r_year,
+                    "format": r_fmt,
+                    "poster": r_poster,
+                    "slug": matched_slug,
+                    "is_origin": is_origin
+                })
 
         # Urutkan: Season 1 / Origin paling pertama (-1), disusul PREQUEL berurutan tahun (2018 -> 2021), SEQUEL, MOVIE
         def sort_key(x):
@@ -1214,26 +1481,54 @@ async def anime_relations_endpoint(slug: str, title: str = Query("")):
         return fail(str(e))
 
 
+def _has_valid_subtitles(ep_data: dict) -> bool:
+    """Periksa apakah data episode memiliki daftar track subtitle yang valid (bukan angka/kosong)."""
+    if not isinstance(ep_data, dict):
+        return False
+    subs = ep_data.get("subtitles")
+    if isinstance(subs, list) and len(subs) > 0:
+        for s in subs:
+            if isinstance(s, dict):
+                u = str(s.get("url") or "").strip()
+                if u.startswith("http://") or u.startswith("https://") or u.startswith("/"):
+                    return True
+    sub = str(ep_data.get("sub") or "").strip()
+    if sub.startswith("http://") or sub.startswith("https://") or sub.startswith("/"):
+        return True
+    return False
+
+
 @app.get("/api/stream/resolve")
-async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("sub"), q: str = Query("best"), source: str = Query(""), force: bool = Query(False)):
+@app.get("/api/episode")
+async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("sub"), q: str = Query("best"), source: str = Query(""), force: bool = Query(False), refresh: bool = Query(False)):
     try:
-        if "hentai" in (slug or "").lower():
+        slug_str = str(slug or "") if isinstance(slug, str) else ""
+        if "hentai" in slug_str.lower():
             return fail("Konten genre Hentai diblokir")
-        mode = "dub" if mode.lower() == "dub" else "sub"
+        mode = "dub" if str(mode).lower() == "dub" else "sub"
+        def _is_truthy(v):
+            return v is True or (isinstance(v, str) and v.strip().lower() in ("true", "1", "yes"))
+        should_refresh = _is_truthy(force) or _is_truthy(refresh)
         pref_source = (await get_setting("preferred_source", "hianime")).lower()
-        active_source = (source or pref_source or "hianime").lower()
+        title_failover = _ANIME_FAILOVER_CACHE.get(slug)
+        active_source = (source or title_failover or pref_source or "hianime").lower()
 
         # Cache key mencakup source agar stream tidak tertukar
         cache_slug = f"{active_source}:{slug}" if active_source != "hianime" else slug
-        if force:
+        if should_refresh:
             await delete_episode_cache(cache_slug, ep)
             hit = None
         else:
             hit = await get_episode_cache(cache_slug, ep, mode)
-            if not hit and mode == "sub":
-                hit = await get_episode_cache(cache_slug, ep, "dub")
-            elif not hit and mode == "dub":
-                hit = await get_episode_cache(cache_slug, ep, "sub")
+            if mode == "sub":
+                # Cegah negative caching dan kontaminasi dub cache pada mode sub.
+                # Jika cache hit tidak memiliki subtitle valid, bersihkan dan anggap cache miss.
+                if hit and not _has_valid_subtitles(hit):
+                    await delete_episode_cache(cache_slug, ep, mode="sub")
+                    hit = None
+            elif mode == "dub":
+                if not hit:
+                    hit = await get_episode_cache(cache_slug, ep, "sub")
         async def _check_and_prewarm(ep_data):
             try:
                 sub_lang = (await get_setting("sub_lang", "Indonesian")).strip().lower()
@@ -1313,6 +1608,17 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
             hit["source"] = active_source
             hit["intro"] = hit.get("intro") or {"start": 0, "end": 0}
             hit["outro"] = hit.get("outro") or {"start": 0, "end": 0}
+
+            # Cek cross-provider cache jika intro/outro belum lengkap
+            clean_slug_hit = slug.split(":", 1)[1] if ":" in slug else slug
+            raw_title_hit = clean_slug_hit.replace("-sub-indo", "").replace("-episode", "").replace("-", " ").strip() if (active_source == "otakudesu" or clean_slug_hit.startswith("otakudesu")) else ""
+            cached_sk = aniskip.get_cached_skip_times(mal_id=hit.get("mal_id"), title=raw_title_hit or clean_slug_hit, ep=ep)
+            if cached_sk:
+                if hit["intro"].get("end", 0) == 0 and cached_sk.get("intro", {}).get("end", 0) > 0:
+                    hit["intro"] = cached_sk["intro"]
+                if hit["outro"].get("end", 0) == 0 and cached_sk.get("outro", {}).get("end", 0) > 0:
+                    hit["outro"] = cached_sk["outro"]
+
             if (hit["intro"].get("end", 0) == 0 or hit["outro"].get("end", 0) == 0) and hit.get("mal_id"):
                 try:
                     loop = asyncio.get_running_loop()
@@ -1326,14 +1632,37 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
                         hit["outro"] = sk["outro"]
                 except Exception:
                     pass
+
+            aniskip.store_skip_times(
+                mal_id=hit.get("mal_id"),
+                title=raw_title_hit or clean_slug_hit,
+                ep=ep,
+                intro=hit["intro"],
+                outro=hit["outro"]
+            )
             await _check_and_prewarm(hit)
             return ok(hit)
 
         loop = asyncio.get_running_loop()
         got = None
         last_error = None
+        is_failover = False
+        failover_from = None
 
-        if active_source == "otakudesu":
+        if active_source == "anichan":
+            try:
+                got = await loop.run_in_executor(None, lambda: anichan.resolve_stream(slug, ep, mode, q))
+            except Exception as e:
+                last_error = e
+                if source == "auto" or not source:
+                    try:
+                        maps = await loop.run_in_executor(None, lambda: hi.hianime_episodes(slug))
+                        got = await loop.run_in_executor(None, lambda: hi.hianime_m3u8(maps, ep, mode, slug))
+                        active_source = "hianime"
+                        cache_slug = slug
+                    except Exception:
+                        pass
+        elif active_source == "otakudesu":
             try:
                 got = await loop.run_in_executor(None, lambda: otaku.resolve_stream(slug, ep))
             except Exception as e:
@@ -1347,6 +1676,16 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
                         cache_slug = slug
                     except Exception:
                         pass
+                    if not got:
+                        try:
+                            got = await loop.run_in_executor(None, lambda: anichan.resolve_stream(slug, ep, mode, q))
+                            active_source = "anichan"
+                            cache_slug = f"anichan:{slug}"
+                            is_failover = True
+                            failover_from = "otakudesu"
+                            _ANIME_FAILOVER_CACHE[slug] = "anichan"
+                        except Exception:
+                            pass
         else:
             try:
                 maps = await loop.run_in_executor(None, lambda: hi.hianime_episodes(slug))
@@ -1361,17 +1700,33 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
                         cache_slug = f"otakudesu:{slug}"
                     except Exception:
                         pass
+                    # JIKA HIANIME & OTAKUDESU GAGAL (KASUS EYESHIELD 21):
+                    # Failover otomatis per-judul ke AniChan langsung ke HLS M3U8
+                    if not got:
+                        try:
+                            got = await loop.run_in_executor(None, lambda: anichan.resolve_stream(slug, ep, mode, q))
+                            active_source = "anichan"
+                            cache_slug = f"anichan:{slug}"
+                            is_failover = True
+                            failover_from = "hianime"
+                            _ANIME_FAILOVER_CACHE[slug] = "anichan"
+                        except Exception as anichan_err:
+                            last_error = anichan_err
 
         if not got:
             raise last_error or RuntimeError("Stream gagal di-resolve dari semua sumber")
 
         got["source"] = active_source
+        if is_failover:
+            got["is_failover"] = True
+            got["failover_from"] = failover_from
         got["picked"] = hi.select_quality(got["variants"], q)
         got["cached"] = False
         got["subtitles"] = got.get("subtitles") or []
+        clean_slug = slug.split(":", 1)[1] if ":" in slug else slug
+        hi_slug = clean_slug
+        raw_title = ""
         if not got["subtitles"]:
-            clean_slug = slug.split(":", 1)[1] if ":" in slug else slug
-            hi_slug = clean_slug
             if active_source == "otakudesu" or clean_slug.startswith("otakudesu"):
                 raw_title = clean_slug.replace("-sub-indo", "").replace("-episode", "").replace("-", " ").strip()
                 try:
@@ -1393,6 +1748,16 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
         got["intro"] = got.get("intro") or {"start": 0, "end": 0}
         got["outro"] = got.get("outro") or {"start": 0, "end": 0}
 
+        # 1. Cek cross-provider cache terlebih dahulu
+        cached_sk = aniskip.get_cached_skip_times(mal_id=got.get("mal_id"), title=raw_title or clean_slug, ep=ep)
+        if not cached_sk and hi_slug and hi_slug != clean_slug:
+            cached_sk = aniskip.get_cached_skip_times(title=hi_slug, ep=ep)
+        if cached_sk:
+            if got["intro"].get("end", 0) == 0 and cached_sk.get("intro", {}).get("end", 0) > 0:
+                got["intro"] = cached_sk["intro"]
+            if got["outro"].get("end", 0) == 0 and cached_sk.get("outro", {}).get("end", 0) > 0:
+                got["outro"] = cached_sk["outro"]
+
         mal_id = got.get("mal_id") or ""
         if (got["intro"].get("end", 0) == 0 or got["outro"].get("end", 0) == 0) and mal_id:
             try:
@@ -1407,18 +1772,39 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
             except Exception:
                 pass
 
-        # Simpan cache episode
-        await set_episode_cache(cache_slug, ep, mode, got["master"], got["variants"],
-                                got.get("sub"), got.get("sub_lang"),
-                                got.get("referer"), got.get("server"),
-                                subtitles=got["subtitles"],
-                                intro=got["intro"], outro=got["outro"])
-        if actual_mode != mode:
-            await set_episode_cache(cache_slug, ep, actual_mode, got["master"], got["variants"],
+        # 2. Simpan ke cross-provider cache jika valid
+        aniskip.store_skip_times(
+            mal_id=mal_id or got.get("mal_id"),
+            title=raw_title or clean_slug,
+            ep=ep,
+            intro=got["intro"],
+            outro=got["outro"]
+        )
+        if hi_slug and hi_slug != clean_slug:
+            aniskip.store_skip_times(
+                mal_id=mal_id or got.get("mal_id"),
+                title=hi_slug,
+                ep=ep,
+                intro=got["intro"],
+                outro=got["outro"]
+            )
+
+        # Simpan cache episode (Cegah negative subtitle caching jika mode sub namun subtitle kosong)
+        can_cache_sub = (mode != "sub") or _has_valid_subtitles(got)
+        if can_cache_sub:
+            await set_episode_cache(cache_slug, ep, mode, got["master"], got["variants"],
                                     got.get("sub"), got.get("sub_lang"),
                                     got.get("referer"), got.get("server"),
                                     subtitles=got["subtitles"],
                                     intro=got["intro"], outro=got["outro"])
+        if actual_mode != mode:
+            can_cache_actual = (actual_mode != "sub") or _has_valid_subtitles(got)
+            if can_cache_actual:
+                await set_episode_cache(cache_slug, ep, actual_mode, got["master"], got["variants"],
+                                        got.get("sub"), got.get("sub_lang"),
+                                        got.get("referer"), got.get("server"),
+                                        subtitles=got["subtitles"],
+                                        intro=got["intro"], outro=got["outro"])
         await _check_and_prewarm(got)
         return ok(got)
     except Exception as e:
@@ -1460,6 +1846,19 @@ def _validate_external_proxy_url(url: str) -> None:
             ip_str = sockaddr[0]
             ip = _ipa.ip_address(ip_str)
             if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+                # ISP DNS Poisoning bypass:
+                # Bila DNS ISP lokal meresolusi domain publik ke IP sinkhole privat (10.x / 127.x / 0.0.0.0),
+                # verifikasi ulang menggunakan DoH publik (_resolve_host).
+                # Jika DoH meresolusi ke IP publik asli, izinkan (bukan serangan SSRF lokal).
+                try:
+                    from api.desync import _resolve_host
+                    real_ip = _resolve_host(hostname)
+                    if real_ip and real_ip != hostname:
+                        rip = _ipa.ip_address(real_ip)
+                        if not (rip.is_private or rip.is_loopback or rip.is_link_local or rip.is_multicast or rip.is_reserved or rip.is_unspecified):
+                            continue
+                except Exception:
+                    pass
                 raise HTTPException(status_code=403, detail=f"Resolusi domain mengarah ke IP privat/lokal ({ip_str})")
     except (_sock.gaierror, _sock.herror):
         pass
@@ -1511,19 +1910,22 @@ async def proxy_video(url: str = Query(""), referer: str = Query("")):
     media_type = "application/vnd.apple.mpegurl" if is_m3u8 else "video/mp2t"
 
     if not referer:
-        if any(h in url for h in ("dramahot.top", "drama1.cfd", "zokoanime")):
+        u_low = url.lower()
+        if any(h in u_low for h in ("dramahot", "drama1", "zokoanime")):
             referer = "https://zokoanime.video/"
-        elif any(h in url for h in ("megacloud", "rapid-cloud")):
-            referer = "https://megacloud.blog/"
-        elif any(h in url for h in ("puterin.biz", "putarin.xyz", "stream121.space")):
+        elif any(h in u_low for h in ("puterin", "putarin", "stream121")):
             referer = "https://puterin.biz/"
-        elif any(h in url for h in ("phantomharbor", "nexabloom", "silverorbit", "megaplay", "vidtube", "vidplay")):
+        elif any(h in u_low for h in ("anichan", "toroplay")):
+            referer = "https://anichan.to/"
+        elif any(h in u_low for h in ("phantomharbor", "nexabloom", "silverorbit", "megaplay", "vidtube", "vidplay",
+                                      "shiora", "imgnex", "hiddenvertex", "broforgotsave", "eclipseharbor",
+                                      "embermeadow", "megacloud", "rapid-cloud", "rabbitstream", "dokicloud")) or "/anime/" in u_low:
             referer = "https://megaplay.buzz/"
 
     # Jika host terdeteksi diblokir DPI ISP, gunakan TLS desync murni (aman dari Sangfor)
-    from api.hianime import _host_from, _BLOCKED_DPI_HOSTS
+    from api.hianime import _host_from, _is_dpi_blocked_host
     host = _host_from(url)
-    if host in _BLOCKED_DPI_HOSTS:
+    if _is_dpi_blocked_host(host):
         return _SR(_pipe_desync_video(url, referer), media_type=media_type,
                    headers={"Access-Control-Allow-Origin": "*"})
 
@@ -1570,8 +1972,18 @@ async def _pipe_desync_video(url: str, referer: str):
     """Streaming video via TLS Client Hello Desynchronization (Direct TCP 443 tanpa VPN)."""
     from api.desync import tls_desync_request, tls_desync_stream
     import asyncio
+    import re as _re
     
-    headers = {"Referer": referer} if referer else {}
+    headers = {
+        "User-Agent": HI_UA,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+    }
+    if referer:
+        headers["Referer"] = referer
+        orig = _re.sub(r"^(https?://[^/]+).*", r"\1", referer)
+        if orig:
+            headers["Origin"] = orig
     loop = asyncio.get_running_loop()
     
     # Playlist m3u8: baca penuh dan rewrite URL agar segmen tetap lewat proxy Tatap
@@ -1615,17 +2027,30 @@ def _get_video_client(url: str):
 async def _pipe_video(url: str, referer: str):
     import urllib.parse as _up
     import asyncio as _asyncio
+    import re as _re
     from api.hianime import STRIP_BYTES as _SB, STRIP_RE as _SR2
     c = _get_video_client(url)
 
-    headers = {"User-Agent": HI_UA}
+    headers = {
+        "User-Agent": HI_UA,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+    }
     if referer:
         headers["Referer"] = referer
+        orig = _re.sub(r"^(https?://[^/]+).*", r"\1", referer)
+        if orig:
+            headers["Origin"] = orig
 
     for attempt in range(2):
         try:
             async with c.stream("GET", url, headers=headers) as r:
                 if r.status_code >= 400:
+                    if r.status_code in (401, 403) and attempt == 0:
+                        await _asyncio.sleep(0.2)
+                        from api.hianime import _host_from, _BLOCKED_DPI_HOSTS
+                        _BLOCKED_DPI_HOSTS.add(_host_from(url))
+                        continue
                     raise HTTPException(status_code=502, detail=f"upstream {r.status_code}")
                 ctype = r.headers.get("content-type", "")
                 is_playlist = _is_m3u8_url(url, ctype)
@@ -1652,8 +2077,19 @@ async def _pipe_video(url: str, referer: str):
                     if chunk:
                         yield chunk
                 return
-        except HTTPException:
-            raise
+        except HTTPException as he:
+            if attempt == 0 and ("403" in str(he.detail) or "502" in str(he.detail)):
+                await _asyncio.sleep(0.2)
+                continue
+            try:
+                from api.hianime import _host_from, _BLOCKED_DPI_HOSTS
+                host = _host_from(url)
+                _BLOCKED_DPI_HOSTS.add(host)
+                async for chunk in _pipe_desync_video(url, referer):
+                    yield chunk
+                return
+            except Exception:
+                raise he
         except Exception as e:
             if attempt == 0:
                 await _asyncio.sleep(0.3)
@@ -1678,19 +2114,33 @@ async def _fetch_sub_text(target_url, ref):
     h = _host_from(target_url)
 
     candidates = []
-    if ref:
+    t_low = target_url.lower()
+    # Domain-specific smart prioritization (dramahot/zokoanime butuh origin zokoanime/dramahot)
+    if any(k in t_low for k in ("dramahot", "zokoanime")) or "dramahot" in h or "zokoanime" in h:
+        candidates.extend(["https://zokoanime.video/", "https://dramahot.top/"])
+    if ref and ref not in candidates:
         candidates.append(ref)
 
-    # Domain-specific smart prioritization (Megaplay CDN butuh origin megaplay)
-    t_low = target_url.lower()
-    if any(k in t_low for k in ("broforgotsave", "stellarfrontier", "megaplay", "megacloud")):
-        candidates.extend(["https://megaplay.buzz/", "https://megaplay.top/", "https://megacloud.tv/"])
-    if any(k in t_low for k in ("dramahot", "zokoanime")):
-        candidates.extend(["https://zokoanime.video/", "https://dramahot.top/"])
+    if any(k in t_low for k in ("toroplay", "anichan", "broforgotsave", "stellarfrontier", "megaplay", "megacloud", "eclipseharbor", "embermeadow", "nexabloom")) or "/anime/" in t_low:
+        for m_ref in ("https://megaplay.buzz/", "https://anichan.to/", "https://megaplay.top/", "https://megacloud.tv/"):
+            if m_ref not in candidates:
+                candidates.append(m_ref)
 
     for f_ref in ("https://megaplay.buzz/", "https://megaplay.top/", "https://zokoanime.video/", "https://megacloud.blog/", "https://hianime.at/", "https://hianime.to/", ""):
         if f_ref not in candidates:
             candidates.append(f_ref)
+
+    def _is_valid_sub(txt_str: str) -> bool:
+        if not txt_str:
+            return False
+        t_clean = txt_str.strip()
+        t_low_s = t_clean.lower()
+        # Proteksi mutlak: jangan pernah menerima respons error HTML (403/502/404) sebagai subtitle
+        if "<html" in t_low_s or "<head" in t_low_s or "<body" in t_low_s or "<!doctype" in t_low_s:
+            return False
+        if "WEBVTT" in t_clean or "-->" in t_clean:
+            return True
+        return len(t_clean) > 200
 
     last_err = None
     for r_head in candidates:
@@ -1705,7 +2155,7 @@ async def _fetch_sub_text(target_url, ref):
                 loop = asyncio.get_running_loop()
                 raw = await loop.run_in_executor(None, lambda: tls_desync_request(target_url, headers=headers))
                 txt = raw.decode("utf-8", errors="replace")
-                if "WEBVTT" in txt or len(txt) > 200:
+                if _is_valid_sub(txt):
                     return txt
             except Exception as e:
                 last_err = e
@@ -1714,7 +2164,7 @@ async def _fetch_sub_text(target_url, ref):
         try:
             async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as c:
                 r = await c.get(target_url, headers=headers)
-                if r.status_code == 200 and ("WEBVTT" in r.text or len(r.text) > 200):
+                if r.status_code == 200 and _is_valid_sub(r.text):
                     return r.text
         except Exception as e:
             last_err = e
@@ -1725,7 +2175,7 @@ async def _fetch_sub_text(target_url, ref):
                 loop = asyncio.get_running_loop()
                 raw = await loop.run_in_executor(None, lambda: tls_desync_request(target_url, headers=headers))
                 txt = raw.decode("utf-8", errors="replace")
-                if "WEBVTT" in txt or len(txt) > 200:
+                if _is_valid_sub(txt):
                     return txt
             except Exception as e2:
                 last_err = e2
@@ -1757,6 +2207,9 @@ async def _get_validated_subtitle_cache(key: str, lang: str = "id", ttl: int = 7
             except Exception:
                 pass
             return None
+        if (lang or "").lower() == "id":
+            from api.translate import apply_universal_lexicon_id
+            hit = apply_universal_lexicon_id(hit)
         return hit
     return None
 
@@ -1806,16 +2259,26 @@ async def proxy_sub(url: str = Query(""),
                    referer: str = Query(""),
                    lang: str = Query("", pattern="^(en|id|ja|es|fr|de|pt|ko|zh)$|^$"),
                    src: str = Query("en", pattern="^(en|ja|es|fr|de|pt|ko|zh)$"),
-                   mode: str = Query("", pattern="^(gtx|gtx\\+|aigtx|ai|)$"),
+                   mode: str = Query("", pattern="^(gtx|gtx\\+|gtx\\+_dual|aigtx|ai|os_merge|os_dual|smart_merge|)$"),
+                   dual: bool = Query(False),
+                   title: str = Query(""),
+                   slug: str = Query(""),
+                   ep: int = Query(1),
+                   os_file_id: str = Query(""),
                    refresh: bool = Query(False)):
-    """Proxy subtitle VTT. Menjalankan translasi multi-tier dengan deduplikasi inflight
-    dan proteksi cache poisoning."""
+    """Proxy subtitle VTT. Menjalankan translasi Smart Lexicon atau Smart Fansub & Merge
+    dengan deduplikasi inflight dan proteksi cache poisoning."""
     if not url.startswith("http"):
         return Response(status_code=400)
     _validate_external_proxy_url(url)
 
-    # Lang kosong atau sama dengan sumber -> return source apa adanya
-    if not lang or lang == src:
+    is_os_mode = mode in ("os_merge", "os_dual", "smart_merge")
+    # Hapus mode bilingual dan opsi terjemahan mentah sesuai direktif
+    is_dual = False
+    clean_mode = "gtx+" if mode in ("gtx", "gtx+", "gtx+_dual", "aigtx") else (mode or "gtx+")
+
+    # Lang kosong atau sama dengan sumber (dan bukan mode Smart Merge) -> return source apa adanya
+    if (not lang or lang == src) and not is_os_mode:
         try:
             content = await _fetch_sub_text(url, referer)
             return Response(content=content, media_type="text/vtt")
@@ -1824,31 +2287,70 @@ async def proxy_sub(url: str = Query(""),
 
     import hashlib
     base_hash = hashlib.sha1(
-        (url + "|" + (referer or "") + "|" + lang).encode("utf-8")
+        (url + "|" + (referer or "") + "|" + (lang or "id")).encode("utf-8")
+    ).hexdigest()
+    os_ctx_hash = hashlib.sha1(
+        f"{url}|{slug}|{title}|{ep}|{os_file_id}|{lang or 'id'}".encode("utf-8")
     ).hexdigest()
     key_gtxplus = "sub2|gtx+|" + base_hash
     key_aigtx = "sub2|aigtx|" + base_hash
     key_gtx = "sub2|gtx|" + base_hash
     key_llm = "sub2|llm|" + base_hash
+    key_os_merge = "sub2|os_merge|" + os_ctx_hash
 
     if refresh:
-        for k in (key_gtx, key_gtxplus, key_aigtx, key_llm, "sub2|mt|" + base_hash):
+        for k in (key_gtx, key_gtxplus, key_aigtx, key_llm, key_os_merge, "sub2|mt|" + base_hash):
             try:
                 await delete_subtitle_cache(k)
             except Exception:
                 pass
 
-    req_mode = "gtx+" if mode in ("gtx+", "aigtx") else (mode or "gtx")
+    if is_os_mode:
+        target_os_key = key_os_merge
+        if not refresh:
+            hit_os = await _get_validated_subtitle_cache(target_os_key, lang=lang or "id")
+            if hit_os:
+                resp = Response(content=hit_os, media_type="text/vtt")
+                resp.headers["X-Translate-Tier"] = "cached-os_merge"
+                return resp
+
+        os_job_key = f"os|{os_ctx_hash}"
+        fut_os = _SUB_INFLIGHT.get(os_job_key)
+        if fut_os is None:
+            fut_os = asyncio.ensure_future(
+                _opensubtitles_merge_sub_job(
+                    url=url,
+                    referer=referer,
+                    src=src,
+                    lang=lang or "id",
+                    title=title,
+                    slug=slug,
+                    ep=ep,
+                    os_file_id=os_file_id,
+                    is_dual=False,
+                    cache_key=target_os_key,
+                    fallback_key_gtxplus=key_gtxplus,
+                )
+            )
+            _SUB_INFLIGHT[os_job_key] = fut_os
+            fut_os.add_done_callback(lambda _f, k=os_job_key: _SUB_INFLIGHT.pop(k, None))
+
+        new_text, tier = await asyncio.shield(fut_os)
+        resp = Response(content=new_text, media_type="text/vtt")
+        resp.headers["X-Translate-Tier"] = tier.get("level", "os_merge")
+        if tier.get("os_filename"):
+            clean_fn = re.sub(r"[^\w.\-\[\]() ]", "", str(tier["os_filename"]))[:80]
+            resp.headers["X-OpenSubtitles-File"] = clean_fn
+        if tier.get("merge_stats"):
+            st = tier["merge_stats"]
+            resp.headers["X-OpenSubtitles-Merge"] = f"os={st.get('os_count',0)},snapped={st.get('snapped',0)},gaps={st.get('gap_filled',0)},offset={st.get('offset',0.0)}s"
+        return resp
+
+    req_mode = "gtx+" if clean_mode in ("gtx+", "aigtx") else (clean_mode or "gtx+")
 
     # Periksa cache lokal jika tidak dalam mode refresh
     if not refresh:
-        if req_mode == "gtx":
-            hit = await _get_validated_subtitle_cache(key_gtx, lang=lang)
-            if hit:
-                resp = Response(content=hit, media_type="text/vtt")
-                resp.headers["X-Translate-Tier"] = "cached-gtx"
-                return resp
-        elif req_mode in ("gtx+", "aigtx"):
+        if req_mode in ("gtx+", "aigtx"):
             hit = await _get_validated_subtitle_cache(key_gtxplus, lang=lang)
             if not hit:
                 hit = await _get_validated_subtitle_cache(key_aigtx, lang=lang)
@@ -1865,7 +2367,7 @@ async def proxy_sub(url: str = Query(""),
                 resp.headers["X-Translate-Tier"] = "cached-llm"
                 return resp
         else:
-            for k, label in ((key_gtx, "cached-gtx"), (key_gtxplus, "cached-gtx+"), (key_aigtx, "cached-gtx+"), (key_llm, "cached-llm")):
+            for k, label in ((key_gtxplus, "cached-gtx+"), (key_aigtx, "cached-gtx+"), (key_llm, "cached-llm")):
                 hit = await _get_validated_subtitle_cache(k, lang=lang)
                 if hit:
                     resp = Response(content=hit, media_type="text/vtt")
@@ -1873,11 +2375,11 @@ async def proxy_sub(url: str = Query(""),
                     return resp
 
     # Satukan eksekusi translasi agar tidak menduplikasi request bersamaan untuk mode yang sama
-    job_key = f"{base_hash}|{lang}|{req_mode}"
+    job_key = f"{base_hash}|{lang}|{req_mode}|dual=0"
     fut = _SUB_INFLIGHT.get(job_key)
     if fut is None:
         fut = asyncio.ensure_future(
-            _translate_sub_job(url, referer, src, lang, key_llm, key_gtxplus, _fetch_sub_text, key_gtx=key_gtx, requested_mode=req_mode)
+            _translate_sub_job(url, referer, src, lang, key_llm, key_gtxplus, _fetch_sub_text, key_gtx=key_gtx, requested_mode=req_mode, is_dual=False, key_dual="")
         )
         _SUB_INFLIGHT[job_key] = fut
         fut.add_done_callback(lambda _f, k=job_key: _SUB_INFLIGHT.pop(k, None))
@@ -1898,7 +2400,7 @@ async def proxy_sub(url: str = Query(""),
             raise HTTPException(status_code=502, detail=f"gagal memproses subtitle: {e}")
 
     resp = Response(content=new_text, media_type="text/vtt")
-    resp.headers["X-Translate-Tier"] = tier.get("level", "source")
+    resp.headers["X-Translate-Tier"] = tier.get("level", "source") + ("-dual" if is_dual else "")
     if tier.get("model"):
         resp.headers["X-Translate-Model"] = re.sub(r"[^\w.:/\-]", "", str(tier["model"]))[:60]
     if tier.get("gtx_lines"):
@@ -1917,7 +2419,7 @@ async def _llm_enabled():
     return bool(apikey) or is_local_llm(apiurl)
 
 
-async def _translate_sub_job(url, referer, src, lang, key_llm, key_gtxplus, fetcher, key_gtx=None, requested_mode="gtx"):
+async def _translate_sub_job(url, referer, src, lang, key_llm, key_gtxplus, fetcher, key_gtx=None, requested_mode="gtx", is_dual=False, key_dual=None):
     """Fetch + translate + cache. Return (vtt_text, tier_dict)."""
     if not key_gtx:
         import hashlib
@@ -1928,12 +2430,16 @@ async def _translate_sub_job(url, referer, src, lang, key_llm, key_gtxplus, fetc
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"gagal mengambil subtitle: {e}")
     try:
-        from api.translate import parse_vtt, build_vtt
-        cues = parse_vtt(text)
+        from api.translate import parse_vtt, build_vtt, build_bilingual_vtt, merge_overlapping_cues
+        raw_cues = parse_vtt(text)
+        cues = merge_overlapping_cues(raw_cues)
         if not cues:
             return text, {"level": "source", "error": "Subtitle kosong atau format tidak didukung"}
         tier = await _translate_with_fallback(cues, src, lang, requested_mode=requested_mode)
-        new_text = build_vtt(tier["cues"])
+        if is_dual:
+            new_text = build_bilingual_vtt(tier["cues"], cues)
+        else:
+            new_text = build_vtt(tier["cues"])
     except Exception as e:
         return text, {"cues": None, "level": "source", "error": str(e)}
 
@@ -1941,7 +2447,9 @@ async def _translate_sub_job(url, referer, src, lang, key_llm, key_gtxplus, fetc
     # PENTING: Dilarang menyimpan teks sumber (untranslated) atau hasil kaku MyMemory ke dalam cache berkualitas tinggi
     if lvl not in ("source", "source-fallback", "tier4", "mymemory"):
         if (lang or "").lower() != "id" or _is_valid_id_subtitle(new_text):
-            if lvl in ("tier1", "gtx"):
+            if is_dual and key_dual:
+                await set_subtitle_cache(key_dual, new_text)
+            elif lvl in ("tier1", "gtx"):
                 await set_subtitle_cache(key_gtx, new_text)
             elif lvl in ("tier2", "gtx+", "aigtx"):
                 await set_subtitle_cache(key_gtxplus, new_text)
@@ -2067,6 +2575,319 @@ async def _translate_with_fallback(cues, src, tgt, requested_mode="gtx"):
     return {"cues": cues, "level": "source", "error": last_err}
 
 
+async def _opensubtitles_merge_sub_job(
+    url: str,
+    referer: str,
+    src: str,
+    lang: str,
+    title: str,
+    slug: str,
+    ep: int,
+    os_file_id: str,
+    is_dual: bool,
+    cache_key: str,
+    fallback_key_gtxplus: str,
+):
+    """Cari dan unduh subtitle khusus Bahasa Indonesia dari AnimeTosho (prioritas fansub & CR/Netflix resmi)
+    atau OpenSubtitles, lalu lakukan Smart Merge + Smart Lexicon + Scene Detector dengan subtitle bawaan anime.
+    Jika tidak tersedia di AnimeTosho/OpenSubtitles, fallback otomatis ke Smart GTX+."""
+    from api.translate import (
+        parse_vtt,
+        build_vtt,
+        merge_overlapping_cues,
+        estimate_optimal_offset,
+        find_unmatched_builtin_cues,
+        merge_opensubtitles_with_builtin,
+        call_gtx_translate,
+        log_translate,
+        automate_opensubtitles_pronouns,
+        apply_universal_lexicon_id,
+    )
+    from api.animetosho import (
+        search_animetosho_indonesian,
+        download_animetosho_sub_text,
+    )
+    from api.opensubtitles import (
+        search_opensubtitles,
+        download_opensubtitle_text,
+        strip_opensubtitles_ads,
+    )
+
+    loop = asyncio.get_running_loop()
+    target_lang = (lang or "id").lower()
+
+    # 1. Ambil subtitle bawaan anime (builtin_cues)
+    builtin_text = ""
+    builtin_cues = []
+    if url and url.startswith("http"):
+        try:
+            builtin_text = await _fetch_sub_text(url, referer)
+            builtin_cues = merge_overlapping_cues(parse_vtt(builtin_text))
+        except Exception as e:
+            log_translate(f"[Smart Fansub & Merge] Gagal mengambil subtitle bawaan: {e}")
+
+    # 2. Cari & unduh subtitle khusus Bahasa Indonesia (AnimeTosho -> OpenSubtitles)
+    picked_cand = None
+    ext_cues = []
+
+    # Kasus 2a: os_file_id diberikan secara spesifik
+    if os_file_id:
+        try:
+            str_fid = str(os_file_id).strip()
+            if str_fid.startswith("at_") or "animetosho" in str_fid:
+                clean_fid = str_fid.replace("at_", "")
+                raw_txt = await loop.run_in_executor(
+                    None,
+                    lambda: download_animetosho_sub_text("", clean_fid),
+                )
+                picked_cand = {"source": "AnimeTosho", "filename": f"AnimeTosho_{clean_fid}.ass", "file_id": clean_fid}
+            else:
+                raw_txt = await loop.run_in_executor(
+                    None,
+                    lambda: download_opensubtitle_text(file_id=str_fid),
+                )
+                picked_cand = {"source": "OpenSubtitles", "filename": f"OpenSubtitles_{str_fid}.srt", "file_id": str_fid}
+            ext_cues = strip_opensubtitles_ads(parse_vtt(raw_txt))
+        except Exception as e:
+            log_translate(f"[Smart Fansub & Merge] Gagal unduh file_id={os_file_id}: {e}")
+
+    # Kasus 2b: Pencarian otomatis AnimeTosho (prioritas 1) lalu OpenSubtitles (prioritas 2)
+    if not ext_cues and target_lang == "id":
+        try:
+            # 2b.1 Cek AnimeTosho
+            at_cands = await loop.run_in_executor(
+                None,
+                lambda: search_animetosho_indonesian(title=title, slug=slug, ep=ep),
+            )
+            if at_cands:
+                picked_cand = at_cands[0]
+                raw_txt = await loop.run_in_executor(
+                    None,
+                    lambda: download_animetosho_sub_text(picked_cand.get("url", ""), picked_cand.get("file_id", "")),
+                )
+                ext_cues = strip_opensubtitles_ads(parse_vtt(raw_txt))
+                if ext_cues:
+                    log_translate(f"[Smart Fansub & Merge] Ditemukan di AnimeTosho: {picked_cand.get('filename')}")
+        except Exception as e:
+            log_translate(f"[Smart Fansub & Merge] Gagal pencarian AnimeTosho: {e}")
+
+        # 2b.2 Jika AnimeTosho belum tersedia, cari di OpenSubtitles (khusus ID)
+        if not ext_cues:
+            try:
+                os_cands = await loop.run_in_executor(
+                    None,
+                    lambda: search_opensubtitles(title=title, slug=slug, ep=ep, lang="id"),
+                )
+                id_os_cands = [c for c in os_cands if (c.get("lang") or "").lower() in ("id", "ind", "indonesian")]
+                if id_os_cands:
+                    picked_cand = id_os_cands[0]
+                    raw_txt = await loop.run_in_executor(
+                        None,
+                        lambda: download_opensubtitle_text(
+                            file_id=picked_cand.get("file_id", ""),
+                            url=picked_cand.get("url", ""),
+                            backup_url=picked_cand.get("backup_url", ""),
+                        ),
+                    )
+                    ext_cues = strip_opensubtitles_ads(parse_vtt(raw_txt))
+                    if ext_cues:
+                        log_translate(f"[Smart Fansub & Merge] Ditemukan di OpenSubtitles: {picked_cand.get('filename')}")
+            except Exception as e:
+                log_translate(f"[Smart Fansub & Merge] Gagal pencarian OpenSubtitles: {e}")
+
+    # 3. Jika subtitle eksternal Bahasa Indonesia ditemukan, lakukan Smart Merge
+    if ext_cues and target_lang == "id":
+        # Jalankan Smart Scene Detector untuk kata ganti (saya vs aku)
+        ext_cues = automate_opensubtitles_pronouns(ext_cues, target_lang="id")
+
+        offset = estimate_optimal_offset(builtin_cues, ext_cues) if builtin_cues else 0.0
+        translated_gaps = {}
+
+        # Cari cue pada subtitle bawaan (Signs, OP/ED, Preview) yang tidak ada di external sub
+        if builtin_cues:
+            unmatched_idx, unmatched_cues = find_unmatched_builtin_cues(builtin_cues, ext_cues, offset=offset)
+            if unmatched_cues and len(unmatched_cues) <= 180:
+                try:
+                    tr_gaps = await call_gtx_translate(unmatched_cues, src or "en", "id", mode="gtx+")
+                    for idx_b, tr_c in zip(unmatched_idx, tr_gaps):
+                        translated_gaps[idx_b] = tr_c.get("text", "")
+                except Exception:
+                    pass
+
+        merged_cues, stats = merge_opensubtitles_with_builtin(
+            builtin_cues=builtin_cues,
+            os_cues=ext_cues,
+            merge_mode="hybrid",
+            translated_gaps=translated_gaps,
+            offset=offset,
+            target_lang="id",
+        )
+        new_text = build_vtt(merged_cues)
+        if cache_key and _is_valid_id_subtitle(new_text):
+            await set_subtitle_cache(cache_key, new_text)
+
+        src_name = (picked_cand.get("source") or "Fansub") if picked_cand else "Fansub"
+        fn = (picked_cand.get("filename") or "Subtitle") if picked_cand else "Subtitle"
+        log_translate(
+            f"[Smart Fansub & Merge] Sukses merge [{src_name}] '{fn}' "
+            f"(Count={stats['os_count']}, Snapped={stats['snapped']}, GapsFilled={stats['gap_filled']}, Offset={stats['offset']}s)"
+        )
+        return new_text, {
+            "level": "os_merge",
+            "source": src_name,
+            "os_filename": fn,
+            "merge_stats": stats,
+        }
+
+    # 4. Fallback: Jika belum ada subtitle ID di AnimeTosho/OpenSubtitles, gunakan Smart GTX+ bawaan
+    if builtin_cues:
+        tier = await _translate_with_fallback(builtin_cues, src or "en", target_lang, requested_mode="gtx+")
+        new_text = build_vtt(tier.get("cues") or builtin_cues)
+        if fallback_key_gtxplus and (target_lang != "id" or _is_valid_id_subtitle(new_text)):
+            await set_subtitle_cache(fallback_key_gtxplus, new_text)
+        return new_text, {
+            "level": "os_fallback_gtx+",
+            "error": "Subtitle belum tersedia di AnimeTosho maupun OpenSubtitles, menggunakan Smart GTX+ Bawaan",
+        }
+
+    raise HTTPException(status_code=404, detail="Subtitle tidak ditemukan baik di AnimeTosho, OpenSubtitles, maupun bawaan stream")
+
+
+@app.get("/api/subtitles/opensubtitles")
+@app.get("/api/subtitles/external")
+async def api_search_external_subtitles(
+    title: str = Query(""),
+    slug: str = Query(""),
+    ep: int = Query(1),
+    season: int = Query(0),
+    lang: str = Query("id"),
+):
+    """Cari daftar subtitle khusus Bahasa Indonesia yang tersedia di AnimeTosho dan OpenSubtitles."""
+    try:
+        from api.animetosho import search_animetosho_indonesian
+        from api.opensubtitles import search_opensubtitles
+        loop = asyncio.get_running_loop()
+
+        at_task = loop.run_in_executor(None, lambda: search_animetosho_indonesian(title=title, slug=slug, ep=ep, season=season or 1))
+        os_task = loop.run_in_executor(None, lambda: search_opensubtitles(title=title, slug=slug, ep=ep, season=season, lang="id"))
+        at_items, os_items = await asyncio.gather(at_task, os_task, return_exceptions=True)
+
+        items = []
+        if isinstance(at_items, list):
+            items.extend(at_items)
+        if isinstance(os_items, list):
+            for it in os_items:
+                if (it.get("lang") or "id").lower() in ("id", "ind", "indonesian"):
+                    it["source"] = "OpenSubtitles"
+                    items.append(it)
+
+        return ok({"items": items, "count": len(items), "title": title, "slug": slug, "ep": ep})
+    except Exception as e:
+        return fail(f"Gagal mencari subtitle eksternal: {e}")
+
+
+@app.post("/api/player/sub_opensubtitles_merge")
+@app.post("/api/player/sub_external_merge")
+async def api_merge_external_subtitle(body: dict = None):
+    """Unduh subtitle spesifik dari AnimeTosho atau OpenSubtitles dan lakukan Smart Merge."""
+    body = body or {}
+    file_id = str(body.get("file_id") or body.get("id") or "").strip()
+    os_url = str(body.get("os_url") or body.get("url") or "").strip()
+    backup_url = str(body.get("backup_url") or "").strip()
+    source = str(body.get("source") or "").strip().lower()
+    filename = str(body.get("filename") or f"Subtitle_{file_id}.srt").strip()
+    target_lang = str(body.get("lang") or "id").strip().lower()
+    base_sub_url = str(body.get("base_sub_url") or "").strip()
+    referer = str(body.get("referer") or "").strip()
+
+    if not file_id and not os_url:
+        return fail("file_id atau os_url subtitle wajib diisi")
+
+    try:
+        from api.translate import (
+            parse_vtt,
+            build_vtt,
+            merge_overlapping_cues,
+            estimate_optimal_offset,
+            find_unmatched_builtin_cues,
+            merge_opensubtitles_with_builtin,
+            call_gtx_translate,
+            automate_opensubtitles_pronouns,
+            apply_universal_lexicon_id,
+        )
+        from api.opensubtitles import download_opensubtitle_text, strip_opensubtitles_ads
+        from api.animetosho import download_animetosho_sub_text
+
+        loop = asyncio.get_running_loop()
+        is_animetosho = "animetosho" in source or "animetosho" in os_url or file_id.startswith("at_")
+
+        if is_animetosho:
+            clean_fid = file_id.replace("at_", "") if file_id.startswith("at_") else file_id
+            raw_txt = await loop.run_in_executor(
+                None,
+                lambda: download_animetosho_sub_text(url=os_url, file_id=clean_fid),
+            )
+        else:
+            raw_txt = await loop.run_in_executor(
+                None,
+                lambda: download_opensubtitle_text(file_id=file_id, url=os_url, backup_url=backup_url),
+            )
+
+        ext_cues = strip_opensubtitles_ads(parse_vtt(raw_txt))
+        if not ext_cues:
+            return fail("File subtitle kosong atau tidak valid")
+
+        if target_lang == "id":
+            ext_cues = automate_opensubtitles_pronouns(ext_cues, target_lang="id")
+
+        builtin_cues = []
+        if base_sub_url and base_sub_url.startswith("http"):
+            try:
+                _validate_external_proxy_url(base_sub_url)
+                base_txt = await _fetch_sub_text(base_sub_url, referer)
+                builtin_cues = merge_overlapping_cues(parse_vtt(base_txt))
+            except Exception:
+                pass
+
+        offset = estimate_optimal_offset(builtin_cues, ext_cues) if builtin_cues else 0.0
+        translated_gaps = {}
+        if builtin_cues and target_lang == "id":
+            unmatched_idx, unmatched_cues = find_unmatched_builtin_cues(builtin_cues, ext_cues, offset=offset)
+            if unmatched_cues and len(unmatched_cues) <= 180:
+                try:
+                    tr_gaps = await call_gtx_translate(unmatched_cues, "en", "id", mode="gtx+")
+                    for idx_b, tr_c in zip(unmatched_idx, tr_gaps):
+                        translated_gaps[idx_b] = tr_c.get("text", "")
+                except Exception:
+                    pass
+
+        merged_cues, stats = merge_opensubtitles_with_builtin(
+            builtin_cues=builtin_cues,
+            os_cues=ext_cues,
+            merge_mode="hybrid",
+            translated_gaps=translated_gaps,
+            offset=offset,
+            target_lang=target_lang,
+        )
+        norm_vtt = build_vtt(merged_cues)
+
+        import hashlib
+        sub_id = hashlib.sha1(f"ext_merged|{file_id}|{base_sub_url}".encode("utf-8")).hexdigest()[:16]
+        await set_subtitle_cache(f"custom|{sub_id}", norm_vtt)
+
+        prov_tag = "AnimeTosho" if is_animetosho else "OpenSubtitles"
+        return ok({
+            "id": sub_id,
+            "url": f"/api/player/sub_custom?id={sub_id}",
+            "cues_count": len(merged_cues),
+            "lang": target_lang,
+            "label": f"[{prov_tag}] {filename}",
+            "stats": stats,
+        })
+    except Exception as e:
+        return fail(f"Gagal mengunduh/merge subtitle eksternal: {e}")
+
+
 @app.post("/api/player/sub_custom")
 async def upload_custom_sub(body: dict = None):
     """Menerima subtitle kustom (.srt atau .vtt) dari teks upload atau URL eksternal,
@@ -2090,10 +2911,11 @@ async def upload_custom_sub(body: dict = None):
         return fail("Teks subtitle atau URL kosong")
 
     try:
-        from api.translate import parse_vtt, build_vtt
-        cues = parse_vtt(text)
+        from api.translate import parse_vtt, build_vtt, merge_overlapping_cues
+        raw_cues = parse_vtt(text)
+        cues = merge_overlapping_cues(raw_cues)
         if not cues:
-            return fail("Format subtitle tidak dikenali atau tidak memiliki cue valid (.srt / .vtt)")
+            return fail("Format subtitle tidak dikenali atau tidak memiliki cue valid (.srt / .vtt / .ass / .ssa)")
         norm_vtt = build_vtt(cues)
     except Exception as e:
         return fail(f"Gagal memproses format subtitle: {e}")
@@ -2142,8 +2964,10 @@ async def get_custom_sub(id: str = Query(""),
     if lang and lang.lower() != src.lower():
         from api.translate import parse_vtt, build_vtt
         import hashlib
+        is_dual = False
+        clean_mode = "gtx+" if mode in ("gtx", "gtx+", "gtx+_dual", "aigtx") else (mode or "gtx+")
         cache_id = id or hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-        tr_hash = hashlib.sha1(f"custom_tr|{cache_id}|{lang}".encode("utf-8")).hexdigest()
+        tr_hash = hashlib.sha1(f"custom_tr|{cache_id}|{lang}|{clean_mode}".encode("utf-8")).hexdigest()
         key_tr = f"sub2|custom|{tr_hash}"
 
         if not refresh:
@@ -2155,7 +2979,7 @@ async def get_custom_sub(id: str = Query(""),
 
         try:
             cues = parse_vtt(vtt_text)
-            tier = await _translate_with_fallback(cues, src, lang, requested_mode=mode or "gtx+")
+            tier = await _translate_with_fallback(cues, src, lang, requested_mode=clean_mode or "gtx+")
             new_text = build_vtt(tier.get("cues") or cues)
             if tier.get("level") not in ("source", "source-fallback"):
                 await set_subtitle_cache(key_tr, new_text)
@@ -2390,6 +3214,7 @@ async def save_bookmark(body: dict = None):
     slug = (body.get("slug") or body.get("id") or "").strip()
     if not slug:
         return err("Slug wajib diisi", 400)
+    _ANIME_FAILOVER_CACHE.pop(slug, None)
     await add_bookmark(
         slug=slug,
         title=body.get("title", ""),
@@ -2403,11 +3228,14 @@ async def save_bookmark(body: dict = None):
 
 @app.delete("/api/bookmarks/{slug}")
 async def delete_one_bookmark(slug: str):
-    await remove_bookmark(slug)
+    slug_clean = (slug or "").strip()
+    _ANIME_FAILOVER_CACHE.pop(slug_clean, None)
+    await remove_bookmark(slug_clean)
     return ok(True)
 
 @app.delete("/api/bookmarks")
 async def del_all_bookmarks():
+    _ANIME_FAILOVER_CACHE.clear()
     await clear_bookmarks()
     return ok(True)
 
@@ -2433,6 +3261,7 @@ async def get_set():
         "translate_apikey": await get_setting("translate_apikey", ""),
         "translate_model": await get_setting("translate_model", "gemini-2.0-flash"),
         "translate_apiurl": await get_setting("translate_apiurl", "https://generativelanguage.googleapis.com/v1beta/openai"),
+        "safe_mode": await get_setting("safe_mode", "1"),
     })
 
 @app.post("/api/settings")
@@ -2452,7 +3281,7 @@ async def set_set(body: dict = None):
                 if not body.get("translate_apiurl"):
                     body["translate_apiurl"] = inferred_url
 
-    for k in ("quality", "mode", "player", "sub_lang", "preferred_source",
+    for k in ("quality", "mode", "player", "sub_lang", "preferred_source", "safe_mode",
               "translate_apikey", "translate_model", "translate_apiurl"):
         if k in body:
             await set_setting(k, body[k])

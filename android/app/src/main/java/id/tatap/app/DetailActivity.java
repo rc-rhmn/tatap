@@ -6,6 +6,8 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.os.SystemClock;
+import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -50,9 +52,11 @@ public class DetailActivity extends Activity {
     private String synopsis;
     private String studio;
     private String season;
+    private String year;
     private String status;
     private String source;
     private String genresStr;
+    private String mode = "sub";
     private double score = 0.0;
 
     private TextView tvTitle, tvTitleFull, tvSlug, tvTypeBadge;
@@ -100,6 +104,8 @@ public class DetailActivity extends Activity {
         setContentView(R.layout.activity_detail);
 
         slug = getIntent().getStringExtra("slug");
+        String passedMode = getIntent().getStringExtra("mode");
+        mode = (passedMode != null && !passedMode.isEmpty() && "dub".equalsIgnoreCase(passedMode)) ? "dub" : "sub";
         title = getIntent().getStringExtra("title");
         poster = getIntent().getStringExtra("poster");
         type = getIntent().getStringExtra("type");
@@ -110,6 +116,7 @@ public class DetailActivity extends Activity {
         score = getIntent().getDoubleExtra("score", 0.0);
         studio = getIntent().getStringExtra("studio");
         season = getIntent().getStringExtra("season");
+        year = getIntent().getStringExtra("year");
         status = getIntent().getStringExtra("status");
         source = getIntent().getStringExtra("source");
         genresStr = getIntent().getStringExtra("genres");
@@ -141,7 +148,7 @@ public class DetailActivity extends Activity {
         tvTitle.setText(title != null ? title : "Detail Anime");
         tvTitleFull.setText(title != null ? title : "Anime");
         setupSynopsis(synopsis);
-        setupMetadata(score, status, studio, season, source, genresStr);
+        setupMetadata(score, status, studio, season, year, source, genresStr);
 
         String badgeText = (type != null && !type.isEmpty() ? type : "ANIME")
                 + (epsCounter != null && !epsCounter.isEmpty() ? " · " + epsCounter + " EP" : (eps != null && !eps.isEmpty() ? " · " + eps + " EP" : ""))
@@ -218,13 +225,40 @@ public class DetailActivity extends Activity {
         loadRelations();
     }
 
+    private long lastResumeTimeMs = 0;
+
     @Override
     protected void onResume() {
         super.onResume();
+        lastResumeTimeMs = SystemClock.uptimeMillis();
         updateQuickPlayButton();
         if (adapter != null) {
             adapter.notifyDataSetChanged();
         }
+        if (TvFocusHelper.isTv(this)) {
+            // Alihkan fokus remote TV ke tombol lanjutkan atau daftar episode (jangan tertinggal di btnBack)
+            getWindow().getDecorView().postDelayed(() -> {
+                if (!isFinishing() && !isDestroyed()) {
+                    if (btnQuickPlay != null && btnQuickPlay.getVisibility() == View.VISIBLE) {
+                        btnQuickPlay.requestFocus();
+                    } else if (rvEpisodes != null) {
+                        rvEpisodes.requestFocus();
+                    }
+                }
+            }, 150);
+        }
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getKeyCode() == KeyEvent.KEYCODE_BACK && TvFocusHelper.isTv(this)) {
+            // Khusus Android TV: gesture/tombol back di HP tidak boleh ikut terbuang oleh debounce ini.
+            // Filter debounce: abaikan pulsa back bocoran dalam 450ms pertama setelah kembali dari PlayerActivity
+            if (SystemClock.uptimeMillis() - lastResumeTimeMs < 450) {
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     private void updateQuickPlayButton() {
@@ -234,25 +268,25 @@ public class DetailActivity extends Activity {
             mb.setAllCaps(false);
             mb.setIconResource(R.drawable.ic_play);
             if (lastEp > 0) {
-                mb.setText("Lanjutkan Ep " + lastEp);
-                mb.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF38BDF8));
-                mb.setTextColor(0xFF080C14);
-                mb.setIconTint(android.content.res.ColorStateList.valueOf(0xFF080C14));
-                mb.setStrokeColor(android.content.res.ColorStateList.valueOf(0xFF38BDF8));
+                mb.setText("Lanjutkan " + lastEp);
+                mb.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF0A84FF));
+                mb.setTextColor(0xFFFFFFFF);
+                mb.setIconTint(android.content.res.ColorStateList.valueOf(0xFFFFFFFF));
+                mb.setStrokeColor(android.content.res.ColorStateList.valueOf(0xFF0A84FF));
                 mb.setStrokeWidth((int) (1 * getResources().getDisplayMetrics().density));
             } else {
-                mb.setText("Putar Ep 1");
-                mb.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF161C28));
-                mb.setTextColor(0xFF38BDF8);
-                mb.setIconTint(android.content.res.ColorStateList.valueOf(0xFF38BDF8));
-                mb.setStrokeColor(android.content.res.ColorStateList.valueOf(0xFF38BDF8));
+                mb.setText("Putar 1");
+                mb.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF0A84FF));
+                mb.setTextColor(0xFFFFFFFF);
+                mb.setIconTint(android.content.res.ColorStateList.valueOf(0xFFFFFFFF));
+                mb.setStrokeColor(android.content.res.ColorStateList.valueOf(0xFF0A84FF));
                 mb.setStrokeWidth((int) (1 * getResources().getDisplayMetrics().density));
             }
         } else {
             if (lastEp > 0) {
-                btnQuickPlay.setText("Lanjutkan Ep " + lastEp);
+                btnQuickPlay.setText("Lanjutkan " + lastEp);
             } else {
-                btnQuickPlay.setText("Putar Ep 1");
+                btnQuickPlay.setText("Putar 1");
             }
         }
     }
@@ -272,7 +306,7 @@ public class DetailActivity extends Activity {
                 b.put("episode", ep);
                 b.put("poster", poster != null ? poster : "");
                 b.put("type", type != null ? type : "");
-                b.put("mode", "sub");
+                b.put("mode", mode != null ? mode : "sub");
 
                 HttpURLConnection conn = (HttpURLConnection) new URL("http://127.0.0.1:8767/api/history").openConnection();
                 conn.setRequestMethod("POST");
@@ -290,6 +324,7 @@ public class DetailActivity extends Activity {
         Intent intent = new Intent(DetailActivity.this, PlayerActivity.class);
         intent.putExtra("slug", slug);
         intent.putExtra("ep", ep);
+        intent.putExtra("mode", mode != null ? mode : "sub");
         intent.putExtra("title", title);
         intent.putExtra("poster", poster);
         intent.putExtra("type", type);
@@ -327,6 +362,7 @@ public class DetailActivity extends Activity {
                         String apiStatus = detailObj.optString("status", "");
                         String apiStudio = detailObj.optString("studio", "");
                         String apiSeason = detailObj.optString("season", "");
+                        String apiYear = detailObj.optString("year", "");
                         String apiSource = detailObj.optString("source", "");
                         JSONArray apiGenres = detailObj.optJSONArray("genres");
                         String apiGenresStr = apiGenres != null ? apiGenres.toString() : "";
@@ -339,9 +375,10 @@ public class DetailActivity extends Activity {
                             }
                             if ((studio == null || studio.isEmpty()) && !apiStudio.isEmpty()) studio = apiStudio;
                             if ((season == null || season.isEmpty()) && !apiSeason.isEmpty()) season = apiSeason;
+                            if ((year == null || year.isEmpty()) && !apiYear.isEmpty()) year = apiYear;
                             if ((source == null || source.isEmpty()) && !apiSource.isEmpty()) source = apiSource;
                             if ((genresStr == null || genresStr.isEmpty()) && !apiGenresStr.isEmpty()) genresStr = apiGenresStr;
-                            setupMetadata(score, status, studio, season, source, genresStr);
+                            setupMetadata(score, status, studio, season, year, source, genresStr);
                         });
                     }
 
@@ -388,7 +425,7 @@ public class DetailActivity extends Activity {
                         if (isFinishedAnime) {
                             if (status == null || !status.toLowerCase().contains("finish")) {
                                 status = "finished";
-                                setupMetadata(score, status, studio, season, source, genresStr);
+                                setupMetadata(score, status, studio, season, year, source, genresStr);
                             }
                         }
 
@@ -436,7 +473,7 @@ public class DetailActivity extends Activity {
         }).start();
     }
 
-    private void setupMetadata(double scoreVal, String statusVal, String studioVal, String seasonVal, String sourceVal, String genresData) {
+    private void setupMetadata(double scoreVal, String statusVal, String studioVal, String seasonVal, String yearVal, String sourceVal, String genresData) {
         // Score Badge
         if (tvScore != null) {
             if (scoreVal > 0) {
@@ -476,7 +513,13 @@ public class DetailActivity extends Activity {
                 metaParts.add("Studio: " + studioVal.trim());
             }
             if (seasonVal != null && !seasonVal.trim().isEmpty()) {
-                metaParts.add(seasonVal.trim());
+                String sTxt = seasonVal.trim();
+                if (yearVal != null && !yearVal.trim().isEmpty() && !sTxt.contains(yearVal.trim())) {
+                    sTxt += " " + yearVal.trim();
+                }
+                metaParts.add(sTxt);
+            } else if (yearVal != null && !yearVal.trim().isEmpty()) {
+                metaParts.add(yearVal.trim());
             }
             if (sourceVal != null && !sourceVal.trim().isEmpty()) {
                 metaParts.add("Sumber: " + sourceVal.trim());
@@ -494,11 +537,18 @@ public class DetailActivity extends Activity {
             if (genresData != null && !genresData.trim().isEmpty()) {
                 try {
                     List<String> genreList = new ArrayList<>();
+                    boolean safeMode = getSharedPreferences("tatap_player_prefs", Context.MODE_PRIVATE).getBoolean("pref_safemode", true);
                     if (genresData.startsWith("[")) {
                         JSONArray jArr = new JSONArray(genresData);
                         for (int i = 0; i < jArr.length(); i++) {
                             String g = jArr.optString(i, "").trim();
                             if (!g.isEmpty() && !"hentai".equalsIgnoreCase(g)) {
+                                if (safeMode) {
+                                    String gl = g.toLowerCase();
+                                    if (gl.contains("ecchi") || gl.contains("erotica") || gl.contains("magical-sex-shift")) {
+                                        continue;
+                                    }
+                                }
                                 genreList.add(g);
                             }
                         }
@@ -506,6 +556,12 @@ public class DetailActivity extends Activity {
                         for (String g : genresData.split(",")) {
                             String trimmed = g.trim();
                             if (!trimmed.isEmpty() && !"hentai".equalsIgnoreCase(trimmed)) {
+                                if (safeMode) {
+                                    String gl = trimmed.toLowerCase();
+                                    if (gl.contains("ecchi") || gl.contains("erotica") || gl.contains("magical-sex-shift")) {
+                                        continue;
+                                    }
+                                }
                                 genreList.add(trimmed);
                             }
                         }
@@ -671,29 +727,28 @@ public class DetailActivity extends Activity {
         @Override
         public void onBindViewHolder(@NonNull EpisodeViewHolder holder, int position) {
             int ep = episodes.get(position);
-            holder.tvTitle.setText(String.format("EP %02d", ep));
+            holder.tvTitle.setText(String.valueOf(ep));
 
             if (ep == cachedLastPlayedEp) {
-                // Last played episode
-                holder.card.setCardBackgroundColor(0xFF1C2230);
-                holder.card.setStrokeColor(0xFF38BDF8);
-                holder.tvTitle.setTextColor(0xFF38BDF8);
-                holder.tvBadge.setVisibility(View.VISIBLE);
-                holder.tvBadge.setText("TERAKHIR");
-                holder.tvBadge.setTextColor(0xFF38BDF8);
+                // Last played episode: Apple System Blue (Nomor Saja)
+                holder.card.setCardBackgroundColor(0xFF162A45);
+                holder.card.setStrokeColor(0xFF0A84FF);
+                holder.tvTitle.setTextColor(0xFF0A84FF);
+                holder.tvTitle.setTypeface(null, android.graphics.Typeface.BOLD);
+                holder.tvBadge.setVisibility(View.GONE);
             } else if (cachedWatchedSet.contains(ep)) {
-                // Watched episode
-                holder.card.setCardBackgroundColor(0xFF0E1017);
-                holder.card.setStrokeColor(0xFF1C202C);
-                holder.tvTitle.setTextColor(0xFF64748B);
-                holder.tvBadge.setVisibility(View.VISIBLE);
-                holder.tvBadge.setText("DITONTON");
-                holder.tvBadge.setTextColor(0xFF10B981);
+                // Watched episode: Apple Muted Surface (Nomor Saja)
+                holder.card.setCardBackgroundColor(0xFF141418);
+                holder.card.setStrokeColor(0xFF222228);
+                holder.tvTitle.setTextColor(0xFF71717A);
+                holder.tvTitle.setTypeface(null, android.graphics.Typeface.NORMAL);
+                holder.tvBadge.setVisibility(View.GONE);
             } else {
-                // Unwatched episode
-                holder.card.setCardBackgroundColor(0xFF11141C);
-                holder.card.setStrokeColor(0xFF1C202C);
-                holder.tvTitle.setTextColor(0xFFF1F5F9);
+                // Unwatched episode: Apple Clean Elevated Surface (Nomor Saja)
+                holder.card.setCardBackgroundColor(0xFF1C1C22);
+                holder.card.setStrokeColor(0xFF2C2E38);
+                holder.tvTitle.setTextColor(0xFFF5F5F7);
+                holder.tvTitle.setTypeface(null, android.graphics.Typeface.NORMAL);
                 holder.tvBadge.setVisibility(View.GONE);
             }
 
@@ -875,6 +930,7 @@ public class DetailActivity extends Activity {
                 intent.putExtra("type", relFormat);
                 intent.putExtra("eps", "");
                 intent.putExtra("sub", "SUB");
+                intent.putExtra("mode", mode);
                 startActivity(intent);
                 finish();
             });

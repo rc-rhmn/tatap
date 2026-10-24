@@ -37,11 +37,51 @@ def get_translate_logs():
 
 
 
+_ASS_TAG_RE = _re.compile(r"\{[^}]*\}")
+_ASS_DIALOGUE_RE = _re.compile(
+    r"^\s*Dialogue:\s*[^,]*,\s*([0-9]+:[0-5]?\d:[0-5]?\d[.,]\d+)\s*,\s*([0-9]+:[0-5]?\d:[0-5]?\d[.,]\d+)\s*,"
+    r"[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,(.*)$",
+    _re.I,
+)
+
+
+def clean_ass_tags(text: str) -> str:
+    """Bersihkan tag override ASS/SSA ({\\an8}, {\\pos(x,y)}, {\\fad(...)}) dan konversi \\N / \\n / \\h."""
+    if not text:
+        return ""
+    t = _ASS_TAG_RE.sub("", text)
+    t = t.replace("\\N", "\n").replace("\\n", "\n").replace("\\h", " ")
+    return t
+
+
 def parse_vtt(text):
-    """Parse WEBVTT text ke list[{start:float, end:float, text:str}].
-    Port dari app.js parseVtt() — keep logic consistent."""
+    """Parse WEBVTT, SRT, atau ASS/SSA text ke list[{start:float, end:float, text:str}].
+    Mendukung pembersihan tag HTML (<...>) maupun ASS override ({\\an8}, \\N)
+    serta penggabungan cue simultan (overlapping dialogue + sign)."""
     out = []
-    lines = (text or "").replace("\r\n", "\n").split("\n")
+    raw_text = (text or "").lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    lines = raw_text.split("\n")
+
+    # Deteksi format ASS / SSA ([Events] / Dialogue:)
+    if any(ln.strip().lower().startswith("dialogue:") for ln in lines[:250]):
+        for ln in lines:
+            m = _ASS_DIALOGUE_RE.match(ln)
+            if not m:
+                continue
+            s_ts = _vtt_ts(m.group(1).strip())
+            e_ts = _vtt_ts(m.group(2).strip())
+            if s_ts < 0 or e_ts <= s_ts:
+                continue
+            cleaned_ass = clean_ass_tags(m.group(3))
+            text_lines = [
+                _html.unescape(_re.sub(r"<[^>]*>", "", sub_ln)).strip()
+                for sub_ln in cleaned_ass.split("\n")
+            ]
+            text_lines = [x for x in text_lines if x]
+            if text_lines:
+                out.append({"start": s_ts, "end": e_ts, "text": "\n".join(text_lines)})
+        return merge_overlapping_cues(out)
+
     i = 0
     if lines and lines[0].startswith("WEBVTT"):
         i = 1
@@ -53,10 +93,14 @@ def parse_vtt(text):
     def _flush():
         nonlocal start, end, buf, out
         if start >= 0 and end > start and buf:
-            # Plain text: buang tag VTT/HTML (<i>, <c.x>, <00:01.000>) lalu decode entity.
-            # Escaping HTML dilakukan frontend (parseVtt) saat render, bukan di sini.
-            text_lines = [_html.unescape(_re.sub(r"<[^>]*>", "", ln)).strip() for ln in buf]
-            text_lines = [x for x in text_lines if x]
+            # Plain text: buang tag ASS ({\an8}, \N) dan VTT/HTML (<i>, <c.x>, <00:01.000>) lalu decode entity.
+            text_lines = []
+            for ln in buf:
+                cleaned_ln = clean_ass_tags(ln)
+                for part in cleaned_ln.split("\n"):
+                    plain = _html.unescape(_re.sub(r"<[^>]*>", "", part)).strip()
+                    if plain:
+                        text_lines.append(plain)
             if text_lines:
                 out.append({"start": start, "end": end, "text": "\n".join(text_lines)})
         start = -1.0
@@ -81,10 +125,248 @@ def parse_vtt(text):
             i += 1
             continue
         if start >= 0:
+            # Abaikan nomor urut SRT jika berdiri sendiri sebelum timestamp berikutnya
+            if ln.isdigit() and (i + 1 < len(lines)) and "-->" in lines[i + 1]:
+                _flush()
+                i += 1
+                continue
             buf.append(ln)
         i += 1
     _flush()
-    return out
+    return merge_overlapping_cues(out)
+
+
+def merge_overlapping_cues(cues):
+    """Gabungkan cue yang memiliki rentang timestamp identik/hampir identik (selisih <= 0.05s)
+    dan deduplikasi baris teks yang sama agar dialog & sign simultan tidak saling menimpa."""
+    if not cues or len(cues) <= 1:
+        return cues
+    sorted_cues = sorted(cues, key=lambda c: (c["start"], c["end"]))
+    merged = []
+    for c in sorted_cues:
+        if merged and abs(c["start"] - merged[-1]["start"]) <= 0.05 and abs(c["end"] - merged[-1]["end"]) <= 0.05:
+            prev_lines = merged[-1]["text"].split("\n")
+            for ln in c["text"].split("\n"):
+                if ln and ln not in prev_lines:
+                    prev_lines.append(ln)
+            merged[-1]["text"] = "\n".join(prev_lines[:4])
+        else:
+            merged.append({"start": c["start"], "end": c["end"], "text": c["text"]})
+    return merged
+
+
+def build_bilingual_vtt(translated_cues, source_cues):
+    """Bangun teks WEBVTT dwibahasa (Baris atas: Terjemahan, Baris bawah: Teks Asli)."""
+    if not translated_cues:
+        return build_vtt(source_cues or [])
+    if not source_cues or len(source_cues) != len(translated_cues):
+        return build_vtt(translated_cues)
+    combined = []
+    for tr_c, src_c in zip(translated_cues, source_cues):
+        tr_txt = (tr_c.get("text") or "").strip()
+        src_txt = (src_c.get("text") or "").replace("\n", " ").strip()
+        if src_txt and tr_txt.lower() != src_txt.lower():
+            text_out = f"{tr_txt}\n{src_txt}"
+        else:
+            text_out = tr_txt
+        combined.append({"start": tr_c["start"], "end": tr_c["end"], "text": text_out})
+    return build_vtt(combined)
+
+
+def estimate_optimal_offset(builtin_cues: list, os_cues: list, max_shift: float = 15.0) -> float:
+    """Hitung offset waktu optimal (detik) untuk menyelaraskan os_cues terhadap builtin_cues anime.
+    Menggunakan cross-correlation histogram selisih waktu mulai (start onset) dengan presisi 0.2 detik."""
+    if not builtin_cues or not os_cues:
+        return 0.0
+    buckets = _collections.Counter()
+    b_starts = [float(c["start"]) for c in builtin_cues[:400]]
+    o_starts = [float(c["start"]) for c in os_cues[:400]]
+
+    for bs in b_starts:
+        for os_t in o_starts:
+            diff = bs - os_t
+            if -max_shift <= diff <= max_shift:
+                q = round(diff * 5.0) / 5.0
+                buckets[q] += 1
+
+    if not buckets:
+        return 0.0
+
+    best_q, best_cnt = buckets.most_common(1)[0]
+    # Hitung rata-rata tertimbang di sekitar puncak (best_q +- 0.2s)
+    total_w = 0
+    weighted_sum = 0.0
+    for q_val in (round((best_q - 0.2) * 5.0) / 5.0, best_q, round((best_q + 0.2) * 5.0) / 5.0):
+        w = buckets.get(q_val, 0)
+        total_w += w
+        weighted_sum += q_val * w
+
+    n_min = min(len(b_starts), len(o_starts))
+    min_required = max(2, min(n_min, int(n_min * 0.15))) if n_min >= 10 else max(2, int(n_min * 0.5))
+    if total_w < min_required:
+        return 0.0
+
+    refined = round(weighted_sum / max(1, total_w), 2)
+    return refined if abs(refined) >= 0.20 else 0.0
+
+
+def _cues_overlap(a_start: float, a_end: float, b_start: float, b_end: float, tol: float = 0.25) -> bool:
+    """True jika dua rentang waktu cue saling berimpitan atau sangat berdekatan."""
+    overlap = min(a_end, b_end) - max(a_start, b_start)
+    if overlap >= -tol:
+        return True
+    return abs(a_start - b_start) <= 0.65
+
+
+def find_unmatched_builtin_cues(builtin_cues: list, os_cues: list, offset: float = 0.0) -> tuple:
+    """Temukan cue pada subtitle bawaan anime (seperti Sign, OP/ED, Preview) yang belum ada di OpenSubtitles.
+    Mengembalikan (list_index_builtin, list_cue_builtin)."""
+    if not builtin_cues:
+        return ([], [])
+    if not os_cues:
+        return (list(range(len(builtin_cues))), list(builtin_cues))
+
+    shifted_os = [
+        {"start": max(0.0, float(c["start"]) + offset), "end": max(0.1, float(c["end"]) + offset)}
+        for c in os_cues
+    ]
+    unmatched_idx = []
+    unmatched_cues = []
+    for idx, bc in enumerate(builtin_cues):
+        bs, be = float(bc["start"]), float(bc["end"])
+        has_match = False
+        for oc in shifted_os:
+            if _cues_overlap(bs, be, oc["start"], oc["end"], tol=0.20):
+                has_match = True
+                break
+        if not has_match:
+            unmatched_idx.append(idx)
+            unmatched_cues.append(bc)
+    return (unmatched_idx, unmatched_cues)
+
+
+def merge_opensubtitles_with_builtin(
+    builtin_cues: list,
+    os_cues: list,
+    merge_mode: str = "hybrid",
+    translated_gaps: dict = None,
+    offset: float = None,
+    target_lang: str = "id",
+) -> tuple:
+    """Gabungkan (merge) subtitle yang diunduh dari OpenSubtitles dengan subtitle bawaan anime.
+
+    Mekanisme:
+      1. Auto-Sync Offset: Menyelaraskan timeline os_cues dengan builtin_cues.
+      2. Kamus Istilah Anime: Pembersihan tag ASS/HTML serta koreksi leksikon anime universal.
+      3. Timestamp Snapping: Menempelkan waktu cue OpenSubtitles ke timestamp presisi milik subtitle bawaan.
+      4. Gap Filling (Hybrid): Mengisi cue yang hilang di OpenSubtitles (Signs/OP/ED/Preview) dari subtitle bawaan.
+      5. Bilingual Mode (os_dual): Menyusun teks OpenSubtitles di baris atas & teks bawaan anime di baris bawah.
+
+    Mengembalikan (merged_cues, stats_dict).
+    """
+    from api.opensubtitles import strip_opensubtitles_ads
+
+    clean_os = strip_opensubtitles_ads(os_cues or [])
+    clean_builtin = list(builtin_cues or [])
+
+    if not clean_os and not clean_builtin:
+        return ([], {"offset": 0.0, "os_count": 0, "gap_filled": 0, "snapped": 0})
+    if not clean_os:
+        return (clean_builtin, {"offset": 0.0, "os_count": 0, "gap_filled": len(clean_builtin), "snapped": 0})
+    if not clean_builtin:
+        return (clean_os, {"offset": 0.0, "os_count": len(clean_os), "gap_filled": 0, "snapped": 0})
+
+    if offset is None:
+        offset = estimate_optimal_offset(clean_builtin, clean_os)
+
+    translated_gaps = translated_gaps or {}
+    merged = []
+    snapped_count = 0
+    gap_filled_count = 0
+    matched_builtin_indices = set()
+    is_id_lang = (target_lang or "id").lower() in ("id", "ind", "indonesian")
+
+    # Jalankan otomasi cerdas pemilihan kata ganti (saya vs aku) berbasis konteks adegan
+    if is_id_lang and clean_os:
+        clean_os = automate_opensubtitles_pronouns(clean_os, target_lang=target_lang)
+
+    for oc in clean_os:
+        os_s = max(0.0, float(oc["start"]) + offset)
+        os_e = max(os_s + 0.1, float(oc["end"]) + offset)
+        raw_os_txt = (oc.get("text") or "").strip()
+        if not raw_os_txt:
+            continue
+
+        # 1. Bersihkan tag ASS override ({\an8}, {\pos}, \N, \h) & tag/entitas HTML
+        os_txt = clean_ass_tags(raw_os_txt).strip()
+        if os_txt and ("<" in os_txt or "&" in os_txt):
+            os_txt = _re.sub(r"<[^>]+>", "", _html.unescape(os_txt)).strip()
+
+        # 2. Terapkan Kamus Istilah Anime Universal (istilah anime saja, persona asli tetap terjaga)
+        if is_id_lang and os_txt:
+            os_txt = apply_universal_lexicon_id(os_txt)
+
+        if not os_txt:
+            continue
+
+        # Cari cue bawaan yang berimpitan paling dekat
+        best_b_idx = -1
+        best_dist = 999.0
+        overlapping_b_texts = []
+
+        for b_idx, bc in enumerate(clean_builtin):
+            bs, be = float(bc["start"]), float(bc["end"])
+            if _cues_overlap(os_s, os_e, bs, be, tol=0.20):
+                matched_builtin_indices.add(b_idx)
+                b_txt = (bc.get("text") or "").replace("\n", " ").strip()
+                if b_txt and b_txt not in overlapping_b_texts:
+                    overlapping_b_texts.append(b_txt)
+                dist = abs(os_s - bs) + abs(os_e - be)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_b_idx = b_idx
+
+        final_s, final_e = os_s, os_e
+        if best_b_idx >= 0:
+            bc_best = clean_builtin[best_b_idx]
+            bs, be = float(bc_best["start"]), float(bc_best["end"])
+            if abs(os_s - bs) <= 0.85 and abs(os_e - be) <= 1.10:
+                final_s, final_e = bs, be
+                snapped_count += 1
+
+        final_txt = os_txt
+        merged.append({"start": final_s, "end": final_e, "text": final_txt})
+
+    # Isi celah cue dari subtitle bawaan yang tidak ada di external sub (Signs, OP/ED, Preview)
+    for b_idx, bc in enumerate(clean_builtin):
+        if b_idx in matched_builtin_indices:
+            continue
+        bs, be = float(bc["start"]), float(bc["end"])
+        orig_b_txt = (bc.get("text") or "").strip()
+        if not orig_b_txt:
+            continue
+        tr_b_txt = (translated_gaps.get(b_idx) or orig_b_txt).strip()
+        if is_id_lang and tr_b_txt:
+            tr_b_txt = apply_universal_lexicon_id(tr_b_txt)
+        gap_txt = tr_b_txt
+        merged.append({"start": bs, "end": be, "text": gap_txt})
+        gap_filled_count += 1
+
+    final_cues = merge_overlapping_cues(merged)
+    # Proteksi leksikon final untuk setiap cue hasil merge
+    if is_id_lang:
+        for fc in final_cues:
+            if fc.get("text"):
+                fc["text"] = apply_universal_lexicon_id(fc["text"])
+    stats = {
+        "offset": offset,
+        "os_count": len(clean_os),
+        "builtin_count": len(clean_builtin),
+        "snapped": snapped_count,
+        "gap_filled": gap_filled_count,
+        "total_merged": len(final_cues),
+    }
+    return (final_cues, stats)
 
 
 def _vtt_ts(s):
@@ -704,7 +986,7 @@ _SCENE_MILITARY_RE = _re.compile(
 )
 
 _SCENE_ROYAL_RE = _re.compile(
-    r"\b(paduka|yang mulia|baginda|hamba|tuan putri|putri mahkota|pangeran|pangeran mahkota|"
+    r"\b(paduka|yang mulia|baginda|hamba|tuan|nyonya|tuan putri|putri mahkota|pangeran|pangeran mahkota|"
     r"kaisar|permaisuri|ratu|raja|nobilitas|kaum bangsawan|bangsawan|adipati|duke|duchess|baron|"
     r"baroness|marquis|marquess|count|viscount|lord|lady|nona besar|tuan muda|tuanku|takhta|"
     r"istana kekaisaran|dewan kekaisaran|titah baginda|titah kaisar|uskup agung|paus|kardinal|"
@@ -721,9 +1003,23 @@ _SCENE_GAMING_RE = _re.compile(
     _re.I
 )
 
-_FORMAL_INDICATORS_RE = _re.compile(
-    _SCENE_MILITARY_RE.pattern + "|" + _SCENE_ROYAL_RE.pattern,
+_SCENE_BROADCAST_RE = _re.compile(
+    r"\b(siaran langsung|pemirsa|bintang tamu|hadirin|yang terhormat|dewi rebecca|dewa yatan|earl steim|earl ashur|paus drevigo)\b",
     _re.I
+)
+
+_FORMAL_INDICATORS_RE = _re.compile(
+    _SCENE_MILITARY_RE.pattern + "|" + _SCENE_ROYAL_RE.pattern + "|" + _SCENE_BROADCAST_RE.pattern,
+    _re.I
+)
+
+_RAGE_OUTBURST_RE = _re.compile(
+    r"\b(sial|sialan|keparat|brengsek|bajingan|mampus|gila|bodoh|mati kau|habisi|bunuh|bangsat|persetan)\b|[!?]{2,}",
+    _re.I
+)
+
+_MONOLOGUE_RE = _re.compile(
+    r"^\s*[\(\[\*].*[\)\]\*]\s*$"
 )
 
 # ---------------------------------------------------------------------------
@@ -817,18 +1113,184 @@ _PRE_GTX_EN_SLANG_RULES = [
     (r"\bclear rewards?\b", "quest completion reward"),
     (r"\bepic (?:class|job)\b", "epic tier class"),
     (r"\blegendary job\b", "legendary class"),
+    # Proteksi nama game anime agar tidak diterjemahkan mentah
+    (r"\bSatisfy\b", "Satisfy"),
+    (r"\bSword Art Online\b", "Sword Art Online"),
+    (r"\bGun Gale Online\b", "Gun Gale Online"),
+    (r"\bALfheim Online\b", "ALfheim Online"),
+    (r"\bShangri-La Frontier\b", "Shangri-La Frontier"),
+    (r"\bBrain Burst\b", "Brain Burst"),
+    (r"\bElder Tale\b", "Elder Tale"),
+    (r"\bNewWorld Online\b", "NewWorld Online"),
+    (r"\bInfinite Dendrogram\b", "Infinite Dendrogram"),
+    (r"\bCross Reverie\b", "Cross Reverie"),
+    # Stage-1: Exclamation Openers & Interjeksi Pembuka (Cegah "Pria, ..." / "Anak laki-laki, ...")
+    (r"^\s*oh\s+man,\s*", "oh gosh, "),
+    (r"^\s*man,\s+", "gosh, "),
+    (r"^\s*oh\s+boy,\s*", "oh my, "),
+    (r"^\s*boy,\s+", "wow, "),
+    (r"\bwhat the (?:heck|hell)\b", "what exactly"),
+    (r"\bwho the (?:heck|hell)\b", "who exactly"),
+    (r"\bwhere the (?:heck|hell)\b", "where exactly"),
+    (r"\bhow the (?:heck|hell)\b", "how on earth"),
+    (r"\bwhy the (?:heck|hell)\b", "why on earth"),
+    (r"\bfor crying out loud\b", "seriously, goodness gracious"),
+    (r"\bfor goodness'? sake\b", "for heaven's sake"),
+    (r"\bfor pete'?s sake\b", "for heaven's sake"),
+    (r"\bno wonder\b", "it is natural that"),
+    (r"\bspeaking of which\b", "by the way about that"),
+    (r"\bcome to think of it\b", "now that I think about it"),
+    (r"\bnow that you mention it\b", "now that I think about it"),
+    (r"\bas if!\b", "impossible!"),
+    (r"\blike hell i (?:would|will)\b", "I definitely refuse to"),
+    (r"\bmy ass!\b", "that is nonsense!"),
+    # Stage-1: Phrasal Verbs & Colloquial Idioms (Anti-Calque Harfiah)
+    (r"\bknock it off\b", "stop doing that"),
+    (r"\bgive it a rest\b", "stop talking about it"),
+    (r"\bpassed out cold\b", "fainted unconscious"),
+    (r"\bpassed out\b", "fainted unconscious"),
+    (r"\bpass out\b", "faint unconscious"),
+    (r"\bblacked out\b", "fainted unconscious"),
+    (r"\bblack out\b", "faint unconscious"),
+    (r"\bhang(ing)? out with\b", "spending time together with"),
+    (r"\bhang(ing)? out\b", "spending time together"),
+    (r"\bhear (me|him|her|us|them) out\b", r"listen to \1 until the end"),
+    (r"\bcheck (this|that|it) out\b", r"look at \1"),
+    (r"\bwatch out\b", "be careful"),
+    (r"\blook out\b", "be careful"),
+    (r"\bin the nick of time\b", "just in time at the critical moment"),
+    (r"\bget the hang of (it|this|that)\b", r"get used to mastering \1"),
+    (r"\bgot the hang of (it|this|that)\b", r"got used to mastering \1"),
+    (r"\bout of (my|your|his|her|our) league\b", r"far beyond \1 level"),
+    (r"\bjump(ing)? to conclusions\b", "making hasty assumptions"),
+    (r"\bgive it a (?:shot|try|whirl)\b", "try doing it"),
+    (r"\bcall(ing)? the shots\b", "in full command"),
+    (r"\bno biggie\b", "not a big problem"),
+    (r"\bno big deal\b", "not a big problem"),
+    (r"\blose track of time\b", "forget the time"),
+    (r"\blost track of time\b", "forgot the time"),
+    (r"\bdon't rub it in\b", "do not keep teasing about it"),
+    (r"\brub(bing)? it in\b", "teasing about the mistake"),
+    (r"\bkeep an eye on\b", "watch and guard"),
+    (r"\bcatch (my|your|his|her|our) breath\b", r"rest and breathe for a moment"),
+    (r"\bhold(ing)? a grudge\b", "keeping resentment"),
+    (r"\bpull(ing)? (my|your|his|her) leg\b", r"joking and tricking"),
+    (r"\bpull(ed|ing)? a fast one\b", "played a trick"),
+    (r"\boff the hook\b", "free from trouble"),
+    (r"\bthrow in the towel\b", "surrender and give up"),
+    (r"\bthrew in the towel\b", "surrendered and gave up"),
+    (r"\bchicken(ed|ing)? out\b", "lost courage and backed out"),
+    (r"\bpush(ing)? (your|my|his|her) luck\b", "being too greedy and reckless"),
+    (r"\byou asked for it\b", "you brought this upon yourself"),
+    (r"\bmean(s)? business\b", "completely serious"),
+    (r"\bbuy (some|us|me|them) time\b", "stall for time"),
+    (r"\bplay(ing)? dumb\b", "pretending not to know"),
+    (r"\bplay(ing)? innocent\b", "pretending to be innocent"),
+    (r"\bplay(ing)? hard to get\b", "acting aloof and hard to win"),
+    (r"\bthird wheel\b", "awkward extra person on a date"),
+    (r"\bhead over heels\b", "deeply in love"),
+    (r"\bbutterflies in (my|your|his|her) stomach\b", "feeling very nervous and fluttering"),
+    (r"\b(spacing|spaced|zoning|zoned) out\b", "daydreaming blankly"),
+    (r"\bspace out\b", "daydream blankly"),
+    (r"\b(i'm|i am) all ears\b", "I am listening carefully"),
+    (r"\b(my|our) hands are tied\b", "we have no other choice and cannot help"),
+    (r"\bslipped my mind\b", "I completely forgot"),
+    (r"\bslip of the tongue\b", "accidental spoken mistake"),
+    (r"\bdoes that ring a bell\b", "does that sound familiar"),
+    (r"\bring(s)? a bell\b", "sound familiar"),
+    (r"\bgood[- ]for[- ]nothing\b", "completely useless"),
+    (r"\bpain in the (?:neck|ass|butt)\b", "very annoying trouble"),
+    (r"\bwrapped around (his|her|your|my) (?:little )?finger\b", "completely obedient to"),
+    (r"\bbeat it!\b", "go away right now!"),
+    (r"\bscram!\b", "get lost right now!"),
+    (r"\bbuzz off!\b", "go away right now!"),
+    (r"\bway to go!\b", "great job!"),
+    (r"\blong time no see\b", "it has been a long time since we met"),
+    (r"\beasier said than done\b", "easy to say but hard to do"),
+    (r"\blet it slide\b", "forgive and ignore it this time"),
+    (r"\bgot carried away\b", "got too excited"),
+    (r"\bget carried away\b", "get too excited"),
+    (r"\bgo(ing)? overboard\b", "acting too excessively"),
+    (r"\byou have a point\b", "what you say makes sense"),
+    (r"\bbeside the point\b", "irrelevant to the main issue"),
+    (r"\bon second thought\b", "after thinking about it again"),
+    (r"\bfor the time being\b", "for now temporarily"),
+    (r"\bout of the question\b", "completely impossible to allow"),
+    (r"\bcall it quits\b", "stop and end it now"),
+    (r"\blose (my|your|his|her) temper\b", "get angry and lose patience"),
+    (r"\blost (my|your|his|her) temper\b", "got angry and lost patience"),
+    (r"\bget(s|ting)? on my nerves\b", "making me very annoyed"),
+    (r"\bhit(s)? the spot\b", "feels very satisfying and refreshing"),
+    (r"\btake a breather\b", "rest for a moment"),
+    (r"\bpull(ed|ing)? an all[- ]nighter\b", "stayed awake all night"),
+    (r"\bsleep like a log\b", "sleep very deeply"),
+    (r"\bout like a light\b", "fast asleep immediately"),
+    (r"\bin over (my|your|his|her) head\b", "facing a problem beyond ability"),
+    (r"\boff the top of my head\b", "from spontaneous memory"),
+    (r"\bby the skin of (my|your|his|her|our) teeth\b", "narrowly by a tiny margin"),
+    (r"\bturn(ed|ing)? the tables\b", "reversed the situation"),
+    (r"\bread between the lines\b", "understand the hidden meaning"),
+    (r"\bin the same boat\b", "in the same difficult situation"),
+    (r"\blet the cat out of the bag\b", "accidentally reveal the secret"),
+    (r"\badd(ing)? fuel to the fire\b", "making the situation worse"),
+    # Stage-1: Spoken English Contractions (Agar Struktur Kalimat Tidak Rusak di GTX)
+    (r"\bwhatcha\b", "what are you"),
+    (r"\bgotcha\b", "I understand"),
+    (r"\blemme\b", "let me"),
+    (r"\bgimme\b", "give me"),
+    (r"\bdunno\b", "do not know"),
+    (r"\bkinda\b", "kind of"),
+    (r"\bsorta\b", "sort of"),
+    (r"\boutta\b", "out of"),
+    (r"\bhafta\b", "have to"),
+    (r"\boughta\b", "ought to"),
 ]
 _COMPILED_PRE_GTX_EN_SLANG = [(_re.compile(pat, _re.IGNORECASE), repl) for pat, repl in _PRE_GTX_EN_SLANG_RULES]
+
+_STUTTER_EN_START_RE = _re.compile(r"^(\s*(?:-\s*)?)([A-Za-z])-\2([a-zA-Z]{2,})\b")
+_STUTTER_EN_ANY_RE = _re.compile(r"\b([A-Za-z])-\1([a-zA-Z]{2,})\b")
+
+
+def _preprocess_stutter_en(text: str):
+    """Deteksi dan bersihkan gagap bahasa Inggris (mis. 'W-What?!' -> 'What?!') sebelum masuk GTX.
+    Mengembalikan tuple (clean_text, had_leading_stutter)."""
+    if not text:
+        return text, False
+    had_leading = bool(_STUTTER_EN_START_RE.search(text))
+    cleaned = _STUTTER_EN_ANY_RE.sub(lambda m: m.group(1) + m.group(2), text)
+    return cleaned, had_leading
+
+
+def _postprocess_stutter_id(orig_en: str, translated_id: str) -> str:
+    """Jika teks sumber bahasa Inggris memiliki gagap di awal kalimat ('W-What?!', 'S-Stop!'),
+    pasangkan kembali awalan gagap bahasa Indonesia yang sesuai ('A-Apa?!', 'B-Berhenti!')."""
+    if not orig_en or not translated_id:
+        return translated_id
+    if not _STUTTER_EN_START_RE.search(orig_en):
+        return translated_id
+    # Jangan gandakan jika sudah memiliki gagap (misal 'A-Apa')
+    if _re.match(r"^\s*(?:-\s*)?[A-Za-z]-[A-Za-z]", translated_id):
+        return translated_id
+    m = _re.match(r"^(\s*(?:-\s*)?)([A-Za-z])([a-zA-Z]{1,})(.*)$", translated_id, _re.DOTALL)
+    if not m:
+        return translated_id
+    prefix, first_char, rest_word, tail = m.group(1), m.group(2), m.group(3), m.group(4)
+    return f"{prefix}{first_char}-{first_char}{rest_word}{tail}"
+
 
 def _pre_normalize_en_slang(text: str) -> str:
     """Pra-pemrosesan teks sumber bahasa Inggris sebelum masuk ke Google Translate (GTX).
     Menggantikan idiom dan slang bahasa Inggris ambigu yang sering rusak saat diterjemahkan mesin."""
     if not text:
         return text
-    result = text
+    result, _ = _preprocess_stutter_en(text)
     for rx, repl in _COMPILED_PRE_GTX_EN_SLANG:
         result = rx.sub(repl, result)
     return result
+
+def _proper_title(title: str):
+    """Menjaga kapitalisasi nama resmi judul game/anime tanpa terpengaruh lowercase."""
+    return lambda m, t=title: t
 
 # Aturan universal: selalu dikoreksi (karena merupakan blunder/calque harfiah).
 _UNIVERSAL_FANSUB_RULES = [
@@ -1306,6 +1768,163 @@ _UNIVERSAL_FANSUB_RULES = [
     (r"\bhadiah yang jelas\b", "hadiah penyelesaian misi"),
     (r"\bkelas yang hebat\b", "kelas epik"),
     (r"\bpekerjaan yang luar biasa\b", "pekerjaan kelas epik"),
+
+    # --- 16. Koreksi Terjemahan Kaku Literal (Calque Fixes) & Idiom Inggris ---
+    (r"\bmembuat masuk akal\b", "masuk akal"),
+    (r"\btidak membuat masuk akal\b", "tidak masuk akal"),
+    (r"\bmembuat rasa\b", "masuk akal"),
+    (r"\bambil perhatian\b", "hati-hati"),
+    (r"\bambil hati-hati\b", "hati-hati"),
+    (r"\bambil waktumu\b", "santai saja, tidak usah buru-buru"),
+    (r"\bambil waktu anda\b", "silakan santai saja"),
+    (r"\bmemegang kembali\b", "menahan diri"),
+    (r"\bjangan memegang kembali\b", "jangan menahan diri"),
+    (r"\bberdiri kembali\b", "mundur"),
+    (r"\bmelangkah kembali\b", "mundur"),
+    (r"\bmemanggil tembakan\b", "memegang kendali"),
+    (r"\bmemanggil semua tembakan\b", "memegang semua keputusan"),
+    (r"\bmengambil kesempatan\b", "mencoba peruntungan"),
+    (r"\bmemberinya tembakan\b", "mencobanya"),
+    (r"\bmemberi tembakan\b", "mencobanya"),
+    (r"\bdi luar ligaku\b", "terlalu tinggi untukku"),
+    (r"\bdi luar liga saya\b", "terlalu tinggi untuk saya"),
+    (r"\bdi luar ligamu\b", "bukan tandinganmu"),
+    (r"\bmelompat ke kesimpulan\b", "buru-buru menyimpulkan"),
+    (r"\bmenarik kakiku\b", "mengerjaiku"),
+    (r"\bmenarik kaki saya\b", "mengerjai saya"),
+    (r"\bmelempar handuk\b", "menyerah"),
+    (r"\bmelemparkan handuk\b", "menyerah"),
+    (r"\bmendorong keberuntunganmu\b", "ngelunjak"),
+    (r"\bmendorong keberuntungan anda\b", "bertindak terlalu jauh"),
+    (r"\bmembeli waktu\b", "mengulur waktu"),
+    (r"\bmembeli beberapa waktu\b", "mengulur waktu"),
+    (r"\bbermain bodoh\b", "pura-pura tidak tahu"),
+    (r"\broda ketiga\b", "obat nyamuk"),
+    (r"\btergelincir pikiranku\b", "aku kelupaan"),
+    (r"\btergelincir dari pikiranku\b", "aku kelupaan"),
+    (r"\bmembunyikan lonceng\b", "terdengar tidak asing"),
+    (r"\bmembalikkan meja\b", "membalikkan keadaan"),
+    (r"\bkupu-kupu di perutku\b", "perutku rasanya mulas karena gugup"),
+    (r"\bsemua telinga\b", "siap mendengarkan"),
+    (r"\baku semua telinga\b", "aku siap mendengarkan"),
+    (r"\bmenangkap napasku\b", "mengatur napasku"),
+    (r"\bmenangkap napas\b", "mengatur napas"),
+
+    # --- 17. Honorifik Jepang, Sapaan Keluarga & RomCom/School ---
+    (r"\bonii-chan\b", "Kakak"),
+    (r"\bonii-san\b", "Kakak"),
+    (r"\bonee-chan\b", "Kakak"),
+    (r"\bonee-san\b", "Kakak"),
+    (r"\baniki\b", "Bang"),
+    (r"\bojou-sama\b", "Nona Muda"),
+    (r"\botou-san\b", "Ayah"),
+    (r"\bokaa-san\b", "Ibu"),
+    (r"\bojii-san\b", "Kakek"),
+    (r"\bojii-chan\b", "Kakek"),
+    (r"\bobaa-san\b", "Nenek"),
+    (r"\bobaa-chan\b", "Nenek"),
+    (r"\bosananajimi\b", "teman masa kecil"),
+    (r"\bgyaru\b", "cewek gyaru"),
+    (r"\bchuunibyou\b", "sindrom chuunibyou"),
+    (r"\bkokuhaku\b", "nembak perasaan"),
+
+    # --- 18. Kultivasi, Murim, Wuxia, Xianxia & Donghua ---
+    (r"\binti emas\b", "Inti Emas (Golden Core)"),
+    (r"\bpembentukan inti\b", "Pembentukan Inti"),
+    (r"\bpembangunan fondasi\b", "Tahap Fondasi"),
+    (r"\bjiwa baru lahir\b", "Jiwa Nascent"),
+    (r"\bkesengsaraan surgawi\b", "Kesengsaraan Langit (Tribulation)"),
+    (r"\bkesengsaraan petir\b", "Petir Kesengsaraan"),
+    (r"\bsaudara senior\b", "Kakak Senior"),
+    (r"\bsaudari senior\b", "Kakak Senior"),
+    (r"\bsaudara junior\b", "Adik Junior"),
+    (r"\bsaudari junior\b", "Adik Junior"),
+    (r"\bsekte seni bela diri\b", "Sekte Bela Diri"),
+    (r"\benergi sejati\b", "Qi Sejati"),
+    (r"\benergi spiritual\b", "Qi Spiritual"),
+    (r"\bqi dalam\b", "Tenaga Dalam"),
+    (r"\bkaisar langit\b", "Kaisar Langit"),
+    (r"\btetua agung\b", "Tetua Agung"),
+    (r"\bpemimpin sekte\b", "Ketua Sekte"),
+
+    # --- 19. Istana Dalam / Apothecary / Historical (Kusuriya dll.) ---
+    (r"\bistana belakang\b", "Istana Dalam"),
+    (r"\bselir tingkat tinggi\b", "Selir Utama"),
+    (r"\bpencicip makanan\b", "Pencicip Racun"),
+    (r"\bapoteker istana\b", "Tabib Istana"),
+
+    # --- 20. Proteksi & Restorasi Nama Game Anime dari Terjemahan Mentah ---
+    # Satisfy (VRMMO Game di Overgeared)
+    (r"\b(?:puaskan|memuaskan|puas|kepuasan),?\s+((?:(?:sebuah\s+)?(?:gim|game|dunia|realitas (?:virtual|maya)|vrmmo))\b)", lambda m: "Satisfy, " + m.group(1)),
+    (r"\b(?:puaskan|memuaskan|puas|kepuasan)\s+((?:pengguna|user|pemain|akun|karakter|server)\b)", lambda m: "Satisfy " + m.group(1)),
+    (r"\b(?:berita|warta|kabar|saluran|siaran|tayangan|acara|koran|harian)\s+(?:yang\s+)?(?:memuaskan|puaskan|puas|kepuasan)\b", lambda m: _re.sub(r"\s+(?:yang\s+)?(?:memuaskan|puaskan|puas|kepuasan)\b", " Satisfy", m.group(0), flags=_re.I)),
+    (r"\b(?:memuaskan|puaskan|puas|kepuasan)\s+(times|news|every|harian|koran|berita)\b", lambda m: "Satisfy " + m.group(1)),
+    (r"\bsatisfy\s+(?:berita|warta)\b", _proper_title("Berita Satisfy")),
+    (r"\b(?:gim|game|dunia|bermain|pemain|pengguna|user|peringkat|sejarah|server|masuk ke|log in ke|login ke|mengakses|akun|karakter|di|ke|dalam|di dalam)\s+(?:memuaskan|puaskan|puas|kepuasan)\b", lambda m: _re.sub(r"\s+(?:memuaskan|puaskan|puas|kepuasan)\b", " Satisfy", m.group(0), flags=_re.I)),
+    (r"\b(?:tidak|bukan)\s+(?:memuaskan|puaskan|puas)(!|\b)", lambda m: "Bukan Satisfy" + (m.group(1) if m.group(1) == "!" else "")),
+    (r"\b(?:puaskan|memuaskan|puas)!\s*(siap|ready)\b", _proper_title("Satisfy! Siap")),
+    (r"^\s*([-–—]?\s*)(?:Puaskan|Memuaskan)\s*([!.]*)\s*$", lambda m: m.group(1) + "Satisfy" + (m.group(2) or "!")),
+    (r"\bmemuaskan adalah\b", _proper_title("Satisfy adalah")),
+    (r"\bseni pedang (?:daring|online)\b", _proper_title("Sword Art Online")),
+    (r"\b(?:badai|angin kencang) senjata (?:daring|online)\b", _proper_title("Gun Gale Online")),
+    (r"\balfheim (?:daring|online)\b", _proper_title("ALfheim Online")),
+    (r"\bperbatasan shangri-?la\b", _proper_title("Shangri-La Frontier")),
+    (r"\bdunia baru (?:daring|online)\b", _proper_title("NewWorld Online")),
+    (r"\bledakan otak\b", _proper_title("Brain Burst")),
+    (r"\b(?:kisah|cerita) (?:tua|tetua)\b", _proper_title("Elder Tale")),
+    (r"\bdendrogram tak terbatas\b", _proper_title("Infinite Dendrogram")),
+    (r"\b(?:gim|game|dunia|pemain|pemain pro)\s+(?:kejayaan|kemuliaan)\b", lambda m: _re.sub(r"\s+(?:kejayaan|kemuliaan)\b", " Glory", m.group(0), flags=_re.I)),
+    (r"\blamunan silang\b", _proper_title("Cross Reverie")),
+    (r"\bpenyelaman penuh\b", _proper_title("Full Dive")),
+    (r"\bpenyelam penuh\b", _proper_title("Full Diver")),
+    (r"\bskala ordinal\b", _proper_title("Ordinal Scale")),
+    (r"\bproyek alisisasi\b", _proper_title("Project Alicization")),
+
+    # --- 21. Istilah Khusus Anime Overgeared (Episode 1–4 Lengkap) ---
+    (r"\bpagma'?s successor\b", "Keturunan Pagma"),
+    (r"\bpagma'?s descendant\b", "Keturunan Pagma"),
+    (r"\bpenerus pagma\b", "Keturunan Pagma"),
+    (r"\bpagma'?s (?:rare book|tome)\b", "Kitab Langka Pagma"),
+    (r"\bbuku langka pagma\b", "Kitab Langka Pagma"),
+    (r"\blegendary craftsman'?s tome\b", "Kitab Pengrajin Legendaris"),
+    (r"\blegendary blacksmith\b", "Pandai Besi Legendaris"),
+    (r"\bblacksmith master creation\b", "Kreasi Master Pandai Besi"),
+    (r"\bbreath of the legendary blacksmith\b", "Napas Pandai Besi Legendaris"),
+    (r"\bblue orichalcum\b", "Orichalcum Biru"),
+    (r"\bpavranium\b", "Pavranium"),
+    (r"\btzedakah guild\b", "Guild Tzedakah"),
+    (r"\bblood witch\b", "Penyihir Darah"),
+    (r"\bblood warrior\b", "Blood Warrior"),
+    (r"\bdoran'?s ring\b", "Cincin Doran"),
+    (r"\bdoran'?s sword\b", "Pedang Doran"),
+    (r"\bbehen archipelago\b", "Kepulauan Behen"),
+    (r"\bbairan village\b", "Desa Bairan"),
+    (r"\bwinston village\b", "Desa Winston"),
+    (r"\beternal kingdom\b", "Kerajaan Eternal"),
+    (r"\bearl steim\b", "Earl Steim"),
+    (r"\bearl ashur\b", "Earl Ashur"),
+    (r"\blord winston\b", "Penguasa Winston"),
+    (r"\bchurch of rebecca\b", "Gereja Rebecca"),
+    (r"\bgoddess rebecca\b", "Dewi Rebecca"),
+    (r"\bchurch of yatan\b", "Gereja Yatan"),
+    (r"\bgod yatan\b", "Dewa Yatan"),
+    (r"\bpope drevigo\b", "Paus Drevigo"),
+    (r"\bsupercomputer morpheus\b", "Superkomputer Morpheus"),
+    (r"\bgreat demon\b", "Iblis Agung"),
+    (r"\bhidden quest\b", "Quest Tersembunyi"),
+    (r"\blinked quest\b", "Quest Berantai"),
+    (r"\bss-rank quest\b", "Quest Peringkat SS"),
+    (r"\bs-rank quest\b", "Quest Peringkat S"),
+    (r"\blegendary (?:class|job)\b", "Profesi Legendaris"),
+    (r"\bepic (?:class|job)\b", "Profesi Epic"),
+    (r"\bunique (?:class|job)\b", "Profesi Unique"),
+    (r"\brare (?:class|job)\b", "Profesi Rare"),
+    (r"\bnormal (?:class|job)\b", "Profesi Normal"),
+    (r"\bbaal'?s contractor\b", "Kontraktor Baal"),
+    (r"\bsword saint\b", "Santo Pedang"),
+    (r"\bbow saint\b", "Santo Busur"),
+    (r"\bshadow striker\b", "Shadow Striker"),
+    (r"\bproduction method\b", "Metode Pembuatan"),
 ]
 
 # Aturan khusus adegan kasual/santai (tidak diterapkan jika konteks formal/kerajaan).
@@ -1432,6 +2051,51 @@ _CASUAL_FANSUB_RULES = [
     (r"\btenang sedikit\b", "santai dikit dong"),
     (r"\bapa maumu\b", "mau apa sih kamu"),
     (r"\bapa yang kamu inginkan\b", "kamu mau apa sih"),
+    # Question tags & penghalusan kalimat tanya / perintah lisan
+    (r",\s*bukan\s*\?", ", kan?"),
+    (r",\s*tidakkah begitu\s*\?", ", kan?"),
+    (r",\s*bukankah begitu\s*\?", ", kan?"),
+    (r",\s*benar kan\s*\?", ", ya kan?"),
+    (r"\bapakah kamu baik-baik saja\b", "kamu nggak apa-apa"),
+    (r"\bapakah kamu nggak apa-apa\b", "kamu nggak apa-apa"),
+    (r"\bapakah kau baik-baik saja\b", "kamu nggak apa-apa"),
+    (r"\bapakah kamu yakin\b", "kamu yakin"),
+    (r"\bapakah kau yakin\b", "kamu yakin"),
+    (r"\bapakah kamu sudah gila\b", "kamu udah gila ya"),
+    (r"\bapakah kamu gila\b", "kamu gila ya"),
+    (r"\bapakah itu mungkin\b", "memangnya mungkin"),
+    (r"\bapakah kamu mengerti\b", "kamu ngerti kan"),
+    (r"\baku mengerti sekarang\b", "oh, sekarang aku paham"),
+    (r"\baku tidak mengerti\b", "aku nggak ngerti"),
+    (r"\bnggak mengerti\b", "nggak ngerti"),
+    (r"\bcepatlah sedikit\b", "cepetan dikit dong"),
+    (r"\btunggu aku\b", "tungguin aku"),
+    (r"\blihat itu\b", "lihat deh itu"),
+    (r"\bhentikan itu\b", "udah dong, hentikan"),
+    (r"\bserahkan padaku\b", "serahin aja padaku"),
+    (r"\bserahkan saja padaku\b", "serahin aja padaku"),
+    (r"\bpercayalah padaku\b", "percaya deh sama aku"),
+    (r"\bjangan khawatir tentang itu\b", "nggak usah dipikirin"),
+    (r"\baku baru saja\b", "aku barusan"),
+    (r"\bbaru saja\b", "barusan"),
+    (r"\bbenar-benar hebat\b", "keren banget"),
+    (r"\bluar biasa sekali\b", "keren banget"),
+    (r"\bsangat keren\b", "keren banget"),
+    (r"\bsangat manis\b", "manis banget"),
+    (r"\bsangat imut\b", "imut banget"),
+    (r"\bsangat kuat\b", "kuat banget"),
+    (r"\bsangat cepat\b", "cepet banget"),
+    (r"\bsangat lambat\b", "lambat banget"),
+    (r"\bsangat lezat\b", "enak banget"),
+    (r"\bsangat enak\b", "enak banget"),
+    (r"\bsangat menakutkan\b", "serem banget"),
+    (r"\bsangat aneh\b", "aneh banget"),
+    (r"\bsangat berisik\b", "berisik banget"),
+    (r"\baku sangat senang\b", "aku seneng banget"),
+    (r"\baku sangat lelah\b", "aku capek banget"),
+    (r"\bsangat lelah\b", "capek banget"),
+    (r"\baku sangat lapar\b", "aku laper banget"),
+    (r"\bsangat lapar\b", "laper banget"),
 ]
 
 _AIGTX_SMOOTH_RULES = [
@@ -1460,18 +2124,142 @@ _AIGTX_SMOOTH_RULES = [
 ]
 _GTXPLUS_SMOOTH_RULES = _AIGTX_SMOOTH_RULES
 
-_COMPILED_UNIVERSAL = [(_re.compile(pat, _re.IGNORECASE), repl) for pat, repl in _UNIVERSAL_FANSUB_RULES]
+_COMPILED_UNIVERSAL = [(_re.compile(pat, _re.IGNORECASE | _re.MULTILINE), repl) for pat, repl in _UNIVERSAL_FANSUB_RULES]
 _COMPILED_CASUAL = [(_re.compile(pat, _re.IGNORECASE), repl) for pat, repl in _CASUAL_FANSUB_RULES]
 _COMPILED_AIGTX_SMOOTH = [(_re.compile(pat, _re.IGNORECASE), repl) for pat, repl in _AIGTX_SMOOTH_RULES]
 _COMPILED_GTXPLUS_SMOOTH = _COMPILED_AIGTX_SMOOTH
 
+_CASUAL_PRONOUN_RULES = [
+    (_re.compile(r"\bmenurut saya\b", _re.I), lambda m: "menurutku" if m.group(0)[0].islower() else "Menurutku"),
+    (_re.compile(r"\bmilik saya\b", _re.I), "milikku"),
+    (_re.compile(r"\buntuk saya\b", _re.I), "untukku"),
+    (_re.compile(r"\bkepada saya\b", _re.I), "kepadaku"),
+    (_re.compile(r"\bapakah saya\b", _re.I), lambda m: "apa aku" if m.group(0)[0].islower() else "Apa aku"),
+    (_re.compile(r"\bapakah anda\b", _re.I), lambda m: "apa kamu" if m.group(0)[0].islower() else "Apa kamu"),
+    (_re.compile(r"\bbisakah saya\b", _re.I), lambda m: "bisa aku" if m.group(0)[0].islower() else "Bisa aku"),
+    (_re.compile(r"\bbisakah anda\b", _re.I), lambda m: "bisa kamu" if m.group(0)[0].islower() else "Bisa kamu"),
+    (_re.compile(r"\bsaya tidak\b", _re.I), lambda m: "aku nggak" if m.group(0)[0].islower() else "Aku nggak"),
+    (_re.compile(r"\bsaya nggak\b", _re.I), lambda m: "aku nggak" if m.group(0)[0].islower() else "Aku nggak"),
+    (_re.compile(r"\bsaya mau\b", _re.I), lambda m: "aku mau" if m.group(0)[0].islower() else "Aku mau"),
+    (_re.compile(r"\bsaya harus\b", _re.I), lambda m: "aku harus" if m.group(0)[0].islower() else "Aku harus"),
+    (_re.compile(r"\bsaya bisa\b", _re.I), lambda m: "aku bisa" if m.group(0)[0].islower() else "Aku bisa"),
+    (_re.compile(r"\bsaya akan\b", _re.I), lambda m: "aku akan" if m.group(0)[0].islower() else "Aku akan"),
+    (_re.compile(r"\bsaya rasa\b", _re.I), lambda m: "aku rasa" if m.group(0)[0].islower() else "Aku rasa"),
+    (_re.compile(r"\bsaya pikir\b", _re.I), lambda m: "kupikir" if m.group(0)[0].islower() else "Kupikir"),
+    (_re.compile(r"\bberi saya\b", _re.I), lambda m: "beri aku" if m.group(0)[0].islower() else "Beri aku"),
+    (_re.compile(r"\bsaya\b", _re.I), lambda m: "Aku" if m.group(0)[0].isupper() else "aku"),
+]
 
-def _sanitize_fansub_id(text: str) -> str:
+
+def automate_opensubtitles_pronouns(cues: list, target_lang: str = "id", window: int = 2, max_gap_sec: float = 10.0) -> list:
+    """Otomasi pemilihan kata ganti orang pertama (saya vs aku) dan kedua (Anda vs kamu/kau)
+    pada subtitle OpenSubtitles bahasa Indonesia berbasis Sliding-Window Scene Context.
+
+    Kaidah Otomasi:
+      1. Formal Context (Kerajaan, Nobilitas, Keagamaan, Militer, Wawancara/Siaran Resmi):
+         Pertahankan kesantunan register baku (saya / Anda) tanpa diubah menjadi bahasa gaul.
+      2. Casual Context (Monolog batin, amarah/makian, pertarungan, obrolan gaming):
+         Konversi 'saya' kaku menjadi 'aku' (atau proklitik/enklitik 'ku-' / '-ku'),
+         dan 'Anda' menjadi 'kamu' (atau 'kau' saat amarah/pertarungan).
+    """
+    if not cues or (target_lang or "id").lower() not in ("id", "ind", "indonesian"):
+        return cues
+
+    n = len(cues)
+    direct_formal = []
+    direct_rage = []
+    direct_monologue = []
+
+    for c in cues:
+        txt = (c.get("text") or "").strip()
+        is_f = bool(_FORMAL_INDICATORS_RE.search(txt))
+        is_r = bool(_RAGE_OUTBURST_RE.search(txt))
+        is_m = bool(_MONOLOGUE_RE.match(txt))
+        direct_formal.append(is_f)
+        direct_rage.append(is_r)
+        direct_monologue.append(is_m)
+
+    # Propagasi konteks formal ke tetangga dalam jendela ±window
+    contextual_formal = list(direct_formal)
+    for i in range(n):
+        if direct_formal[i]:
+            continue
+        if direct_rage[i] or direct_monologue[i]:
+            continue
+        c_start = float(cues[i].get("start", 0.0))
+        c_end = float(cues[i].get("end", c_start))
+        for j in range(max(0, i - window), min(n, i + window + 1)):
+            if j == i or not direct_formal[j]:
+                continue
+            n_start = float(cues[j].get("start", 0.0))
+            n_end = float(cues[j].get("end", n_start))
+            gap = max(0.0, c_start - n_end) if j < i else max(0.0, n_start - c_end)
+            if gap <= max_gap_sec:
+                contextual_formal[i] = True
+                break
+
+    out = []
+    for i, c in enumerate(cues):
+        txt = (c.get("text") or "").strip()
+        if not txt:
+            out.append(c)
+            continue
+
+        is_f = contextual_formal[i]
+        is_r = direct_rage[i]
+
+        if is_f and not (direct_rage[i] or direct_monologue[i]):
+            new_txt = txt
+        else:
+            new_txt = txt
+            for rx, repl in _CASUAL_PRONOUN_RULES:
+                new_txt = rx.sub(repl, new_txt)
+            if is_r:
+                new_txt = _re.sub(r"\bAnda\b", lambda m: "Kau" if m.group(0)[0].isupper() else "kau", new_txt, flags=_re.I)
+            else:
+                new_txt = _re.sub(r"\bAnda\b", lambda m: "Kamu" if m.group(0)[0].isupper() else "kamu", new_txt, flags=_re.I)
+
+        out.append({
+            "start": c.get("start", 0.0),
+            "end": c.get("end", 0.0),
+            "text": new_txt
+        })
+
+    return out
+
+
+def apply_universal_lexicon_id(text: str) -> str:
+    """Terapkan kamus istilah anime universal (glossary) tanpa mengubah persona/gaya kasual fansub."""
+    if not text:
+        return text
+
+    def _replace_match(m, repl):
+        if callable(repl):
+            return repl(m)
+        expanded = m.expand(repl) if "\\" in repl else repl
+        orig = m.group(0)
+        if orig and orig.islower():
+            words = expanded.split(" ")
+            lowered = [w if (w.isupper() and len(w) >= 2) else w.lower() for w in words]
+            return " ".join(lowered)
+        if orig and orig[0].isupper():
+            return expanded[0].upper() + expanded[1:]
+        return expanded
+
+    result = text
+    for rx, repl in _COMPILED_UNIVERSAL:
+        result = rx.sub(lambda m, r=repl: _replace_match(m, r), result)
+    return result
+
+
+def _sanitize_fansub_id(text: str, force_formal: bool = False) -> str:
     """Normalisasi kata kaku/literal secara adaptif (menjaga adegan formal tetap sopan)."""
     if not text:
         return text
 
     def _replace_match(m, repl):
+        if callable(repl):
+            return repl(m)
         expanded = m.expand(repl) if "\\" in repl else repl
         orig = m.group(0)
         if orig and orig.islower():
@@ -1488,7 +2276,7 @@ def _sanitize_fansub_id(text: str) -> str:
         result = rx.sub(lambda m, r=repl: _replace_match(m, r), result)
 
     # 2. Jalankan normalisasi santai jika BUKAN adegan formal/kerajaan
-    is_formal = bool(_FORMAL_INDICATORS_RE.search(result))
+    is_formal = force_formal or bool(_FORMAL_INDICATORS_RE.search(result))
     if not is_formal:
         for rx, repl in _COMPILED_CASUAL:
             result = rx.sub(lambda m, r=repl: _replace_match(m, r), result)
@@ -1496,7 +2284,7 @@ def _sanitize_fansub_id(text: str) -> str:
     return result
 
 
-def _sanitize_gtxplus_id(text: str) -> str:
+def _sanitize_gtxplus_id(text: str, force_formal: bool = False) -> str:
     """GTX+ Sanitizer: Menggabungkan deteksi adegan (Scene Detection) adaptif
     dan kamus fansub percakapan santai (casual conversation) secara otomatis.
     Jika adegan santai/sekolah/komedi/isekai: terapkan leksikon anime universal,
@@ -1507,6 +2295,8 @@ def _sanitize_gtxplus_id(text: str) -> str:
         return text
 
     def _replace_match(m, repl):
+        if callable(repl):
+            return repl(m)
         expanded = m.expand(repl) if "\\" in repl else repl
         orig = m.group(0)
         if orig and orig.islower():
@@ -1523,7 +2313,7 @@ def _sanitize_gtxplus_id(text: str) -> str:
         result = rx.sub(lambda m, r=repl: _replace_match(m, r), result)
 
     # 2. Scene detector: formal vs casual
-    is_formal = bool(_FORMAL_INDICATORS_RE.search(result))
+    is_formal = force_formal or bool(_FORMAL_INDICATORS_RE.search(result))
     if not is_formal:
         for rx, repl in _COMPILED_CASUAL:
             result = rx.sub(lambda m, r=repl: _replace_match(m, r), result)
@@ -1534,6 +2324,50 @@ def _sanitize_gtxplus_id(text: str) -> str:
 
 
 _sanitize_aigtx_id = _sanitize_gtxplus_id
+
+
+def sanitize_cues_with_context(cues, mode: str = "gtx+", window: int = 3, max_gap_sec: float = 15.0):
+    """Sanitasi daftar cues dengan Sliding-Window Scene Context (±window cues dalam jarak waktu <= max_gap_sec).
+    Jika terdapat indikator adegan formal/kerajaan/militer pada tetangga dekat dalam satu adegan,
+    cue di sekitarnya tetap mempertahankan register sopan (tidak tiba-tiba berubah menjadi gaul/kasual)."""
+    if not cues:
+        return []
+    n = len(cues)
+    # 1. Deteksi indikator formal pada masing-masing cue terlebih dahulu
+    direct_formal = []
+    for c in cues:
+        txt = c.get("text") or ""
+        direct_formal.append(bool(_FORMAL_INDICATORS_RE.search(txt)))
+
+    # 2. Propagasi konteks formal ke tetangga dalam jendela ±window dan selisih waktu <= max_gap_sec
+    contextual_formal = list(direct_formal)
+    for i in range(n):
+        if direct_formal[i]:
+            continue
+        c_start = float(cues[i].get("start", 0.0))
+        c_end = float(cues[i].get("end", c_start))
+        for j in range(max(0, i - window), min(n, i + window + 1)):
+            if j == i or not direct_formal[j]:
+                continue
+            n_start = float(cues[j].get("start", 0.0))
+            n_end = float(cues[j].get("end", n_start))
+            gap = max(0.0, c_start - n_end) if j < i else max(0.0, n_start - c_end)
+            if gap <= max_gap_sec:
+                contextual_formal[i] = True
+                break
+
+    out = []
+    for i, c in enumerate(cues):
+        txt = c.get("text") or ""
+        is_f = contextual_formal[i]
+        if mode in ("pure", "pure_gtx", "gtx"):
+            sanitized = txt
+        elif mode == "fansub":
+            sanitized = _sanitize_fansub_id(txt, force_formal=is_f)
+        else:
+            sanitized = _sanitize_gtxplus_id(txt, force_formal=is_f)
+        out.append({"start": c["start"], "end": c["end"], "text": sanitized})
+    return out
 
 
 
@@ -1799,10 +2633,19 @@ async def call_gtx_translate(cues, src="en", tgt="id", timeout=20.0, mode="gtx+"
     
     from concurrent.futures import ThreadPoolExecutor
 
+    def _restore_html_chunk(raw_chunk: str, fallback: str) -> str:
+        val = _re.sub(r"<br\s*/?>", "\n", raw_chunk or "", flags=_re.IGNORECASE)
+        val = _html.unescape(val).strip()
+        return val if val else fallback
+
     def _fetch_single_chunk_sync(batch_lines):
         html_chunks = []
         for i, line in enumerate(batch_lines):
-            safe_text = _html.escape(line) if line else ""
+            if line:
+                escaped_lines = [_html.escape(part) for part in line.split("\n")]
+                safe_text = "<br>".join(escaped_lines)
+            else:
+                safe_text = ""
             html_chunks.append(f'<p id="{i}">{safe_text}</p>')
         joined = "".join(html_chunks)
 
@@ -1848,8 +2691,7 @@ async def call_gtx_translate(cues, src="en", tgt="id", timeout=20.0, mode="gtx+"
                         if matches:
                             res = []
                             for i in range(len(batch_lines)):
-                                unescaped = _html.unescape(matches.get(str(i), batch_lines[i])).strip()
-                                res.append(unescaped)
+                                res.append(_restore_html_chunk(matches.get(str(i), batch_lines[i]), batch_lines[i]))
                             return res, True
             except Exception:
                 pass
@@ -1873,8 +2715,7 @@ async def call_gtx_translate(cues, src="en", tgt="id", timeout=20.0, mode="gtx+"
                         if matches:
                             res = []
                             for i in range(len(batch_lines)):
-                                unescaped = _html.unescape(matches.get(str(i), batch_lines[i])).strip()
-                                res.append(unescaped)
+                                res.append(_restore_html_chunk(matches.get(str(i), batch_lines[i]), batch_lines[i]))
                             return res, True
             except Exception:
                 pass
@@ -1901,7 +2742,7 @@ async def call_gtx_translate(cues, src="en", tgt="id", timeout=20.0, mode="gtx+"
                         matches = dict(_re.findall(r'<p\s+id=[\"\']?\s*(\d+)\s*[\"\']?\s*>(.*?)</p>', raw_out, _re.DOTALL))
                         if matches:
                             res = [
-                                _html.unescape(matches.get(str(i), batch_lines[i])).strip()
+                                _restore_html_chunk(matches.get(str(i), batch_lines[i]), batch_lines[i])
                                 for i in range(len(batch_lines))
                             ]
                             return res, True
@@ -1930,10 +2771,12 @@ async def call_gtx_translate(cues, src="en", tgt="id", timeout=20.0, mode="gtx+"
 
     loop = _asyncio.get_running_loop()
     def _prep_line(text: str) -> str:
-        clean = (text or "").replace("\n", " ").strip()
+        raw_lines = [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
+        if not raw_lines:
+            return ""
         if (src or "").lower() == "en" and (tgt or "").lower() == "id" and mode not in ("pure", "pure_gtx", "gtx"):
-            clean = _pre_normalize_en_slang(clean)
-        return clean
+            raw_lines = [_pre_normalize_en_slang(ln) for ln in raw_lines]
+        return "\n".join(raw_lines)
 
     batch_lines_list = [[_prep_line(cue["text"]) for cue in b] for b in batches]
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -1957,18 +2800,16 @@ async def call_gtx_translate(cues, src="en", tgt="id", timeout=20.0, mode="gtx+"
     if len(batches) > 0 and success_count == 0:
         raise RuntimeError(f"Semua endpoint Google Translate gagal atau terblokir (0/{len(batches)} batch berhasil).")
 
-    out = []
+    raw_cues = []
     for i, c in enumerate(cues):
         tr_text = all_translated[i] if i < len(all_translated) else c["text"]
-        if (tgt or "").lower() == "id":
-            if mode in ("pure", "pure_gtx", "gtx"):
-                pass
-            elif mode == "fansub":
-                tr_text = _sanitize_fansub_id(tr_text)
-            else:  # "gtx+", "aigtx", default
-                tr_text = _sanitize_gtxplus_id(tr_text)
-        out.append({"start": c["start"], "end": c["end"], "text": tr_text})
-    return out
+        if (tgt or "").lower() == "id" and mode not in ("pure", "pure_gtx", "gtx"):
+            tr_text = _postprocess_stutter_id(c.get("text", ""), tr_text)
+        raw_cues.append({"start": c["start"], "end": c["end"], "text": tr_text})
+
+    if (tgt or "").lower() == "id":
+        return sanitize_cues_with_context(raw_cues, mode=mode, window=3)
+    return raw_cues
 
 
 async def call_mymemory_translate(cues, src, tgt, timeout=30.0):

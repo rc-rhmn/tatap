@@ -23,6 +23,8 @@
         app:show_timeout="3000"
         app:show_next_button="true"
         app:show_previous_button="true"
+        app:show_subtitle_button="true"
+        app:show_vr_button="true"
         app:resize_mode="fit"
         app:surface_type="surface_view" />
 
@@ -35,8 +37,8 @@
         android:layout_marginTop="32dp"
         android:orientation="horizontal"
         android:gravity="center"
-        android:background="@drawable/bg_dialog_card"
-        android:paddingHorizontal="18dp"
+        android:background="@drawable/bg_player_hud_pill"
+        android:paddingHorizontal="20dp"
         android:paddingVertical="9dp"
         android:elevation="6dp"
         android:visibility="gone">
@@ -68,9 +70,10 @@
         android:layout_gravity="center"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:background="@drawable/bg_dialog_card"
-        android:paddingHorizontal="20dp"
+        android:background="@drawable/bg_player_hud_pill"
+        android:paddingHorizontal="22dp"
         android:paddingVertical="10dp"
+        android:elevation="6dp"
         android:visibility="gone">
 
         <TextView
@@ -107,7 +110,7 @@
     <!-- Double Tap Ripple Indicators -->
     <TextView
         android:id="@+id/tv_ripple_left"
-        android:layout_width="140dp"
+        android:layout_width="148dp"
         android:layout_height="match_parent"
         android:layout_gravity="start"
         android:gravity="center"
@@ -116,12 +119,12 @@
         android:textSize="@dimen/text_headline"
         android:fontFamily="sans-serif-medium"
         android:letterSpacing="0.04"
-        android:background="#1AFFFFFF"
+        android:background="@drawable/bg_ripple_seek_left"
         android:visibility="gone" />
 
     <TextView
         android:id="@+id/tv_ripple_right"
-        android:layout_width="140dp"
+        android:layout_width="148dp"
         android:layout_height="match_parent"
         android:layout_gravity="end"
         android:gravity="center"
@@ -130,7 +133,7 @@
         android:textSize="@dimen/text_headline"
         android:fontFamily="sans-serif-medium"
         android:letterSpacing="0.04"
-        android:background="#1AFFFFFF"
+        android:background="@drawable/bg_ripple_seek_right"
         android:visibility="gone" />
 
     <!-- Minimalist Buffering & Stream Preparation HUD -->
@@ -180,6 +183,8 @@
         android:layout_gravity="bottom|center_horizontal"
         android:layout_marginBottom="22dp"
         android:layout_marginHorizontal="24dp"
+        android:maxWidth="580dp"
+        android:elevation="25dp"
         android:background="@drawable/bg_subtitle_pill"
         android:paddingHorizontal="14dp"
         android:paddingVertical="6dp"
@@ -223,7 +228,7 @@
         android:nextFocusUp="@+id/btn_sub_selector"
         android:visibility="gone" />
 
-    <!-- Top Overlay Header (Back, Title, Subtitle Selector, Style, Quality, Aspect) -->
+    <!-- Top Overlay Header (Minimalist: Back, Title, Unified Status; fungsi pill telah disatukan ke kontrol bawaan ExoPlayer) -->
     <LinearLayout
         android:id="@+id/layout_top_bar"
         android:layout_width="match_parent"
@@ -232,20 +237,20 @@
         android:orientation="horizontal"
         android:gravity="center_vertical"
         android:paddingTop="16dp"
-        android:paddingBottom="16dp"
+        android:paddingBottom="24dp"
         android:paddingStart="@dimen/tv_overscan_horizontal"
         android:paddingEnd="@dimen/tv_overscan_horizontal"
-        android:background="#99000000"
+        android:background="@drawable/bg_player_top_scrim"
         android:visibility="gone">
 
         <ImageButton
             android:id="@+id/btn_player_back"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:layout_width="42dp"
+            android:layout_height="42dp"
+            android:padding="8dp"
+            android:background="@drawable/bg_exo_icon_btn"
             android:src="@drawable/ic_arrow_back"
             android:focusable="true"
-            android:nextFocusRight="@+id/btn_aspect"
             app:tint="@color/text_primary"
             android:contentDescription="Kembali" />
 
@@ -253,7 +258,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="10dp"
             android:layout_marginEnd="8dp"
             android:gravity="center_vertical"
             android:orientation="vertical">
@@ -273,12 +278,41 @@
                 android:id="@+id/tv_sub_status"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="1dp"
+                android:layout_marginTop="2dp"
                 android:text="Subtitle: Auto (Indonesia)"
                 android:textColor="@color/text_muted"
                 android:textSize="@dimen/tv_card_meta_text_size"
                 android:fontFamily="sans-serif" />
         </LinearLayout>
+
+        <!-- Wadah tersembunyi untuk kompatibilitas mundur ID pill lama (seluruh fungsi disatukan ke kontrol bawaan ExoPlayer) -->
+        <LinearLayout
+            android:id="@+id/layout_legacy_top_pills"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+        <!-- Tombol Picture-in-Picture (Mobile Only) -->
+        <Button
+            android:id="@+id/btn_pip"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginEnd="8dp"
+            android:paddingHorizontal="12dp"
+            android:text="PiP"
+            android:textSize="@dimen/text_caption"
+            android:fontFamily="sans-serif-medium"
+            android:textColor="@color/text_primary"
+            app:icon="@drawable/ic_pip"
+            app:iconTint="@color/text_primary"
+            app:iconSize="15dp"
+            app:strokeColor="#33FFFFFF"
+            app:strokeWidth="1dp"
+            app:cornerRadius="18dp"
+            android:backgroundTint="#CC161B26"
+            android:focusable="false"
+            android:visibility="gone" />
 
         <!-- Tombol Skala Layar / Mode Fullscreen (Fit, Zoom, Fill) -->
         <Button
@@ -286,18 +320,19 @@
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:layout_marginEnd="8dp"
-            android:paddingHorizontal="12dp"
+            android:paddingHorizontal="13dp"
             android:text="Fit"
             android:textSize="@dimen/text_caption"
             android:fontFamily="sans-serif-medium"
             android:textColor="@color/text_primary"
-            android:focusable="true"
+            android:focusable="false"
             android:nextFocusLeft="@+id/btn_player_back"
             android:nextFocusRight="@+id/btn_quality"
             app:strokeColor="#33FFFFFF"
             app:strokeWidth="1dp"
-            app:cornerRadius="8dp"
-            android:backgroundTint="#1E2433" />
+            app:cornerRadius="18dp"
+            android:backgroundTint="#CC161B26"
+            android:visibility="gone" />
 
         <!-- Tombol Pilihan Resolusi / Kualitas Video -->
         <Button
@@ -305,18 +340,19 @@
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:layout_marginEnd="8dp"
-            android:paddingHorizontal="12dp"
+            android:paddingHorizontal="13dp"
             android:text="HD"
             android:textSize="@dimen/text_caption"
             android:fontFamily="sans-serif-medium"
             android:textColor="@color/text_primary"
-            android:focusable="true"
+            android:focusable="false"
             android:nextFocusLeft="@+id/btn_aspect"
             android:nextFocusRight="@+id/btn_speed"
             app:strokeColor="#33FFFFFF"
             app:strokeWidth="1dp"
-            app:cornerRadius="8dp"
-            android:backgroundTint="#1E2433" />
+            app:cornerRadius="18dp"
+            android:backgroundTint="#CC161B26"
+            android:visibility="gone" />
 
         <!-- Tombol Pilihan Kecepatan Putar Video -->
         <Button
@@ -324,18 +360,19 @@
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:layout_marginEnd="8dp"
-            android:paddingHorizontal="12dp"
+            android:paddingHorizontal="13dp"
             android:text="1.0x"
             android:textSize="@dimen/text_caption"
             android:fontFamily="sans-serif-medium"
             android:textColor="@color/text_primary"
-            android:focusable="true"
+            android:focusable="false"
             android:nextFocusLeft="@+id/btn_quality"
             android:nextFocusRight="@+id/btn_sub_style"
             app:strokeColor="#33FFFFFF"
             app:strokeWidth="1dp"
-            app:cornerRadius="8dp"
-            android:backgroundTint="#1E2433" />
+            app:cornerRadius="18dp"
+            android:backgroundTint="#CC161B26"
+            android:visibility="gone" />
 
         <!-- Tombol Pengaturan Tampilan & Gaya Subtitle -->
         <Button
@@ -343,35 +380,38 @@
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:layout_marginEnd="8dp"
-            android:paddingHorizontal="12dp"
+            android:paddingHorizontal="13dp"
             android:text="Gaya Sub"
             android:textSize="@dimen/text_caption"
             android:fontFamily="sans-serif-medium"
             android:textColor="@color/text_primary"
-            android:focusable="true"
+            android:focusable="false"
             android:nextFocusLeft="@+id/btn_speed"
             android:nextFocusRight="@+id/btn_sub_selector"
             app:strokeColor="#33FFFFFF"
             app:strokeWidth="1dp"
-            app:cornerRadius="8dp"
-            android:backgroundTint="#1E2433" />
+            app:cornerRadius="18dp"
+            android:backgroundTint="#CC161B26"
+            android:visibility="gone" />
 
         <!-- Tombol Pilihan Subtitle Engine / Bahasa -->
         <Button
             android:id="@+id/btn_sub_selector"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
-            android:paddingHorizontal="14dp"
+            android:paddingHorizontal="15dp"
             android:text="Subtitle"
             android:textSize="@dimen/text_caption"
             android:fontFamily="sans-serif-medium"
             android:textColor="@color/text_primary"
-            android:focusable="true"
+            android:focusable="false"
             android:nextFocusLeft="@+id/btn_sub_style"
             app:strokeColor="#33FFFFFF"
             app:strokeWidth="1dp"
-            app:cornerRadius="8dp"
-            android:backgroundTint="#1E2433" />
+            app:cornerRadius="18dp"
+            android:backgroundTint="#CC161B26"
+            android:visibility="gone" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Floating Screen Lock Button (Mobile Touch Screen Lock) -->
@@ -417,7 +457,7 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:orientation="vertical"
-        android:background="#090A0F"
+        android:background="@color/bg_root"
         android:visibility="gone">
 
         <!-- Info Judul & Episode Aktif + Tombol Kontrol -->
@@ -426,9 +466,9 @@
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:paddingHorizontal="12dp"
-            android:paddingTop="10dp"
-            android:paddingBottom="8dp"
-            android:background="#11141C">
+            android:paddingTop="12dp"
+            android:paddingBottom="10dp"
+            android:background="@color/bg_surface">
 
             <!-- Baris Judul & Tombol Kembali Portrait -->
             <LinearLayout
@@ -482,64 +522,83 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginTop="8dp">
+                android:layout_marginTop="10dp">
 
                 <Button
                     android:id="@+id/btn_portrait_sub"
                     android:layout_width="0dp"
-                    android:layout_height="32dp"
+                    android:layout_height="34dp"
                     android:layout_weight="1"
                     android:layout_marginEnd="6dp"
                     android:text="Subtitle"
                     android:textSize="@dimen/text_badge"
                     android:fontFamily="sans-serif-medium"
                     android:textColor="@color/text_primary"
-                    android:backgroundTint="#1A202C"
-                    app:cornerRadius="6dp"
-                    app:strokeColor="#2D3748"
+                    android:backgroundTint="@color/bg_surface_elevated"
+                    app:cornerRadius="16dp"
+                    app:strokeColor="@color/border_soft"
                     app:strokeWidth="1dp" />
 
                 <Button
                     android:id="@+id/btn_portrait_quality"
                     android:layout_width="0dp"
-                    android:layout_height="32dp"
+                    android:layout_height="34dp"
                     android:layout_weight="1"
                     android:layout_marginEnd="6dp"
                     android:text="Kualitas"
                     android:textSize="@dimen/text_badge"
                     android:fontFamily="sans-serif-medium"
                     android:textColor="@color/text_primary"
-                    android:backgroundTint="#1A202C"
-                    app:cornerRadius="6dp"
-                    app:strokeColor="#2D3748"
+                    android:backgroundTint="@color/bg_surface_elevated"
+                    app:cornerRadius="16dp"
+                    app:strokeColor="@color/border_soft"
                     app:strokeWidth="1dp" />
 
                 <Button
                     android:id="@+id/btn_portrait_speed"
                     android:layout_width="0dp"
-                    android:layout_height="32dp"
+                    android:layout_height="34dp"
                     android:layout_weight="1"
                     android:layout_marginEnd="6dp"
                     android:text="1.0x"
                     android:textSize="@dimen/text_badge"
                     android:fontFamily="sans-serif-medium"
                     android:textColor="@color/text_primary"
-                    android:backgroundTint="#1A202C"
-                    app:cornerRadius="6dp"
-                    app:strokeColor="#2D3748"
+                    android:backgroundTint="@color/bg_surface_elevated"
+                    app:cornerRadius="16dp"
+                    app:strokeColor="@color/border_soft"
                     app:strokeWidth="1dp" />
+
+                <Button
+                    android:id="@+id/btn_portrait_pip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="34dp"
+                    android:layout_marginEnd="6dp"
+                    android:paddingHorizontal="10dp"
+                    android:text="PiP"
+                    android:textSize="@dimen/text_badge"
+                    android:fontFamily="sans-serif-medium"
+                    android:textColor="@color/text_primary"
+                    app:icon="@drawable/ic_pip"
+                    app:iconTint="@color/text_primary"
+                    app:iconSize="13dp"
+                    android:backgroundTint="@color/bg_surface_elevated"
+                    app:cornerRadius="16dp"
+                    app:strokeColor="@color/border_soft"
+                    app:strokeWidth="1dp"
+                    android:visibility="gone" />
 
                 <Button
                     android:id="@+id/btn_portrait_fullscreen"
                     android:layout_width="wrap_content"
-                    android:layout_height="32dp"
+                    android:layout_height="34dp"
                     android:paddingHorizontal="12dp"
                     android:text="⛶ Full"
                     android:textSize="@dimen/text_caption"
                     android:fontFamily="sans-serif-medium"
                     android:textColor="@color/text_accent"
                     android:backgroundTint="#15233D"
-                    app:cornerRadius="6dp"
+                    app:cornerRadius="16dp"
                     app:strokeColor="#38BDF8"
                     app:strokeWidth="1dp" />
             </LinearLayout>
@@ -570,13 +629,13 @@
                 android:layout_height="28dp"
                 android:text="Urutan: 1 - N"
                 android:textColor="@color/text_secondary"
-                android:backgroundTint="#161B26"
+                android:backgroundTint="@color/bg_surface"
                 android:textSize="@dimen/text_badge"
                 android:fontFamily="sans-serif-medium"
-                app:cornerRadius="6dp"
-                app:strokeColor="#2A3347"
+                app:cornerRadius="14dp"
+                app:strokeColor="@color/border_soft"
                 app:strokeWidth="1dp"
-                android:paddingHorizontal="8dp" />
+                android:paddingHorizontal="10dp" />
         </LinearLayout>
 
         <!-- Range Selector (untuk serial anime > 30 episode) -->

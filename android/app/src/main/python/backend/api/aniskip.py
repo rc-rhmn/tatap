@@ -1,17 +1,118 @@
 """Client ringan AniSkip API (v2) untuk deteksi opening (OP) dan ending (ED).
 
-API: https://api.aniskip.com/v2/skip-times/{mal_id}/{episode_num}?types=op&types=ed&episodeLength=0
+API: https://api.aniskip.com/v2/skip-times/{mal_id}/{episode_num}?types=op&types=ed
 Dokumentasi & Schema:
 - results: list of { skipType: 'op'|'ed'|'mixed-op'|'mixed-ed', interval: { startTime, endTime } }
 """
 import time
+import re
 import httpx
 
-_CACHE = {}  # (mal_id, ep): (data, timestamp)
-_CACHE_TTL = 86400  # 24 jam
+# _CACHE format:
+# key -> (data_dict, timestamp, ttl_seconds)
+_CACHE = {}
+_CACHE_TTL = 86400         # 24 jam untuk hasil valid
+_NEGATIVE_CACHE_TTL = 900  # 15 menit untuk 404 / empty (belum ada data di AniSkip)
 
 
-def get_skip_times(mal_id, episode_num: int, timeout: float = 4.0) -> dict:
+def is_valid_interval(start, end) -> bool:
+    """Validasi interval waktu opening/ending anime.
+    Memastikan start dan end adalah angka valid, end > start, end > 0, dan durasi minimal 5.0 detik."""
+    try:
+        s = float(start)
+        e = float(end)
+        return e > s and e > 0 and (e - s) >= 5.0
+    except (ValueError, TypeError):
+        return False
+
+
+def normalize_title(title: str) -> str:
+    """Normalisasi judul anime untuk pencocokan cache lintas provider.
+    Menghilangkan prefix provider (otakudesu/hianime), tag sub indo, nomor episode, batch, dan karakter non-alphanumeric."""
+    if not title:
+        return ""
+    s = title.lower().replace("&", "and")
+    # Ganti separator umum dengan spasi
+    s = re.sub(r"[:\-_/.]+", " ", s)
+    # Hapus provider prefix dan tag umum
+    s = re.sub(r"\b(otakudesu|hianime|sub\s*indo|episode\s*\d+|ep\s*\d+|batch|complete|bd|season\s*\d+|s\d+)\b", " ", s)
+    return re.sub(r"[^a-z0-9]", "", s).strip()
+
+
+def store_skip_times(mal_id=None, title: str = "", ep: int = 1, intro: dict = None, outro: dict = None, ttl: int = _CACHE_TTL):
+    """Menyimpan interval OP/ED yang valid ke cache memori lintas provider.
+    Mendukung penguncian ganda via mal_id dan normalized_title."""
+    now = time.time()
+    try:
+        ep_int = int(str(ep).strip())
+    except Exception:
+        ep_int = 1
+
+    valid_intro = {"start": 0, "end": 0}
+    valid_outro = {"start": 0, "end": 0}
+    has_valid = False
+
+    if isinstance(intro, dict) and is_valid_interval(intro.get("start"), intro.get("end")):
+        valid_intro = {"start": round(float(intro["start"]), 2), "end": round(float(intro["end"]), 2)}
+        has_valid = True
+
+    if isinstance(outro, dict) and is_valid_interval(outro.get("start"), outro.get("end")):
+        valid_outro = {"start": round(float(outro["start"]), 2), "end": round(float(outro["end"]), 2)}
+        has_valid = True
+
+    if not has_valid:
+        return
+
+    data = {"intro": valid_intro, "outro": valid_outro}
+
+    # 1. Simpan berdasarkan mal_id jika ada
+    if mal_id:
+        try:
+            m_id = int(str(mal_id).strip())
+            _CACHE[("mal", m_id, ep_int)] = (data, now, ttl)
+            _CACHE[(m_id, ep_int)] = (data, now, ttl)
+        except Exception:
+            pass
+
+    # 2. Simpan berdasarkan normalized_title jika ada
+    norm_t = normalize_title(title)
+    if norm_t:
+        _CACHE[("title", norm_t, ep_int)] = (data, now, ttl)
+
+
+def get_cached_skip_times(mal_id=None, title: str = "", ep: int = 1) -> dict:
+    """Mencari interval OP/ED dari cache memori lintas provider."""
+    now = time.time()
+    try:
+        ep_int = int(str(ep).strip())
+    except Exception:
+        ep_int = 1
+
+    # 1. Cek kunci mal_id
+    if mal_id:
+        try:
+            m_id = int(str(mal_id).strip())
+            for key in [("mal", m_id, ep_int), (m_id, ep_int)]:
+                if key in _CACHE:
+                    entry, ts, ttl = _CACHE[key]
+                    if now - ts < ttl:
+                        return entry
+        except Exception:
+            pass
+
+    # 2. Cek kunci title
+    norm_t = normalize_title(title)
+    if norm_t:
+        key = ("title", norm_t, ep_int)
+        if key in _CACHE:
+            entry, ts, ttl = _CACHE[key]
+            if now - ts < ttl:
+                return entry
+
+    return None
+
+
+def get_skip_times(mal_id, episode_num: int, episode_length: float = 0, timeout: float = 4.0) -> dict:
     """Mengambil interval opening dan ending dari AniSkip API.
 
     Returns:
@@ -30,14 +131,22 @@ def get_skip_times(mal_id, episode_num: int, timeout: float = 4.0) -> dict:
     except Exception:
         return empty_result
 
-    cache_key = (mal_int, ep_int)
     now = time.time()
-    if cache_key in _CACHE:
-        entry, ts = _CACHE[cache_key]
-        if now - ts < _CACHE_TTL:
-            return entry
+    for cache_key in [("mal", mal_int, ep_int), (mal_int, ep_int)]:
+        if cache_key in _CACHE:
+            entry, ts, ttl = _CACHE[cache_key]
+            if now - ts < ttl:
+                return entry
 
-    url = f"https://api.aniskip.com/v2/skip-times/{mal_int}/{ep_int}?types=op&types=ed&types=mixed-op&types=mixed-ed&episodeLength=0"
+    # Jangan sertakan episodeLength jika 0
+    url = f"https://api.aniskip.com/v2/skip-times/{mal_int}/{ep_int}?types=op&types=ed&types=mixed-op&types=mixed-ed"
+    try:
+        ep_len_val = float(episode_length or 0)
+        if ep_len_val > 0:
+            url += f"&episodeLength={round(ep_len_val, 2)}"
+    except Exception:
+        pass
+
     headers = {
         "User-Agent": "Tatap/2.5.0 (https://github.com/asfaraguest/tatap)",
         "Accept": "application/json"
@@ -45,6 +154,8 @@ def get_skip_times(mal_id, episode_num: int, timeout: float = 4.0) -> dict:
 
     intro = {"start": 0, "end": 0}
     outro = {"start": 0, "end": 0}
+    should_cache = False
+    cache_ttl = _CACHE_TTL
 
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
@@ -57,15 +168,30 @@ def get_skip_times(mal_id, episode_num: int, timeout: float = 4.0) -> dict:
                         interval = item.get("interval") or {}
                         start = round(float(interval.get("startTime") or 0), 2)
                         end = round(float(interval.get("endTime") or 0), 2)
-                        if end > start:
+                        if is_valid_interval(start, end):
                             if "op" in st and intro["end"] == 0:
                                 intro = {"start": start, "end": end}
                             elif "ed" in st and outro["end"] == 0:
                                 outro = {"start": start, "end": end}
+                    should_cache = True
+                    cache_ttl = _CACHE_TTL
+                else:
+                    # 200 tapi found false: negative cache pendek
+                    should_cache = True
+                    cache_ttl = _NEGATIVE_CACHE_TTL
+            elif resp.status_code == 404:
+                # 404 belum ada data di AniSkip: negative cache pendek
+                should_cache = True
+                cache_ttl = _NEGATIVE_CACHE_TTL
+            elif resp.status_code >= 500 or resp.status_code == 429:
+                # Server error atau rate limit: jangan cache sama sekali
+                should_cache = False
     except Exception:
-        # Graceful fallback: jaringan offline, timeout, atau AniSkip down
-        pass
+        # Network exception, timeout, DNS error: jangan simpan ke cache
+        should_cache = False
 
     res = {"intro": intro, "outro": outro}
-    _CACHE[cache_key] = (res, now)
+    if should_cache:
+        _CACHE[("mal", mal_int, ep_int)] = (res, now, cache_ttl)
+        _CACHE[(mal_int, ep_int)] = (res, now, cache_ttl)
     return res

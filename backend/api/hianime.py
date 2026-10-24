@@ -66,6 +66,16 @@ def _host_from(url):
 
 
 _BLOCKED_DPI_HOSTS = {"hls.dramahot.top", "drama1.cfd", "hls1.drama1.cfd", "puterin.biz", "putarin.xyz", "stream121.space"}
+_BLOCKED_DPI_KEYWORDS = ("dramahot", "drama1", "zokoanime", "puterin", "putarin", "stream121")
+
+
+def _is_dpi_blocked_host(host: str) -> bool:
+    if not host:
+        return False
+    h = host.lower()
+    if h in _BLOCKED_DPI_HOSTS:
+        return True
+    return any(k in h for k in _BLOCKED_DPI_KEYWORDS)
 
 
 def _probe_master(master_url, referer):
@@ -81,7 +91,7 @@ def _probe_master(master_url, referer):
                **({"Referer": referer} if referer else {})}
     
     # Jika host terdeteksi diblokir DPI ISP, gunakan TLS desync langsung
-    if host in _BLOCKED_DPI_HOSTS:
+    if _is_dpi_blocked_host(host):
         try:
             from api.desync import tls_desync_request
             content = tls_desync_request(master_url, headers=headers, timeout=8.0)
@@ -266,6 +276,7 @@ def hianime_details(slug: str) -> dict:
         "score": 0.0,
         "status": "",
         "season": "",
+        "year": 0,
         "duration": "",
         "studio": "",
         "genres": [],
@@ -309,12 +320,46 @@ def hianime_details(slug: str) -> dict:
         if m_stat:
             out["status"] = m_stat.group(1).strip()
 
-        # Premiered / Season
+        # Premiered / Season / Year
         m_prem = re.search(r'class="item-head">Premiered:</span>\s*<span[^>]*class="name"[^>]*>([^<]+)</span>', html_txt)
         if not m_prem:
             m_prem = re.search(r'class="item-head">Premiered:</span>\s*<a[^>]*>([^<]+)</a>', html_txt)
         if m_prem:
             out["season"] = m_prem.group(1).strip()
+            m_yr = re.search(r'\b(19\d\d|20\d\d)\b', out["season"])
+            if m_yr:
+                try:
+                    out["year"] = int(m_yr.group(1))
+                except Exception:
+                    pass
+
+        # Fallback Aired jika Premiered / Season kosong
+        if not out.get("season"):
+            m_aired = re.search(r'class="item-head">Aired:</span>\s*<span[^>]*class="name"[^>]*>([^<]+)</span>', html_txt)
+            if not m_aired:
+                m_aired = re.search(r'class="item-head">Aired:</span>\s*<a[^>]*>([^<]+)</a>', html_txt)
+            if m_aired:
+                aired_str = m_aired.group(1).strip()
+                m_yr = re.search(r'\b(19\d\d|20\d\d)\b', aired_str)
+                yr = int(m_yr.group(1)) if m_yr else 0
+                if yr:
+                    out["year"] = yr
+                    m_mth = re.search(r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*', aired_str, re.I)
+                    if m_mth:
+                        m_str = m_mth.group(1).title()
+                        month_seasons = {
+                            "Jan": "Winter", "Feb": "Winter", "Mar": "Winter",
+                            "Apr": "Spring", "May": "Spring", "Jun": "Spring",
+                            "Jul": "Summer", "Aug": "Summer", "Sep": "Summer",
+                            "Oct": "Fall", "Nov": "Fall", "Dec": "Fall"
+                        }
+                        s_name = month_seasons.get(m_str, "")
+                        if s_name:
+                            out["season"] = f"{s_name} {yr}"
+                        else:
+                            out["season"] = str(yr)
+                    else:
+                        out["season"] = str(yr)
 
         # Duration
         m_dur = re.search(r'class="item-head">Duration:</span>\s*<span[^>]*class="name"[^>]*>([^<]+)</span>', html_txt)
@@ -983,7 +1028,7 @@ def _fetch_media(url: str, referer: str = None, timeout: int = 10) -> str:
     - Host terblokir ISP: bypass via TLS desync tanpa VPN."""
     host = _host_from(url)
     headers = {"User-Agent": HI_UA, **({"Referer": referer} if referer else {})}
-    if host in _BLOCKED_DPI_HOSTS:
+    if _is_dpi_blocked_host(host):
         try:
             from api.desync import tls_desync_request
             b = tls_desync_request(url, headers=headers, timeout=timeout)
@@ -1078,7 +1123,7 @@ def _validate_sub_url(sub_url: str, referer: str):
         if any(k in host for k in ("megaplay", "broforgotsave", "stellarfrontier", "megacloud", "akamaized", "rabbitstream")):
             return sub_url
         headers = {"User-Agent": HI_UA, **({"Referer": referer} if referer else {})}
-        if host in _BLOCKED_DPI_HOSTS:
+        if _is_dpi_blocked_host(host):
             from api.desync import tls_desync_request
             b = tls_desync_request(sub_url, headers=headers, timeout=4.0)
             if b and len(b) >= 10:

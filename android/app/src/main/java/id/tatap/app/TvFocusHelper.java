@@ -1,7 +1,9 @@
 package id.tatap.app;
 
+import android.app.AlertDialog;
 import android.app.UiModeManager;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
@@ -13,7 +15,11 @@ import android.graphics.Paint;
 import android.graphics.drawable.Drawable;
 import android.text.style.ImageSpan;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.ListView;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
@@ -71,14 +77,17 @@ public class TvFocusHelper {
                 MaterialButton btn = (MaterialButton) v;
                 btn.setStrokeColor(ColorStateList.valueOf(hasFocus ? COLOR_FOCUSED_STROKE : Color.parseColor("#33FFFFFF")));
                 btn.setBackgroundTintList(ColorStateList.valueOf(hasFocus ? Color.parseColor("#1E2B45") : Color.parseColor("#CC161B26")));
-            } else if (v instanceof ImageButton) {
-                ImageButton ib = (ImageButton) v;
-                if (ib.getId() == androidx.media3.ui.R.id.exo_play_pause
-                        || ib.getId() == androidx.media3.ui.R.id.exo_play
-                        || ib.getId() == androidx.media3.ui.R.id.exo_pause) {
-                    ib.setBackgroundResource(R.drawable.bg_exo_play_center);
+            } else if (v instanceof ImageButton
+                    || (v != null && (v.getId() == androidx.media3.ui.R.id.exo_rew
+                    || v.getId() == androidx.media3.ui.R.id.exo_rew_with_amount
+                    || v.getId() == androidx.media3.ui.R.id.exo_ffwd
+                    || v.getId() == androidx.media3.ui.R.id.exo_ffwd_with_amount))) {
+                if (v.getId() == androidx.media3.ui.R.id.exo_play_pause
+                        || v.getId() == androidx.media3.ui.R.id.exo_play
+                        || v.getId() == androidx.media3.ui.R.id.exo_pause) {
+                    v.setBackgroundResource(R.drawable.bg_exo_play_center);
                 } else {
-                    ib.setBackgroundResource(R.drawable.bg_exo_icon_btn);
+                    v.setBackgroundResource(R.drawable.bg_exo_icon_btn);
                 }
             } else if (v.getBackground() instanceof GradientDrawable) {
                 GradientDrawable gd = (GradientDrawable) v.getBackground().mutate();
@@ -93,6 +102,79 @@ public class TvFocusHelper {
 
     public static void attachCardFocus(final MaterialCardView card) {
         attachFocusScale(card, 1.04f, 0f);
+    }
+
+    /**
+     * Menerapkan fokus otomatis kursor remote D-Pad pada AlertDialog di Android TV (10-Foot UI).
+     * Memastikan ListView dialog atau tombol aksi utama langsung mendapatkan fokus,
+     * mencegah kursor D-Pad tersangkut di view latar belakang player.
+     */
+    public static AlertDialog applyDialogTvFocus(AlertDialog dialog) {
+        if (dialog == null) return null;
+        Context context = dialog.getContext();
+        if (!isTv(context)) return dialog;
+
+        Runnable focusAction = () -> {
+            ListView lv = dialog.getListView();
+            if (lv != null) {
+                lv.setFocusable(true);
+                lv.setFocusableInTouchMode(false);
+                lv.requestFocus();
+                if (lv.getAdapter() != null && lv.getAdapter().getCount() > 0) {
+                    int checkedPos = lv.getCheckedItemPosition();
+                    if (checkedPos >= 0 && checkedPos < lv.getAdapter().getCount()) {
+                        lv.setSelection(checkedPos);
+                    } else {
+                        lv.setSelection(0);
+                    }
+                }
+            } else {
+                EditText et = findEditText(dialog.getWindow() != null ? dialog.getWindow().getDecorView() : null);
+                if (et != null && et.getVisibility() == View.VISIBLE) {
+                    et.setFocusable(true);
+                    et.requestFocus();
+                } else {
+                    Button btn = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
+                    if (btn != null && btn.getVisibility() == View.VISIBLE) {
+                        btn.setFocusable(true);
+                        btn.requestFocus();
+                    } else {
+                        Button btnNeg = dialog.getButton(DialogInterface.BUTTON_NEGATIVE);
+                        if (btnNeg != null && btnNeg.getVisibility() == View.VISIBLE) {
+                            btnNeg.setFocusable(true);
+                            btnNeg.requestFocus();
+                        }
+                    }
+                }
+            }
+        };
+
+        if (dialog.isShowing()) {
+            android.view.Window w = dialog.getWindow();
+            if (w != null && w.getDecorView() != null) {
+                w.getDecorView().post(focusAction);
+            } else {
+                focusAction.run();
+            }
+        } else {
+            dialog.setOnShowListener(di -> focusAction.run());
+        }
+        return dialog;
+    }
+
+    private static EditText findEditText(View root) {
+        if (root == null) return null;
+        if (root instanceof EditText) {
+            return (EditText) root;
+        }
+        if (root instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) root;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                EditText found = findEditText(vg.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     /**

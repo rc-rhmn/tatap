@@ -55,6 +55,11 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
 import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.DataSource;
+import androidx.media3.datasource.cache.CacheDataSource;
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor;
+import androidx.media3.datasource.cache.SimpleCache;
+import androidx.media3.database.StandaloneDatabaseProvider;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.exoplayer.DefaultLoadControl;
@@ -73,6 +78,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.InputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -112,6 +118,23 @@ public class PlayerActivity extends Activity {
     private static final int PIP_ACTION_REWIND = 1;
     private static final int PIP_ACTION_PLAY_PAUSE = 2;
     private static final int PIP_ACTION_FORWARD = 3;
+
+    // ---------------------------------------------------------------------------
+    // Disk cache untuk segmen stream (Media3 SimpleCache).
+    //
+    // SEBELUMNYA tidak ada cache disk sama sekali: setiap segmen .ts/.m4s
+    // diunduh ulang dari proxy Python (127.0.0.1:8767) setiap kali user
+    // play / seek / pindah episode. Pada TV low-end (1-1.5GB RAM) ini berarti
+    // banyak unduhan network bolak-balik untuk data yang sama.
+    //
+    // SEKARANG segmen disimpan di cache disk 96MB (TV) / 256MB (HP) dengan
+    // eviksi LRU, sehingga seek mundur & replay episode kedua tidak perlu
+    // unduh ulang dari CDN.
+    // ---------------------------------------------------------------------------
+    private static final long STREAM_CACHE_BYTES_TV = 96L * 1024L * 1024L;
+    private static final long STREAM_CACHE_BYTES_PHONE = 256L * 1024L * 1024L;
+    private static SimpleCache streamCache;
+    private static final Object STREAM_CACHE_LOCK = new Object();
     private GestureDetector gestureDetector;
     private ScaleGestureDetector scaleGestureDetector;
     private AudioManager audioManager;
@@ -220,6 +243,7 @@ public class PlayerActivity extends Activity {
     private View btnScreenLock;
     private View btnScreenUnlock;
     private boolean isScreenLocked = false;
+    private boolean isNavigatingToSubDialog = false;
     private final Runnable hideUnlockButtonRunnable = () -> {
         if (btnScreenUnlock != null && isScreenLocked) {
             btnScreenUnlock.animate()
@@ -756,12 +780,13 @@ public class PlayerActivity extends Activity {
     private void cycleAspectRatio() {
         try {
             if (playerView == null) return;
+            boolean isTv = TvFocusHelper.isTv(this);
             if (currentResizeMode == AspectRatioFrameLayout.RESIZE_MODE_FIT) {
                 currentResizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM;
-                applyResizeModeAndSave("ZOOM (Penuh Sampai Notch)");
+                applyResizeModeAndSave(isTv ? "ZOOM (Pangkas Skala Layar Lebar)" : "ZOOM (Penuh Sampai Notch)");
             } else if (currentResizeMode == AspectRatioFrameLayout.RESIZE_MODE_ZOOM) {
                 currentResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL;
-                applyResizeModeAndSave("FILL (Rentang Penuh Sampai Notch)");
+                applyResizeModeAndSave(isTv ? "FILL (Regang Penuh)" : "FILL (Rentang Penuh Sampai Notch)");
             } else {
                 currentResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
                 applyResizeModeAndSave("FIT (Skala Asli 16:9)");
@@ -1016,6 +1041,59 @@ public class PlayerActivity extends Activity {
         }).start();
     }
 
+    /**
+     * Buat (atau ambil) instance SimpleCache disk untuk segmen stream.
+     * Disimpan static agar tidak dibuat ulang tiap activity — SimpleCache
+     * hanya boleh ada SATU instance per direktori (SimpleCache mengunci folder).
+     */
+    private static SimpleCache getStreamCache(Context ctx) {
+        synchronized (STREAM_CACHE_LOCK) {
+            if (streamCache != null) {
+                return streamCache;
+            }
+            try {
+                File cacheDir = new File(ctx.getCacheDir(), "tatap-stream");
+                if (!cacheDir.exists() && !cacheDir.mkdirs()) {
+                    return null;
+                }
+                long maxBytes = TvFocusHelper.isTv(ctx)
+                        ? STREAM_CACHE_BYTES_TV
+                        : STREAM_CACHE_BYTES_PHONE;
+                LeastRecentlyUsedCacheEvictor evictor =
+                        new LeastRecentlyUsedCacheEvictor(maxBytes);
+                StandaloneDatabaseProvider dbProvider = new StandaloneDatabaseProvider(ctx);
+                streamCache = new SimpleCache(cacheDir, evictor, dbProvider);
+                return streamCache;
+            } catch (Throwable t) {
+                // Cache bersifat opsional — playback tetap jalan tanpanya.
+                return null;
+            }
+        }
+    }
+
+    /**
+     * Data source factory yang memakai cache disk bila tersedia, dengan
+     * fallback ke HTTP langsung bila inisialisasi cache gagal.
+     */
+    private DataSource.Factory buildCachedDataSourceFactory(
+            DefaultHttpDataSource.Factory httpFactory) {
+        SimpleCache cache = getStreamCache(this);
+        if (cache == null) {
+            return httpFactory;
+        }
+        try {
+            return new CacheDataSource.Factory()
+                    .setCache(cache)
+                    .setUpstreamDataSourceFactory(httpFactory)
+                    // Flag IGNORE_CACHE_ON_ERROR: jika upstream gagal, pakai
+                    // salinan cache lama alih-alih gagal total.
+                    .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+                    .setCacheWriteDataSinkFactory(null);
+        } catch (Throwable t) {
+            return httpFactory;
+        }
+    }
+
     private void initExoPlayer() {
         DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
@@ -1024,7 +1102,12 @@ public class PlayerActivity extends Activity {
                         2_000,  // bufferForPlaybackMs (2s cepat mulai)
                         4_000   // bufferForPlaybackAfterRebufferMs (4s)
                 )
-                .setPrioritizeTimeOverSizeThresholds(false)
+                // Prioritaskan batas UKURAN buffer di atas batas waktu. Nilai false
+                // membuat ExoPlayer buffer hingga 50 detik tanpa memandang ukuran
+                // byte — pada 1080p ini menahan belasan MB di RAM TV (1-1.5GB) dan
+                // memicu OOM/low-memory kill. Dengan true, byte cap berlaku dan
+                // ExoPlayer berhenti tepat di target waktu tanpa over-buffer.
+                .setPrioritizeTimeOverSizeThresholds(true)
                 .build();
 
         // Bandwidth meter dengan estimasi awal tinggi (25 Mbps) agar ExoPlayer langsung
@@ -1702,9 +1785,14 @@ public class PlayerActivity extends Activity {
     private boolean isBottomBarFocused() {
         View current = getCurrentFocus();
         if (current == null || current == playerView) return false;
+        int curId = current.getId();
         if (current == btnExoPrev || current == btnExoRew || current == btnExoPlayPause
                 || current == btnExoFfwd || current == btnExoNext || current == btnExoSub
-                || current == btnExoPip || current == btnExoSettings || current == btnExoFullscreen) {
+                || current == btnExoPip || current == btnExoSettings || current == btnExoFullscreen
+                || curId == androidx.media3.ui.R.id.exo_rew
+                || curId == androidx.media3.ui.R.id.exo_rew_with_amount
+                || curId == androidx.media3.ui.R.id.exo_ffwd
+                || curId == androidx.media3.ui.R.id.exo_ffwd_with_amount) {
             return true;
         }
         return exoBottomBar != null && isChildOf(current, exoBottomBar);
@@ -1789,9 +1877,17 @@ public class PlayerActivity extends Activity {
             }
 
             boolean isTopBarActive = (layoutTopBar != null && layoutTopBar.getVisibility() == View.VISIBLE);
-            if (isTopBarActive) {
+            boolean isControllerActive = (playerView != null && playerView.isControllerFullyVisible()) || isBottomBarFocused();
+
+            if (isTopBarActive || isControllerActive) {
                 if (event.getAction() == KeyEvent.ACTION_UP) {
-                    hideTopBar();
+                    if (isTopBarActive) {
+                        hideTopBar();
+                    }
+                    if (playerView != null) {
+                        playerView.hideController();
+                        playerView.requestFocus();
+                    }
                 }
                 return true;
             }
@@ -1841,24 +1937,45 @@ public class PlayerActivity extends Activity {
                         }
                     }
                     View focused = getCurrentFocus();
+                    View timeBarCenter = playerView != null ? playerView.findViewById(androidx.media3.ui.R.id.exo_progress) : null;
+                    if (focused != null && timeBarCenter != null && (focused == timeBarCenter || focused.getId() == androidx.media3.ui.R.id.exo_progress)) {
+                        break;
+                    }
                     if (focused != null && focused != playerView) {
-                        if (focused == btnExoNext || (btnExoNext != null && focused.getId() == androidx.media3.ui.R.id.exo_next)) {
+                        int fId = focused.getId();
+                        if (focused == btnExoRew || (btnExoRew != null && fId == btnExoRew.getId())
+                                || fId == androidx.media3.ui.R.id.exo_rew
+                                || fId == androidx.media3.ui.R.id.exo_rew_with_amount) {
+                            seekRelative(-5000);
+                            showRipple(tvRippleLeft);
+                            vibrate(15);
+                            return true;
+                        }
+                        if (focused == btnExoFfwd || (btnExoFfwd != null && fId == btnExoFfwd.getId())
+                                || fId == androidx.media3.ui.R.id.exo_ffwd
+                                || fId == androidx.media3.ui.R.id.exo_ffwd_with_amount) {
+                            seekRelative(5000);
+                            showRipple(tvRippleRight);
+                            vibrate(15);
+                            return true;
+                        }
+                        if (focused == btnExoNext || (btnExoNext != null && fId == androidx.media3.ui.R.id.exo_next)) {
                             playNextEpisode();
                             return true;
                         }
-                        if (focused == btnExoPrev || (btnExoPrev != null && focused.getId() == androidx.media3.ui.R.id.exo_prev)) {
+                        if (focused == btnExoPrev || (btnExoPrev != null && fId == androidx.media3.ui.R.id.exo_prev)) {
                             playPrevEpisode();
                             return true;
                         }
-                        if (focused == btnExoSub || (btnExoSub != null && focused.getId() == androidx.media3.ui.R.id.exo_subtitle)) {
+                        if (focused == btnExoSub || (btnExoSub != null && fId == androidx.media3.ui.R.id.exo_subtitle)) {
                             showSubtitleSelectorDialog();
                             return true;
                         }
-                        if (focused == btnExoSettings || (btnExoSettings != null && focused.getId() == androidx.media3.ui.R.id.exo_settings)) {
+                        if (focused == btnExoSettings || (btnExoSettings != null && fId == androidx.media3.ui.R.id.exo_settings)) {
                             showPlayerUnifiedSettingsDialog();
                             return true;
                         }
-                        if (focused == btnExoFullscreen || (btnExoFullscreen != null && focused.getId() == androidx.media3.ui.R.id.exo_fullscreen)) {
+                        if (focused == btnExoFullscreen || (btnExoFullscreen != null && fId == androidx.media3.ui.R.id.exo_fullscreen)) {
                             cycleAspectRatio();
                             return true;
                         }
@@ -1960,6 +2077,16 @@ public class PlayerActivity extends Activity {
                     break;
 
                 case KeyEvent.KEYCODE_DPAD_LEFT:
+                    View timeBarLeft = playerView != null ? playerView.findViewById(androidx.media3.ui.R.id.exo_progress) : null;
+                    View currentFocusLeft = getCurrentFocus();
+                    boolean isTimeBarFocusedLeft = (currentFocusLeft != null && timeBarLeft != null
+                            && (currentFocusLeft == timeBarLeft || currentFocusLeft.getId() == androidx.media3.ui.R.id.exo_progress));
+
+                    if (isTimeBarFocusedLeft) {
+                        if (playerView != null) playerView.showController();
+                        break;
+                    }
+
                     if (isSkipFocused && playerView != null) {
                         if (TvFocusHelper.isTv(this)) {
                             return navigateBottomBarHorizontal(false, isSkipVisible);
@@ -1997,6 +2124,16 @@ public class PlayerActivity extends Activity {
                     return true;
 
                 case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    View timeBarRight = playerView != null ? playerView.findViewById(androidx.media3.ui.R.id.exo_progress) : null;
+                    View currentFocusRight = getCurrentFocus();
+                    boolean isTimeBarFocusedRight = (currentFocusRight != null && timeBarRight != null
+                            && (currentFocusRight == timeBarRight || currentFocusRight.getId() == androidx.media3.ui.R.id.exo_progress));
+
+                    if (isTimeBarFocusedRight) {
+                        if (playerView != null) playerView.showController();
+                        break;
+                    }
+
                     if (isSkipFocused && playerView != null) {
                         playerView.requestFocus();
                     }
@@ -2042,7 +2179,25 @@ public class PlayerActivity extends Activity {
                             playerView.showController();
                         }
                         updateExoButtonStates();
+                        View curFocusUp = getCurrentFocus();
+                        View timeBarUp = playerView != null ? playerView.findViewById(androidx.media3.ui.R.id.exo_progress) : null;
+
+                        if (curFocusUp != null && timeBarUp != null && (curFocusUp == timeBarUp || curFocusUp.getId() == androidx.media3.ui.R.id.exo_progress)) {
+                            if (isSkipVisible && btnSkipOpEd != null) {
+                                btnSkipOpEd.requestFocus();
+                                return true;
+                            }
+                            if (btnPlayerBack != null && btnPlayerBack.getVisibility() == View.VISIBLE) {
+                                btnPlayerBack.requestFocus();
+                                return true;
+                            }
+                        }
+
                         if (isBottomBarFocused()) {
+                            if (timeBarUp != null && timeBarUp.getVisibility() == View.VISIBLE) {
+                                timeBarUp.requestFocus();
+                                return true;
+                            }
                             if (isSkipVisible && btnSkipOpEd != null) {
                                 btnSkipOpEd.requestFocus();
                                 return true;
@@ -2094,6 +2249,23 @@ public class PlayerActivity extends Activity {
                             playerView.showController();
                         }
                         updateExoButtonStates();
+                        View curFocusDown = getCurrentFocus();
+                        View timeBarDown = playerView != null ? playerView.findViewById(androidx.media3.ui.R.id.exo_progress) : null;
+
+                        if (curFocusDown != null && (isSkipFocused || hasFocusOnTopBar || curFocusDown == btnPlayerBack)) {
+                            if (timeBarDown != null && timeBarDown.getVisibility() == View.VISIBLE) {
+                                timeBarDown.requestFocus();
+                                return true;
+                            }
+                        }
+
+                        if (curFocusDown != null && timeBarDown != null && (curFocusDown == timeBarDown || curFocusDown.getId() == androidx.media3.ui.R.id.exo_progress)) {
+                            if (btnExoPlayPause != null && btnExoPlayPause.getVisibility() == View.VISIBLE) {
+                                btnExoPlayPause.requestFocus();
+                                return true;
+                            }
+                        }
+
                         if (isSkipVisible && !isSkipFocused && !isBottomBarFocused()) {
                             btnSkipOpEd.requestFocus();
                             boolean inIntro = (introEndMs > introStartMs && player != null
@@ -2590,6 +2762,7 @@ public class PlayerActivity extends Activity {
                 String effectiveMode = (requestMode != null && !requestMode.isEmpty()) ? requestMode : "sub";
                 String u = "http://127.0.0.1:8767/api/episode?slug=" + URLEncoder.encode(slug != null ? slug : "", "UTF-8")
                         + "&ep=" + ep + "&mode=" + URLEncoder.encode(effectiveMode, "UTF-8") + "&q=" + URLEncoder.encode(activeQuality != null ? activeQuality : "best", "UTF-8")
+                        + (title != null && !title.isEmpty() ? "&title=" + URLEncoder.encode(title, "UTF-8") : "")
                         + (forceRefresh ? "&refresh=1&force=true" : "");
                 HttpURLConnection conn = (HttpURLConnection) new URL(u).openConnection();
                 conn.setConnectTimeout(15000);
@@ -2881,6 +3054,12 @@ public class PlayerActivity extends Activity {
                     .setReadTimeoutMs(30000)
                     .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0");
 
+            // Wrap dengan CacheDataSource supaya segmen .ts/.m4s disimpan ke
+            // disk dan tidak diunduh ulang saat seek/pindah episode. Cache
+            // bersifat opsional: jika inisialisasi gagal, fallback ke HTTP
+            // langsung.
+            DataSource.Factory cachedFactory = buildCachedDataSourceFactory(httpDataSourceFactory);
+
             String epTitle = (title != null && !title.isEmpty()) ? (title + " - Ep " + ep) : ("Episode " + ep);
             androidx.media3.common.MediaMetadata mediaMetadata = new androidx.media3.common.MediaMetadata.Builder()
                     .setTitle(epTitle)
@@ -2895,13 +3074,13 @@ public class PlayerActivity extends Activity {
 
             if (isHls) {
                 mib.setMimeType(MimeTypes.APPLICATION_M3U8);
-                HlsMediaSource videoSource = new HlsMediaSource.Factory(httpDataSourceFactory)
+                HlsMediaSource videoSource = new HlsMediaSource.Factory(cachedFactory)
                         .setAllowChunklessPreparation(true)
                         .createMediaSource(mib.build());
                 player.setMediaSource(videoSource);
             } else {
                 androidx.media3.exoplayer.source.ProgressiveMediaSource videoSource =
-                        new androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(httpDataSourceFactory)
+                        new androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(cachedFactory)
                                 .createMediaSource(mib.build());
                 player.setMediaSource(videoSource);
             }
@@ -3326,7 +3505,7 @@ public class PlayerActivity extends Activity {
                 }
             }
         });
-        builder.show();
+        TvFocusHelper.applyDialogTvFocus(builder.show());
     }
 
     private void applyPlaybackSpeed(float speed) {
@@ -3402,7 +3581,7 @@ public class PlayerActivity extends Activity {
                 }
             }
         });
-        builder.show();
+        TvFocusHelper.applyDialogTvFocus(builder.show());
     }
 
     private void switchQuality(String newQ, String newUrl) {
@@ -3680,8 +3859,10 @@ public class PlayerActivity extends Activity {
         actions.add(this::showOpenSubtitlesSearchDialog);
 
         // Opsi Subtitle Kustom (File Lokal / URL)
-        options.add("[+] Pilih File Subtitle Lokal (.srt / .vtt / .ass)...");
-        actions.add(this::openSubtitleFilePicker);
+        if (!TvFocusHelper.isTv(this)) {
+            options.add("[+] Pilih File Subtitle Lokal (.srt / .vtt / .ass)...");
+            actions.add(this::openSubtitleFilePicker);
+        }
 
         options.add("[+] Masukkan URL Subtitle Kustom...");
         actions.add(this::showCustomSubtitleUrlDialog);
@@ -3704,6 +3885,9 @@ public class PlayerActivity extends Activity {
         builder.setItems(options.toArray(new String[0]), (dialog, which) -> {
             if (which >= 0 && which < actions.size()) {
                 String chosen = options.get(which);
+                if (chosen.contains("[+]") || chosen.contains("[Sync]") || chosen.contains("Pengaturan Tampilan")) {
+                    isNavigatingToSubDialog = true;
+                }
                 actions.get(which).run();
                 if (!chosen.contains("[Refresh]") && !chosen.contains("[+]") && !chosen.contains("[Sync]") && !chosen.contains("Pengaturan Tampilan")) {
                     getSharedPreferences("tatap_player_prefs", MODE_PRIVATE).edit()
@@ -3719,6 +3903,10 @@ public class PlayerActivity extends Activity {
 
         builder.setNegativeButton("Tutup", (dialog, which) -> dialog.dismiss());
         builder.setOnDismissListener(dialog -> {
+            if (isNavigatingToSubDialog) {
+                isNavigatingToSubDialog = false;
+                return;
+            }
             if (playerView != null) {
                 playerView.showController();
                 if (btnSubSelector != null && btnSubSelector.isShown()) {
@@ -3728,7 +3916,7 @@ public class PlayerActivity extends Activity {
                 }
             }
         });
-        builder.show();
+        TvFocusHelper.applyDialogTvFocus(builder.show());
     }
 
     private void openSubtitleFilePicker() {
@@ -3745,6 +3933,7 @@ public class PlayerActivity extends Activity {
                 intent.setType("*/*");
                 startActivityForResult(intent, REQUEST_CODE_PICK_SUBTITLE);
             } catch (Exception ex) {
+                restoreSubPickerTvFocus();
                 Toast.makeText(this, "Gagal membuka pengelola berkas: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
             }
         }
@@ -3931,7 +4120,7 @@ public class PlayerActivity extends Activity {
                             }
                         }
                     });
-                    b.show();
+                    TvFocusHelper.applyDialogTvFocus(b.show());
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> Toast.makeText(this, "Gagal mencari subtitle: " + e.getMessage(), Toast.LENGTH_LONG).show());
@@ -4026,6 +4215,8 @@ public class PlayerActivity extends Activity {
         });
         b.setNegativeButton("Batal", (dialog, which) -> dialog.dismiss());
         AlertDialog dialog = b.create();
+        dialog.setOnDismissListener(d -> restoreSubPickerTvFocus());
+        TvFocusHelper.applyDialogTvFocus(dialog);
         dialog.show();
     }
 
@@ -4239,6 +4430,9 @@ public class PlayerActivity extends Activity {
         };
 
         builder.setItems(menu, (dialog, which) -> {
+            if (which < 5) {
+                isNavigatingToSubDialog = true;
+            }
             if (which == 0) {
                 showPositionPicker(sp);
             } else if (which == 1) {
@@ -4261,6 +4455,10 @@ public class PlayerActivity extends Activity {
 
         builder.setNegativeButton("Tutup", (dialog, which) -> dialog.dismiss());
         builder.setOnDismissListener(dialog -> {
+            if (isNavigatingToSubDialog) {
+                isNavigatingToSubDialog = false;
+                return;
+            }
             if (playerView != null) {
                 playerView.showController();
                 if (btnSubStyle != null && btnSubStyle.isShown()) {
@@ -4270,7 +4468,21 @@ public class PlayerActivity extends Activity {
                 }
             }
         });
-        builder.show();
+        TvFocusHelper.applyDialogTvFocus(builder.show());
+    }
+
+    private void restoreSubPickerTvFocus() {
+        isNavigatingToSubDialog = false;
+        if (playerView != null) {
+            playerView.showController();
+            if (btnSubStyle != null && btnSubStyle.isShown()) {
+                btnSubStyle.requestFocus();
+            } else if (btnExoSub != null && btnExoSub.getVisibility() == View.VISIBLE) {
+                btnExoSub.requestFocus();
+            } else if (btnExoSettings != null && btnExoSettings.getVisibility() == View.VISIBLE) {
+                btnExoSettings.requestFocus();
+            }
+        }
     }
 
     private void showPositionPicker(SharedPreferences sp) {
@@ -4282,7 +4494,7 @@ public class PlayerActivity extends Activity {
         String cur = sp.getString("sub_pos", "low");
         int checked = "high".equals(cur) ? 2 : ("mid".equals(cur) ? 1 : 0);
 
-        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        TvFocusHelper.applyDialogTvFocus(new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle("Pilih Posisi Subtitle")
                 .setSingleChoiceItems(options, checked, (dialog, which) -> {
                     String val = which == 2 ? "high" : (which == 1 ? "mid" : "low");
@@ -4292,7 +4504,8 @@ public class PlayerActivity extends Activity {
                     Toast.makeText(this, "Posisi subtitle disimpan", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("Batal", null)
-                .show();
+                .setOnDismissListener(d -> restoreSubPickerTvFocus())
+                .show());
     }
 
     private void showSubtitleOffsetPicker() {
@@ -4317,7 +4530,7 @@ public class PlayerActivity extends Activity {
                 break;
             }
         }
-        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        TvFocusHelper.applyDialogTvFocus(new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle("Sinkronisasi Waktu Subtitle (Offset)")
                 .setSingleChoiceItems(options, checked, (dialog, which) -> {
                     if (which >= 0 && which < offsetValuesMs.length) {
@@ -4330,7 +4543,8 @@ public class PlayerActivity extends Activity {
                     dialog.dismiss();
                 })
                 .setNegativeButton("Batal", null)
-                .show();
+                .setOnDismissListener(d -> restoreSubPickerTvFocus())
+                .show());
     }
 
     private void showBackgroundPicker(SharedPreferences sp) {
@@ -4343,7 +4557,7 @@ public class PlayerActivity extends Activity {
         String cur = sp.getString("sub_bg", "subtle");
         int checked = "transparent".equals(cur) ? 0 : ("medium".equals(cur) ? 2 : ("dark".equals(cur) ? 3 : 1));
 
-        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        TvFocusHelper.applyDialogTvFocus(new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle("Pilih Latar Belakang Subtitle")
                 .setSingleChoiceItems(options, checked, (dialog, which) -> {
                     String val = which == 0 ? "transparent" : (which == 2 ? "medium" : (which == 3 ? "dark" : "subtle"));
@@ -4353,7 +4567,8 @@ public class PlayerActivity extends Activity {
                     Toast.makeText(this, "Gaya latar subtitle disimpan", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("Batal", null)
-                .show();
+                .setOnDismissListener(d -> restoreSubPickerTvFocus())
+                .show());
     }
 
     private void showSizePicker(SharedPreferences sp) {
@@ -4398,7 +4613,7 @@ public class PlayerActivity extends Activity {
         }
 
         final String[] finalValues = values;
-        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        TvFocusHelper.applyDialogTvFocus(new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle("Pilih Ukuran Huruf Subtitle")
                 .setSingleChoiceItems(options, checked, (dialog, which) -> {
                     String val = (which >= 0 && which < finalValues.length) ? finalValues[which] : defaultSize;
@@ -4408,7 +4623,8 @@ public class PlayerActivity extends Activity {
                     Toast.makeText(this, "Ukuran subtitle disimpan", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("Batal", null)
-                .show();
+                .setOnDismissListener(d -> restoreSubPickerTvFocus())
+                .show());
     }
 
     private void showWrapPicker(SharedPreferences sp) {
@@ -4420,7 +4636,7 @@ public class PlayerActivity extends Activity {
         String cur = sp.getString("sub_wrap", "compact");
         int checked = "wide".equals(cur) ? 2 : ("medium".equals(cur) ? 1 : 0);
 
-        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        TvFocusHelper.applyDialogTvFocus(new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle("Pilih Lebar / Tumpukan Subtitle")
                 .setSingleChoiceItems(options, checked, (dialog, which) -> {
                     String val = which == 2 ? "wide" : (which == 1 ? "medium" : "compact");
@@ -4430,7 +4646,8 @@ public class PlayerActivity extends Activity {
                     Toast.makeText(this, "Format tumpukan subtitle disimpan", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("Batal", null)
-                .show();
+                .setOnDismissListener(d -> restoreSubPickerTvFocus())
+                .show());
     }
 
     @Override
@@ -4873,6 +5090,7 @@ public class PlayerActivity extends Activity {
         });
 
         AlertDialog dialog = builder.create();
+        TvFocusHelper.applyDialogTvFocus(dialog);
         dialog.show();
 
         if (TvFocusHelper.isTv(this)) {
@@ -4925,6 +5143,20 @@ public class PlayerActivity extends Activity {
             dtb.setScrubberColor(0xFF38BDF8);
             dtb.setBufferedColor(0x6638BDF8);
             dtb.setUnplayedColor(0x33FFFFFF);
+            dtb.setKeyTimeIncrement(10000);
+            dtb.setFocusable(true);
+            dtb.setFocusableInTouchMode(false);
+            dtb.setOnFocusChangeListener((v, hasFocus) -> {
+                float scaleY = hasFocus ? 1.35f : 1.0f;
+                v.animate().cancel();
+                v.animate().scaleY(scaleY).setDuration(120).start();
+                if (hasFocus) {
+                    dtb.setScrubberColor(0xFF00E5FF);
+                    if (playerView != null) playerView.showController();
+                } else {
+                    dtb.setScrubberColor(0xFF38BDF8);
+                }
+            });
         }
         if (timeBar != null && !isTimeBarListenerAttached) {
             isTimeBarListenerAttached = true;
@@ -4966,15 +5198,33 @@ public class PlayerActivity extends Activity {
         }
         if (btnExoRew == null) {
             btnExoRew = playerView.findViewById(androidx.media3.ui.R.id.exo_rew);
+            if (btnExoRew == null) {
+                btnExoRew = playerView.findViewById(androidx.media3.ui.R.id.exo_rew_with_amount);
+            }
             if (btnExoRew != null) {
                 btnExoRew.setBackgroundResource(R.drawable.bg_exo_icon_btn);
+                btnExoRew.setOnClickListener(v -> {
+                    HapticHelper.performClick(v);
+                    seekRelative(-5000);
+                    showRipple(tvRippleLeft);
+                    vibrate(15);
+                });
                 TvFocusHelper.attachFocusScale(btnExoRew, 1.15f, 6f);
             }
         }
         if (btnExoFfwd == null) {
             btnExoFfwd = playerView.findViewById(androidx.media3.ui.R.id.exo_ffwd);
+            if (btnExoFfwd == null) {
+                btnExoFfwd = playerView.findViewById(androidx.media3.ui.R.id.exo_ffwd_with_amount);
+            }
             if (btnExoFfwd != null) {
                 btnExoFfwd.setBackgroundResource(R.drawable.bg_exo_icon_btn);
+                btnExoFfwd.setOnClickListener(v -> {
+                    HapticHelper.performClick(v);
+                    seekRelative(5000);
+                    showRipple(tvRippleRight);
+                    vibrate(15);
+                });
                 TvFocusHelper.attachFocusScale(btnExoFfwd, 1.15f, 6f);
             }
         }
@@ -5065,6 +5315,18 @@ public class PlayerActivity extends Activity {
     }
 
     private void enforceExoCustomButtons() {
+        if (btnExoRew != null) {
+            btnExoRew.setVisibility(View.VISIBLE);
+            btnExoRew.setEnabled(true);
+            btnExoRew.setClickable(true);
+            btnExoRew.setFocusable(true);
+        }
+        if (btnExoFfwd != null) {
+            btnExoFfwd.setVisibility(View.VISIBLE);
+            btnExoFfwd.setEnabled(true);
+            btnExoFfwd.setClickable(true);
+            btnExoFfwd.setFocusable(true);
+        }
         // Tombol CC (exo_subtitle) wajib selalu aktif dan dapat ditekan di kedua platform (Android Mobile & Android TV)
         if (btnExoSub != null) {
             btnExoSub.setVisibility(View.VISIBLE);
@@ -5122,9 +5384,13 @@ public class PlayerActivity extends Activity {
                 active.add(v);
             }
         }
-        int upId = (btnSkipOpEd != null && btnSkipOpEd.getVisibility() == View.VISIBLE)
-                ? R.id.btn_skip_op_ed
-                : R.id.btn_player_back;
+        View timeBarView = playerView != null ? playerView.findViewById(androidx.media3.ui.R.id.exo_progress) : null;
+        int upId = (timeBarView != null && timeBarView.getVisibility() == View.VISIBLE)
+                ? androidx.media3.ui.R.id.exo_progress
+                : ((btnSkipOpEd != null && btnSkipOpEd.getVisibility() == View.VISIBLE)
+                        ? R.id.btn_skip_op_ed
+                        : R.id.btn_player_back);
+
         for (int i = 0; i < active.size(); i++) {
             View cur = active.get(i);
             cur.setNextFocusUpId(upId);
@@ -5141,8 +5407,24 @@ public class PlayerActivity extends Activity {
                 }
             }
         }
-        if (btnPlayerBack != null && btnExoPlayPause != null && btnExoPlayPause.getId() != View.NO_ID) {
-            btnPlayerBack.setNextFocusDownId(btnExoPlayPause.getId());
+        if (timeBarView != null) {
+            int topId = (btnSkipOpEd != null && btnSkipOpEd.getVisibility() == View.VISIBLE)
+                    ? R.id.btn_skip_op_ed
+                    : R.id.btn_player_back;
+            timeBarView.setNextFocusUpId(topId);
+            if (btnExoPlayPause != null && btnExoPlayPause.getId() != View.NO_ID) {
+                timeBarView.setNextFocusDownId(btnExoPlayPause.getId());
+            }
+        }
+        int downFromTopId = (timeBarView != null && timeBarView.getVisibility() == View.VISIBLE)
+                ? androidx.media3.ui.R.id.exo_progress
+                : (btnExoPlayPause != null && btnExoPlayPause.getId() != View.NO_ID ? btnExoPlayPause.getId() : View.NO_ID);
+
+        if (btnPlayerBack != null && downFromTopId != View.NO_ID) {
+            btnPlayerBack.setNextFocusDownId(downFromTopId);
+        }
+        if (btnSkipOpEd != null && downFromTopId != View.NO_ID) {
+            btnSkipOpEd.setNextFocusDownId(downFromTopId);
         }
     }
 
@@ -5245,12 +5527,22 @@ public class PlayerActivity extends Activity {
         String[] menuArray = menuList.toArray(new String[0]);
         builder.setItems(menuArray, (dialog, which) -> {
             if (which >= 0 && which < actionList.size()) {
+                String chosen = menuList.get(which);
+                if (chosen.contains("Pilihan Kualitas") || chosen.contains("Kecepatan Putar")
+                        || chosen.contains("Pilihan Subtitle") || chosen.contains("Pengaturan Tampilan")
+                        || chosen.contains("Sinkronisasi Waktu")) {
+                    isNavigatingToSubDialog = true;
+                }
                 actionList.get(which).run();
             }
         });
 
         builder.setNegativeButton("Tutup", (dialog, which) -> dialog.dismiss());
         builder.setOnDismissListener(dialog -> {
+            if (isNavigatingToSubDialog) {
+                isNavigatingToSubDialog = false;
+                return;
+            }
             if (playerView != null) {
                 playerView.showController();
                 if (btnExoSettings != null && btnExoSettings.getVisibility() == View.VISIBLE) {
@@ -5262,7 +5554,7 @@ public class PlayerActivity extends Activity {
                 }
             }
         });
-        builder.show();
+        TvFocusHelper.applyDialogTvFocus(builder.show());
     }
 
     private String getAspectLabel() {
@@ -5500,6 +5792,7 @@ public class PlayerActivity extends Activity {
 
     private void executePreResolveNeighbors() {
         final String currentSlug = (slug != null) ? slug : "";
+        final String currentTitle = (title != null) ? title : "";
         final String currentQ = (activeQuality != null && !activeQuality.isEmpty()) ? activeQuality : "best";
         final String currentMode = (requestMode != null && !requestMode.isEmpty()) ? requestMode : "sub";
 
@@ -5522,7 +5815,8 @@ public class PlayerActivity extends Activity {
                             + URLEncoder.encode(currentSlug, "UTF-8")
                             + "&ep=" + targetEp
                             + "&mode=" + URLEncoder.encode(currentMode, "UTF-8")
-                            + "&q=" + URLEncoder.encode(currentQ, "UTF-8");
+                            + "&q=" + URLEncoder.encode(currentQ, "UTF-8")
+                            + (currentTitle != null && !currentTitle.isEmpty() ? "&title=" + URLEncoder.encode(currentTitle, "UTF-8") : "");
                     HttpURLConnection conn = (HttpURLConnection) new URL(u).openConnection();
                     conn.setConnectTimeout(15000);
                     conn.setReadTimeout(20000);

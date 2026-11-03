@@ -43,8 +43,8 @@ def test_aniskip_empty_or_invalid():
     assert res2["outro"] == {"start": 0, "end": 0}
 
 
-def test_aniskip_query_without_hardcoded_episode_length():
-    """URL query AniSkip tidak boleh menyertakan episodeLength jika nilainya 0, dan hanya menyertakan jika > 0."""
+def test_aniskip_query_episode_length_v2_spec():
+    """AniSkip v2 mewajibkan parameter episodeLength (default 0 jika belum diketahui, atau nilai desimal jika ada)."""
     captured_urls = []
 
     def mock_get(url, **kwargs):
@@ -57,7 +57,7 @@ def test_aniskip_query_without_hardcoded_episode_length():
     with patch("httpx.Client.get", side_effect=mock_get):
         aniskip.get_skip_times(11111, 1, episode_length=0)
         assert len(captured_urls) == 1
-        assert "episodeLength" not in captured_urls[0]
+        assert "episodeLength=0" in captured_urls[0]
 
         aniskip.get_skip_times(22222, 2, episode_length=1420.5)
         assert len(captured_urls) == 2
@@ -176,3 +176,128 @@ async def test_database_episode_cache_intro_outro():
     assert cached is not None
     assert cached["intro"] == {"start": 85.0, "end": 175.0}
     assert cached["outro"] == {"start": 1250.0, "end": 1340.0}
+
+
+def test_aniskip_mal_id_in_memory_cache():
+    """Cache in-memory pemetaan slug/judul -> mal_id harus bekerja dua arah."""
+    aniskip._TITLE_TO_MAL.clear()
+    assert aniskip.get_mal_id_from_cache("dandadan-19319") == 0
+
+    aniskip.store_mal_id("dandadan-19319", 57334)
+    assert aniskip.get_mal_id_from_cache("dandadan-19319") == 57334
+    assert aniskip.get_mal_id_from_cache("dandadan") == 57334
+
+    aniskip.store_mal_id("Bleach: Thousand-Year Blood War", "56784")
+    assert aniskip.get_mal_id_from_cache("Bleach: Thousand-Year Blood War") == 56784
+    assert aniskip.get_mal_id_from_cache("bleach thousand year blood war") == 56784
+
+
+@pytest.mark.asyncio
+async def test_resolve_mal_id_and_stream_skip_injection(monkeypatch):
+    """Endpoint stream harus mampu menyelesaikan mal_id anime terbaru dan menginjeksi intro/outro dari AniSkip."""
+    from backend import main
+    await init_db()
+
+    slug = "dandadan-19319"
+    ep = 1
+
+    # Mock AniList resolve_mal_id_by_title
+    monkeypatch.setattr(main.al, "resolve_mal_id_by_title", lambda q: 57334)
+
+    # Mock AniSkip get_skip_times
+    def mock_get_skip(m_id, episode_num, episode_length=0, timeout=4.0):
+        if int(m_id) == 57334 and int(episode_num) == 1:
+            return {
+                "intro": {"start": 2.65, "end": 92.65},
+                "outro": {"start": 1348.45, "end": 1479.17}
+            }
+        return {"intro": {"start": 0, "end": 0}, "outro": {"start": 0, "end": 0}}
+
+    monkeypatch.setattr(main.aniskip, "get_skip_times", mock_get_skip)
+    monkeypatch.setattr(aniskip, "get_skip_times", mock_get_skip)
+
+    # Mock hi resolver
+    monkeypatch.setattr(hi, "hianime_episodes", lambda s: [{"ep": 1, "ep_id": "111"}])
+    monkeypatch.setattr(hi, "hianime_m3u8", lambda maps, e, m, s: {
+        "master": "https://example.com/dandadan.m3u8",
+        "variants": [{"q": "1080p", "url": "https://example.com/dandadan.m3u8"}],
+        "sub": "https://example.com/sub.vtt",
+        "sub_lang": "English",
+        "referer": "https://megaplay.buzz/",
+        "server": "HD-1",
+        "subtitles": [{"label": "English", "url": "https://example.com/sub.vtt", "default": True}],
+        "intro": {"start": 0, "end": 0},
+        "outro": {"start": 0, "end": 0},
+        "mal_id": ""
+    })
+
+    res = await main.resolve(slug=slug, ep=ep, mode="sub", force=True, title="Dandadan")
+    assert res["success"] is True
+    data = res["data"]
+    assert data["mal_id"] == "57334"
+    assert data["intro"]["end"] == 92.65
+    assert data["outro"]["start"] == 1348.45
+
+
+@pytest.mark.asyncio
+async def test_apostrophe_normalization_and_token_overlap():
+    """Slug kepemilikan Inggris seperti -s- harus dinormalisasi menjadi 's dan mencocokkan token."""
+    from backend import main
+    from backend.api import anilist
+
+    # Test token overlap helper
+    assert anilist._match_title_tokens("The World's Strongest Witch", "The World's Strongest Witch") is True
+    assert anilist._match_title_tokens("The World's Strongest Witch", "The World's Most Famous Tales") is False
+
+    # Test apostrophe normalization in main._resolve_mal_id
+    aniskip.store_mal_id("the world's strongest witch", "64084")
+    resolved = await main._resolve_mal_id("the-world-s-strongest-witch-10525", title="")
+    assert resolved == "64084"
+
+
+def test_multi_season_normalization_no_collision():
+    """Normalisasi judul harus membedakan Season 1, Season 2, dan Part tanpa tabrakan cache."""
+    s1 = aniskip.normalize_title("Re:Zero kara Hajimeru Isekai Seikatsu")
+    s2_hi = aniskip.normalize_title("Re:Zero kara Hajimeru Isekai Seikatsu 2nd Season")
+    s2_otaku = aniskip.normalize_title("otakudesu:re-zero-kara-hajimeru-isekai-seikatsu-season-2-sub-indo")
+    s3_hi = aniskip.normalize_title("Re:Zero kara Hajimeru Isekai Seikatsu 3rd Season")
+    s3_otaku = aniskip.normalize_title("otakudesu:re-zero-kara-hajimeru-isekai-seikatsu-season-3-sub-indo")
+
+    # Antar provider harus cocok untuk season yang sama
+    assert s2_hi == s2_otaku
+    assert s3_hi == s3_otaku
+
+    # Antar season TIDAK boleh bertabrakan
+    assert s1 != s2_hi
+    assert s2_hi != s3_hi
+    assert s1 != s3_hi
+
+    # Part / Cour juga harus terlindungi dari tabrakan
+    p2 = aniskip.normalize_title("Bleach: Thousand-Year Blood War Part 2")
+    p3 = aniskip.normalize_title("Bleach: Thousand-Year Blood War Part 3")
+    assert p2 != p3
+
+
+def test_apostrophe_nouns_and_curly_quote_matching():
+    """Kata kepemilikan tanpa spasi seperti journeys & heavens serta kutip lengkung harus cocok."""
+    from backend.api import anilist
+
+    assert anilist._match_title_tokens("frieren beyond journeys end", "Frieren: Beyond Journey’s End") is True
+    assert anilist._match_title_tokens("fate stay night heavens feel i presage flower", "Fate/stay night [Heaven's Feel] I. presage flower") is True
+    assert anilist._match_title_tokens("the worlds strongest witch", "The World's Strongest Witch") is True
+    assert anilist._match_title_tokens("the worlds strongest witch", "The World's Most Famous Tales") is False
+
+
+@pytest.mark.asyncio
+async def test_persistent_sqlite_mal_map():
+    """Pemetaan mal_map harus tersimpan persisten di database SQLite."""
+    from backend.database import init_db, set_mal_map, get_mal_map
+    await init_db()
+
+    test_slug = "frieren-beyond-journeys-end-18542"
+    await set_mal_map(test_slug, 52991)
+
+    fetched = await get_mal_map(test_slug)
+    assert fetched == 52991
+
+

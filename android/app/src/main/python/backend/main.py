@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse, FileResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from config import APP_PORT, APP_HOST, HI_BASE, HI_UA
-from database import init_db, get_search_cache, set_search_cache, get_episode_cache, set_episode_cache, delete_episode_cache, clear_episode_cache_for_slug, get_cached_episode, cache_episode, add_history, get_history, clear_history, save_progress, get_progress, clear_progress, add_bookmark, remove_bookmark, get_bookmarks, is_bookmarked, clear_bookmarks, get_setting, set_setting, get_browse_cache, set_browse_cache, get_slug_map, set_slug_map, get_subtitle_cache, set_subtitle_cache, delete_subtitle_cache, get_today_char_count, add_today_char_count
+from database import init_db, get_search_cache, set_search_cache, get_episode_cache, get_episode_cache_modes, set_episode_cache, delete_episode_cache, clear_episode_cache_for_slug, get_cached_episode, cache_episode, add_history, get_history, clear_history, save_progress, get_progress, clear_progress, add_bookmark, remove_bookmark, get_bookmarks, is_bookmarked, clear_bookmarks, get_setting, get_settings_bulk, set_setting, get_browse_cache, set_browse_cache, get_slug_map, set_slug_map, get_mal_map, set_mal_map, get_subtitle_cache, set_subtitle_cache, delete_subtitle_cache, get_today_char_count, add_today_char_count
 from api import hianime as hi
 from api import anilist as al
 from api import otakudesu as otaku
@@ -14,13 +14,92 @@ from api import aniskip
 from api import anichan
 import httpx
 
+# ---------------------------------------------------------------------------
+# Cache master m3u8 (body, bukan cuma URL).
+#
+# SEBELUMNYA master playlist diunduh DUA KALI per siklus putar:
+#   1. Resolver (hianime.py) mengunduh master untuk mem-parse variants,
+#      lalu body-nya dibuang.
+#   2. Player (/api/player/video?url=<master>) mengunduh master LAGI dari CDN
+#      hanya untuk menulis ulang URL segmen.
+# Cache body master dengan TTL pendek eliminating round-trip kedua.
+# ---------------------------------------------------------------------------
+_MASTER_CACHE: dict = {}          # master_url -> (expires_at, text)
+_MASTER_CACHE_TTL = 120           # 2 menit — playlist master relatif statis
+_MASTER_CACHE_MAX = 64
+
+
+def _master_cache_get(url: str):
+    """Ambil body master m3u8 dari cache (None bila miss/expired)."""
+    if not url:
+        return None
+    item = _MASTER_CACHE.get(url)
+    if not item:
+        return None
+    exp, txt = item
+    if exp < time.time():
+        _MASTER_CACHE.pop(url, None)
+        return None
+    return txt
+
+
+def _master_cache_set(url: str, text: str):
+    """Simpan body master m3u8 ke cache dengan batas jumlah entri."""
+    if not url or not text:
+        return
+    _MASTER_CACHE[url] = (time.time() + _MASTER_CACHE_TTL, text)
+    if len(_MASTER_CACHE) > _MASTER_CACHE_MAX:
+        for k in list(_MASTER_CACHE.keys())[:len(_MASTER_CACHE) - _MASTER_CACHE_MAX]:
+            _MASTER_CACHE.pop(k, None)
+
+
+# Failover per-judul: mapping slug -> sumber alternatif. Nilai SELALU "anichan".
+# Dibatasi jumlah entri agar tidak tumbuh tanpa batas pada sesi panjang.
 _ANIME_FAILOVER_CACHE: dict = {}
+_ANIME_FAILOVER_MAX = 512
+
+
+def _set_failover(slug: str, source: str = "anichan"):
+    """Simpan sumber fallback per-judul dengan batas jumlah entri."""
+    _ANIME_FAILOVER_CACHE[slug] = source
+    if len(_ANIME_FAILOVER_CACHE) > _ANIME_FAILOVER_MAX:
+        # Buang entri terlama (insertion order) sampai di bawah batas.
+        for k in list(_ANIME_FAILOVER_CACHE.keys())[:len(_ANIME_FAILOVER_CACHE) - _ANIME_FAILOVER_MAX]:
+            _ANIME_FAILOVER_CACHE.pop(k, None)
+
+
+# Registry task background agar tidak di-GC sebelum selesai.
+# asyncio hanya menyimpan reference lemah ke task yang dibuat via
+# create_task(); tanpa registry ini task bisa hilang sebelum selesai.
+_BACKGROUND_TASKS: set = set()
+
+
+def _spawn_background(coro):
+    """Jalankan coroutine di background dengan reference yang aman dari GC."""
+    try:
+        task = asyncio.create_task(coro)
+    except Exception:
+        return None
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
 
 frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Bersihkan cache kedaluwarsa saat startup. Semua TTL di modul database
+    # bersifat "ignore on read" — tanpa sweeper ini tabel cache (terutama
+    # subtitle_cache yang menyimpan payload VTT utuh) tumbuh tanpa batas.
+    try:
+        from database import purge_expired_caches
+        removed = await purge_expired_caches()
+        total = sum(v for v in removed.values() if v)
+        if total:
+            print(f"[tatap] purge cache kedaluwarsa: {removed}", flush=True)
+    except Exception:
+        pass
     yield
     # Graceful shutdown: tutup connection pool video dan persistent client API
     global _direct_client
@@ -30,6 +109,11 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
         _direct_client = None
+    try:
+        from database import close_db_pool
+        await close_db_pool()
+    except Exception:
+        pass
     try:
         from api.anilist import close_al_client
         close_al_client()
@@ -48,6 +132,11 @@ async def lifespan(app: FastAPI):
     try:
         from api.anichan import close_anichan_client
         close_anichan_client()
+    except Exception:
+        pass
+    try:
+        from api.translate import close_gtx_client
+        close_gtx_client()
     except Exception:
         pass
 
@@ -604,6 +693,10 @@ async def seasonal(which: str = Query("", pattern="^(now|prev|airing)$|^$"),
                 if not slug or slug in seen_slugs:
                     continue
                 seen_slugs.add(slug)
+                m_mal_id = str(m.get("idMal") or "")
+                if m_mal_id:
+                    aniskip.store_mal_id(slug, m_mal_id)
+                    aniskip.store_mal_id(title, m_mal_id)
                 cover = (m.get("coverImage") or {})
                 tot = m.get("episodes") or 0
                 studio_nodes = (m.get("studios") or {}).get("nodes") or []
@@ -631,6 +724,7 @@ async def seasonal(which: str = Query("", pattern="^(now|prev|airing)$|^$"),
                     "lane": "seasonal",
                     "synopsis": al.clean_synopsis_text(m.get("description") or ""),
                     "anilist_id": m.get("id"),
+                    "mal_id": m_mal_id,
                     "matched": True,
                 })
 
@@ -790,6 +884,10 @@ async def seasonal(which: str = Query("", pattern="^(now|prev|airing)$|^$"),
             else:
                 eps_cnt = f"{eps_rel}/{eps_tot}" if eps_tot > 0 else (f"{eps_rel}/?" if eps_rel > 0 else "")
                 badge = "ONGOING"
+            m_mal_id = str(m.get("idMal") or "")
+            if m_mal_id:
+                aniskip.store_mal_id(slug, m_mal_id)
+                aniskip.store_mal_id(title, m_mal_id)
             studio_nodes = (m.get("studios") or {}).get("nodes") or []
             studio_name = studio_nodes[0].get("name", "") if studio_nodes else ""
             items_out.append({
@@ -813,6 +911,7 @@ async def seasonal(which: str = Query("", pattern="^(now|prev|airing)$|^$"),
                 "is_finished": is_finished,
                 "synopsis": al.clean_synopsis_text(m.get("description") or ""),
                 "anilist_id": m.get("id"),
+                "mal_id": m_mal_id,
                 "site": m.get("siteUrl") or "",
                 "matched": True,
             })
@@ -1087,6 +1186,11 @@ async def anime_schedule(day: str = Query("today")):
                 if not slug:
                     continue
 
+                s_mal = str((s.get("media") or {}).get("idMal") or "")
+                if s_mal:
+                    aniskip.store_mal_id(slug, s_mal)
+                    aniskip.store_mal_id(title, s_mal)
+
                 airing_at = int(s["airingAt"])
                 dt_wib = _dt.datetime.fromtimestamp(airing_at, _dt.timezone(_dt.timedelta(hours=7)))
                 time_str = dt_wib.strftime("%H:%M WIB")
@@ -1111,6 +1215,7 @@ async def anime_schedule(day: str = Query("today")):
                     "poster": cover.get("large") or cover.get("medium") or "",
                     "type": _format_to_type(fmt),
                     "score": round(score / 10.0, 1) if score else 0.0,
+                    "mal_id": s_mal,
                     "matched": True,
                 }
                 buckets[day_cat].append(item)
@@ -1498,14 +1603,101 @@ def _has_valid_subtitles(ep_data: dict) -> bool:
     return False
 
 
+async def _resolve_mal_id(slug: str, title: str = "", anilist_id: str = "") -> str:
+    """Mencari MAL ID dari cache in-memory, anilist_id, slug, atau pencarian AniList GraphQL."""
+    if not slug and not title and not anilist_id:
+        return ""
+    clean_slug = slug.split(":", 1)[1] if ":" in slug else slug
+    # 1. Cek cache in-memory aniskip
+    cached_mal = aniskip.get_mal_id_from_cache(slug) or aniskip.get_mal_id_from_cache(clean_slug)
+    if not cached_mal and title:
+        cached_mal = aniskip.get_mal_id_from_cache(title)
+    if cached_mal:
+        return str(cached_mal)
+
+    # 2. Cek database SQLite mal_map
+    try:
+        db_mal = await get_mal_map(slug) or await get_mal_map(clean_slug)
+        if not db_mal and title:
+            db_mal = await get_mal_map(title)
+        if db_mal:
+            m_id = str(db_mal)
+            aniskip.store_mal_id(slug, m_id)
+            aniskip.store_mal_id(clean_slug, m_id)
+            if title:
+                aniskip.store_mal_id(title, m_id)
+            return m_id
+    except Exception:
+        pass
+
+    loop = asyncio.get_running_loop()
+    # 3. Cek anilist_id jika tersedia
+    if anilist_id:
+        try:
+            al_id_int = int(str(anilist_id).strip())
+            c = al._get_al_client()
+            r = await loop.run_in_executor(None, lambda: c.post(al.ANILIST_URL, json={
+                "query": al.MEDIA_BY_ID_QUERY,
+                "variables": {"id": al_id_int}
+            }))
+            if r and r.status_code == 200:
+                m_data = r.json().get("data", {}).get("Media", {}) or {}
+                if m_data.get("idMal"):
+                    m_id = str(m_data["idMal"])
+                    aniskip.store_mal_id(slug, m_id)
+                    aniskip.store_mal_id(clean_slug, m_id)
+                    await set_mal_map(slug, m_id)
+                    await set_mal_map(clean_slug, m_id)
+                    if title:
+                        aniskip.store_mal_id(title, m_id)
+                        await set_mal_map(title, m_id)
+                    return m_id
+        except Exception:
+            pass
+
+    # 4. Ekstraksi search query dari title atau slug
+    search_q = title.strip() if title else ""
+    if not search_q:
+        cs = clean_slug
+        cs = re.sub(r"-\d+$", "", cs)
+        cs = re.sub(r"-(sub-indo|episode-\d+|batch|complete)", "", cs, flags=re.I)
+        cs = re.sub(r"-s-(?=[a-z])", "'s-", cs)
+        search_q = cs.replace("-", " ").strip()
+        search_q = re.sub(r"\b(\w+)\s+s\b", r"\1's", search_q)
+
+    if search_q:
+        try:
+            found_mal = await loop.run_in_executor(None, lambda: al.resolve_mal_id_by_title(search_q))
+            if found_mal:
+                m_id = str(found_mal)
+                aniskip.store_mal_id(slug, m_id)
+                aniskip.store_mal_id(clean_slug, m_id)
+                await set_mal_map(slug, m_id)
+                await set_mal_map(clean_slug, m_id)
+                if title:
+                    aniskip.store_mal_id(title, m_id)
+                    await set_mal_map(title, m_id)
+                return m_id
+        except Exception:
+            pass
+
+    return ""
+
+
 @app.get("/api/stream/resolve")
 @app.get("/api/episode")
-async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("sub"), q: str = Query("best"), source: str = Query(""), force: bool = Query(False), refresh: bool = Query(False)):
+async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("sub"), q: str = Query("best"), source: str = Query(""), force: bool = Query(False), refresh: bool = Query(False), title: str = Query(""), mal_id: str = Query(""), anilist_id: str = Query("")):
     try:
         slug_str = str(slug or "") if isinstance(slug, str) else ""
         if "hentai" in slug_str.lower():
             return fail("Konten genre Hentai diblokir")
-        mode = "dub" if str(mode).lower() == "dub" else "sub"
+        mode = "dub" if (isinstance(mode, str) and str(mode).lower() == "dub") else "sub"
+        title = title if isinstance(title, str) else ""
+        mal_id = mal_id if isinstance(mal_id, str) else ""
+        anilist_id = anilist_id if isinstance(anilist_id, str) else ""
+        source = source if isinstance(source, str) else ""
+        q = q if isinstance(q, str) else "best"
+
         def _is_truthy(v):
             return v is True or (isinstance(v, str) and v.strip().lower() in ("true", "1", "yes"))
         should_refresh = _is_truthy(force) or _is_truthy(refresh)
@@ -1519,7 +1711,14 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
             await delete_episode_cache(cache_slug, ep)
             hit = None
         else:
-            hit = await get_episode_cache(cache_slug, ep, mode)
+            # Ambil cache mode utama + mode fallback dalam SATU query SQLite
+            # (sebelumnya 2 round-trip: 'sub' lalu 'dub' atau sebaliknya).
+            try:
+                _modes_needed = [mode] if mode == "sub" else [mode, "sub"]
+                _cache_hits = await get_episode_cache_modes(cache_slug, ep, _modes_needed)
+            except Exception:
+                _cache_hits = {}
+            hit = _cache_hits.get(mode)
             if mode == "sub":
                 # Cegah negative caching dan kontaminasi dub cache pada mode sub.
                 # Jika cache hit tidak memiliki subtitle valid, bersihkan dan anggap cache miss.
@@ -1528,7 +1727,7 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
                     hit = None
             elif mode == "dub":
                 if not hit:
-                    hit = await get_episode_cache(cache_slug, ep, "sub")
+                    hit = _cache_hits.get("sub")
         async def _check_and_prewarm(ep_data):
             try:
                 sub_lang = (await get_setting("sub_lang", "Indonesian")).strip().lower()
@@ -1561,7 +1760,7 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
                         if not any(k in sub_l for k in hi._NON_ENGLISH_KEYWORDS):
                             en_url = ep_data.get("sub") or ""
                     if en_url:
-                        asyncio.create_task(_prewarm_sub_translation(en_url, ep_data.get("referer") or "", "en", "id"))
+                        _spawn_background(_prewarm_sub_translation(en_url, ep_data.get("referer") or "", "en", "id"))
             except Exception:
                 pass
 
@@ -1612,30 +1811,46 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
             # Cek cross-provider cache jika intro/outro belum lengkap
             clean_slug_hit = slug.split(":", 1)[1] if ":" in slug else slug
             raw_title_hit = clean_slug_hit.replace("-sub-indo", "").replace("-episode", "").replace("-", " ").strip() if (active_source == "otakudesu" or clean_slug_hit.startswith("otakudesu")) else ""
-            cached_sk = aniskip.get_cached_skip_times(mal_id=hit.get("mal_id"), title=raw_title_hit or clean_slug_hit, ep=ep)
+            eff_title_hit = title or raw_title_hit or clean_slug_hit
+            eff_mal_id = str(hit.get("mal_id") or mal_id or "").strip()
+            if not eff_mal_id:
+                eff_mal_id = await _resolve_mal_id(slug=slug, title=eff_title_hit, anilist_id=anilist_id)
+                if eff_mal_id:
+                    hit["mal_id"] = eff_mal_id
+
+            cached_sk = aniskip.get_cached_skip_times(mal_id=eff_mal_id, title=eff_title_hit, ep=ep)
             if cached_sk:
                 if hit["intro"].get("end", 0) == 0 and cached_sk.get("intro", {}).get("end", 0) > 0:
                     hit["intro"] = cached_sk["intro"]
                 if hit["outro"].get("end", 0) == 0 and cached_sk.get("outro", {}).get("end", 0) > 0:
                     hit["outro"] = cached_sk["outro"]
 
-            if (hit["intro"].get("end", 0) == 0 or hit["outro"].get("end", 0) == 0) and hit.get("mal_id"):
+            if (hit["intro"].get("end", 0) == 0 or hit["outro"].get("end", 0) == 0) and eff_mal_id:
                 try:
                     loop = asyncio.get_running_loop()
                     sk = await asyncio.wait_for(
-                        loop.run_in_executor(None, lambda: aniskip.get_skip_times(hit["mal_id"], ep)),
-                        timeout=1.2
+                        loop.run_in_executor(None, lambda: aniskip.get_skip_times(eff_mal_id, ep, episode_length=0)),
+                        timeout=1.8
                     )
+                    has_updated_sk = False
                     if sk.get("intro", {}).get("end", 0) > 0 and hit["intro"].get("end", 0) == 0:
                         hit["intro"] = sk["intro"]
+                        has_updated_sk = True
                     if sk.get("outro", {}).get("end", 0) > 0 and hit["outro"].get("end", 0) == 0:
                         hit["outro"] = sk["outro"]
+                        has_updated_sk = True
+                    if has_updated_sk:
+                        await set_episode_cache(cache_slug, ep, hit.get("mode") or mode, hit["master"], hit["variants"],
+                                                hit.get("sub"), hit.get("sub_lang"),
+                                                hit.get("referer"), hit.get("server"),
+                                                subtitles=hit.get("subtitles"),
+                                                intro=hit["intro"], outro=hit["outro"])
                 except Exception:
                     pass
 
             aniskip.store_skip_times(
-                mal_id=hit.get("mal_id"),
-                title=raw_title_hit or clean_slug_hit,
+                mal_id=eff_mal_id,
+                title=eff_title_hit,
                 ep=ep,
                 intro=hit["intro"],
                 outro=hit["outro"]
@@ -1683,7 +1898,7 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
                             cache_slug = f"anichan:{slug}"
                             is_failover = True
                             failover_from = "otakudesu"
-                            _ANIME_FAILOVER_CACHE[slug] = "anichan"
+                            _set_failover(slug, "anichan")
                         except Exception:
                             pass
         else:
@@ -1709,7 +1924,7 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
                             cache_slug = f"anichan:{slug}"
                             is_failover = True
                             failover_from = "hianime"
-                            _ANIME_FAILOVER_CACHE[slug] = "anichan"
+                            _set_failover(slug, "anichan")
                         except Exception as anichan_err:
                             last_error = anichan_err
 
@@ -1748,8 +1963,16 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
         got["intro"] = got.get("intro") or {"start": 0, "end": 0}
         got["outro"] = got.get("outro") or {"start": 0, "end": 0}
 
+        # Resolusi mal_id jika belum tersedia
+        eff_title = title or raw_title or clean_slug
+        eff_mal_id = str(got.get("mal_id") or mal_id or "").strip()
+        if not eff_mal_id:
+            eff_mal_id = await _resolve_mal_id(slug=slug, title=eff_title, anilist_id=anilist_id)
+            if eff_mal_id:
+                got["mal_id"] = eff_mal_id
+
         # 1. Cek cross-provider cache terlebih dahulu
-        cached_sk = aniskip.get_cached_skip_times(mal_id=got.get("mal_id"), title=raw_title or clean_slug, ep=ep)
+        cached_sk = aniskip.get_cached_skip_times(mal_id=eff_mal_id, title=eff_title, ep=ep)
         if not cached_sk and hi_slug and hi_slug != clean_slug:
             cached_sk = aniskip.get_cached_skip_times(title=hi_slug, ep=ep)
         if cached_sk:
@@ -1758,12 +1981,11 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
             if got["outro"].get("end", 0) == 0 and cached_sk.get("outro", {}).get("end", 0) > 0:
                 got["outro"] = cached_sk["outro"]
 
-        mal_id = got.get("mal_id") or ""
-        if (got["intro"].get("end", 0) == 0 or got["outro"].get("end", 0) == 0) and mal_id:
+        if (got["intro"].get("end", 0) == 0 or got["outro"].get("end", 0) == 0) and eff_mal_id:
             try:
                 sk = await asyncio.wait_for(
-                    loop.run_in_executor(None, lambda: aniskip.get_skip_times(mal_id, ep)),
-                    timeout=1.2
+                    loop.run_in_executor(None, lambda: aniskip.get_skip_times(eff_mal_id, ep, episode_length=0)),
+                    timeout=1.8
                 )
                 if sk.get("intro", {}).get("end", 0) > 0 and got["intro"].get("end", 0) == 0:
                     got["intro"] = sk["intro"]
@@ -1774,15 +1996,15 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
 
         # 2. Simpan ke cross-provider cache jika valid
         aniskip.store_skip_times(
-            mal_id=mal_id or got.get("mal_id"),
-            title=raw_title or clean_slug,
+            mal_id=eff_mal_id,
+            title=eff_title,
             ep=ep,
             intro=got["intro"],
             outro=got["outro"]
         )
         if hi_slug and hi_slug != clean_slug:
             aniskip.store_skip_times(
-                mal_id=mal_id or got.get("mal_id"),
+                mal_id=eff_mal_id,
                 title=hi_slug,
                 ep=ep,
                 intro=got["intro"],
@@ -1879,13 +2101,22 @@ def _is_m3u8_url(url: str, ctype: str = "") -> bool:
 
 
 @app.get("/api/player/video")
-async def proxy_video(url: str = Query(""), referer: str = Query("")):
+async def proxy_video(url: str = Query(""), referer: str = Query(""), range: str = Query("")):
     # Proxy cepat: koneksi dipakai ulang, segmen di-stream (tanpa buffer penuh),
-    # Range diteruskan supaya seek tidak unduh ulang dari awal.
+    # Range diteruskan ke upstream supaya seek tidak mengunduh ulang segmen dari awal.
     from fastapi import Request
     from fastapi.responses import StreamingResponse as _SR
     if not url.startswith("http"):
         return Response(status_code=400)
+    # Sanitasi header Range: hanya izinkan bentuk "bytes=<start>-<end>" agar tidak
+    # menjadi vektor request smuggling / header injection ke upstream CDN.
+    range_header = ""
+    if range:
+        _rg = range.strip()
+        if _rg.lower().startswith("bytes="):
+            _rg = _rg[6:].strip()
+            if _rg and all(c.isdigit() or c == "-" for c in _rg) and _rg.count("-") <= 1:
+                range_header = f"bytes={_rg}"
     from api.hianime import SEG_RE, SEG_KEY, SEG_IV, STRIP_BYTES, STRIP_RE
     import re as _re
     m = SEG_RE.search(url)
@@ -1926,10 +2157,10 @@ async def proxy_video(url: str = Query(""), referer: str = Query("")):
     from api.hianime import _host_from, _is_dpi_blocked_host
     host = _host_from(url)
     if _is_dpi_blocked_host(host):
-        return _SR(_pipe_desync_video(url, referer), media_type=media_type,
+        return _SR(_pipe_desync_video(url, referer, range_header=range_header), media_type=media_type,
                    headers={"Access-Control-Allow-Origin": "*"})
 
-    return _SR(_pipe_video(url, referer), media_type=media_type,
+    return _SR(_pipe_video(url, referer, range_header=range_header), media_type=media_type,
                headers={"Access-Control-Allow-Origin": "*"})
 
 
@@ -1968,7 +2199,7 @@ def _rewrite_m3u8_content(txt: str, base_url: str, referer: str) -> str:
     return "\n".join(out)
 
 
-async def _pipe_desync_video(url: str, referer: str):
+async def _pipe_desync_video(url: str, referer: str, range_header: str = ""):
     """Streaming video via TLS Client Hello Desynchronization (Direct TCP 443 tanpa VPN)."""
     from api.desync import tls_desync_request, tls_desync_stream
     import asyncio
@@ -1979,6 +2210,8 @@ async def _pipe_desync_video(url: str, referer: str):
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
     }
+    if range_header:
+        headers["Range"] = range_header
     if referer:
         headers["Referer"] = referer
         orig = _re.sub(r"^(https?://[^/]+).*", r"\1", referer)
@@ -1988,6 +2221,10 @@ async def _pipe_desync_video(url: str, referer: str):
     
     # Playlist m3u8: baca penuh dan rewrite URL agar segmen tetap lewat proxy Tatap
     if _is_m3u8_url(url):
+        cached_txt = _master_cache_get(url)
+        if cached_txt is not None:
+            yield _rewrite_m3u8_content(cached_txt, url, referer).encode("utf-8")
+            return
         body = await loop.run_in_executor(None, lambda: tls_desync_request(url, headers=headers))
         try:
             txt = body.decode("utf-8", errors="strict")
@@ -1995,6 +2232,7 @@ async def _pipe_desync_video(url: str, referer: str):
             raise HTTPException(status_code=502, detail="upstream desync m3u8 binary decode error")
         if "#EXTM3U" not in txt:
             raise HTTPException(status_code=502, detail="upstream desync response missing #EXTM3U")
+        _master_cache_set(url, txt)
         yield _rewrite_m3u8_content(txt, url, referer).encode("utf-8")
         return
 
@@ -2024,7 +2262,7 @@ def _get_video_client(url: str):
     return _direct_client
 
 
-async def _pipe_video(url: str, referer: str):
+async def _pipe_video(url: str, referer: str, range_header: str = ""):
     import urllib.parse as _up
     import asyncio as _asyncio
     import re as _re
@@ -2036,6 +2274,9 @@ async def _pipe_video(url: str, referer: str):
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
     }
+    if range_header:
+        # Teruskan Range ke upstream agar seek hanya mengunduh byte yang dibutuhkan.
+        headers["Range"] = range_header
     if referer:
         headers["Referer"] = referer
         orig = _re.sub(r"^(https?://[^/]+).*", r"\1", referer)
@@ -2055,6 +2296,12 @@ async def _pipe_video(url: str, referer: str):
                 ctype = r.headers.get("content-type", "")
                 is_playlist = _is_m3u8_url(url, ctype)
                 if is_playlist:
+                    # Cek cache master dulu: Hindari unduhan ulang dari CDN
+                    # (resolver sudah pernah mengunduh master ini).
+                    cached_txt = _master_cache_get(url)
+                    if cached_txt is not None:
+                        yield _rewrite_m3u8_content(cached_txt, url, referer).encode("utf-8")
+                        return
                     body = await r.aread()
                     try:
                         txt = body.decode("utf-8", errors="strict")
@@ -2062,6 +2309,7 @@ async def _pipe_video(url: str, referer: str):
                         raise HTTPException(status_code=502, detail="upstream m3u8 binary decode error")
                     if "#EXTM3U" not in txt:
                         raise HTTPException(status_code=502, detail="upstream response missing #EXTM3U")
+                    _master_cache_set(url, txt)
                     yield _rewrite_m3u8_content(txt, url, referer).encode("utf-8")
                     return
 
@@ -2085,7 +2333,7 @@ async def _pipe_video(url: str, referer: str):
                 from api.hianime import _host_from, _BLOCKED_DPI_HOSTS
                 host = _host_from(url)
                 _BLOCKED_DPI_HOSTS.add(host)
-                async for chunk in _pipe_desync_video(url, referer):
+                async for chunk in _pipe_desync_video(url, referer, range_header=range_header):
                     yield chunk
                 return
             except Exception:
@@ -2102,7 +2350,7 @@ async def _pipe_video(url: str, referer: str):
                 is_rst = any(w in err_text for w in ("connection reset", "connectionreseterror", "rst", "closed connection"))
                 if is_known_dpi or is_rst:
                     _BLOCKED_DPI_HOSTS.add(host)
-                async for chunk in _pipe_desync_video(url, referer):
+                async for chunk in _pipe_desync_video(url, referer, range_header=range_header):
                     yield chunk
                 return
             except Exception:
@@ -2214,7 +2462,7 @@ async def _get_validated_subtitle_cache(key: str, lang: str = "id", ttl: int = 7
     return None
 
 
-async def _prewarm_sub_translation(url: str, referer: str, src: str = "en", lang: str = "id"):
+async def _prewarm_sub_translation(url: str, referer: str, src: str = "en", lang: str = "id", req_mode: str = "gtx+", dual: int = 0):
     """Prefetch subtitle translate di latar belakang jika belum ada di cache."""
     if not url or not url.startswith("http") or not lang or lang == src:
         return
@@ -2225,24 +2473,34 @@ async def _prewarm_sub_translation(url: str, referer: str, src: str = "en", lang
     import hashlib
     base_hash = hashlib.sha1((url + "|" + (referer or "") + "|" + lang).encode("utf-8")).hexdigest()
     key_gtx = "sub2|gtx|" + base_hash
+    key_gtxplus = "sub2|gtx+|" + base_hash
+    key_llm = "sub2|llm|" + base_hash
     hit = await _get_validated_subtitle_cache(key_gtx, lang=lang)
     if hit is not None:
         return
+    hit = await _get_validated_subtitle_cache(key_gtxplus, lang=lang)
+    if hit is not None:
+        return
 
-    job_key = f"{base_hash}|{lang}"
+    job_key = f"{base_hash}|{lang}|{req_mode}|dual={dual}"
     fut = _SUB_INFLIGHT.get(job_key)
     if fut is None:
-        key_gtxplus = "sub2|gtx+|" + base_hash
-        key_aigtx = "sub2|aigtx|" + base_hash
-        key_llm = "sub2|llm|" + base_hash
         try:
             from api.translate import log_translate
             log_translate(f"Prefetch subtitle [{lang}] dimulai di background...")
         except Exception:
             pass
-        fut = asyncio.ensure_future(_translate_sub_job(url, referer, src, lang, key_llm, key_gtxplus, _fetch_sub_text, key_gtx=key_gtx, requested_mode="gtx"))
+        fut = asyncio.ensure_future(_translate_sub_job(url, referer, src, lang, key_llm, key_gtxplus, _fetch_sub_text, key_gtx=key_gtx, requested_mode=req_mode))
         _SUB_INFLIGHT[job_key] = fut
-        fut.add_done_callback(lambda _f, k=job_key: _SUB_INFLIGHT.pop(k, None))
+
+        def _pop_and_retrieve(f, k=job_key):
+            _SUB_INFLIGHT.pop(k, None)
+            try:
+                f.exception()
+            except Exception:
+                pass
+
+        fut.add_done_callback(_pop_and_retrieve)
 
 
 @app.get("/favicon.ico")
@@ -2382,7 +2640,15 @@ async def proxy_sub(url: str = Query(""),
             _translate_sub_job(url, referer, src, lang, key_llm, key_gtxplus, _fetch_sub_text, key_gtx=key_gtx, requested_mode=req_mode, is_dual=False, key_dual="")
         )
         _SUB_INFLIGHT[job_key] = fut
-        fut.add_done_callback(lambda _f, k=job_key: _SUB_INFLIGHT.pop(k, None))
+
+        def _pop_and_retrieve(f, k=job_key):
+            _SUB_INFLIGHT.pop(k, None)
+            try:
+                f.exception()
+            except Exception:
+                pass
+
+        fut.add_done_callback(_pop_and_retrieve)
 
     try:
         new_text, tier = await asyncio.shield(fut)
@@ -2451,14 +2717,17 @@ async def _translate_sub_job(url, referer, src, lang, key_llm, key_gtxplus, fetc
                 await set_subtitle_cache(key_dual, new_text)
             elif lvl in ("tier1", "gtx"):
                 await set_subtitle_cache(key_gtx, new_text)
+                await set_subtitle_cache(key_gtxplus, new_text)
             elif lvl in ("tier2", "gtx+", "aigtx"):
                 await set_subtitle_cache(key_gtxplus, new_text)
+                await set_subtitle_cache(key_gtx, new_text)
             elif lvl in ("tier3", "ai"):
                 total = max(1, tier.get("total") or len(cues))
                 if tier.get("llm_lines", 0) / total >= 0.8:
                     await set_subtitle_cache(key_llm, new_text)
                 else:
                     await set_subtitle_cache(key_gtxplus, new_text)
+                    await set_subtitle_cache(key_gtx, new_text)
     return new_text, tier
 
 
@@ -3009,7 +3278,7 @@ def find_mpv_binary():
 async def play_mpv(body: dict = None):
     body = body or {}
     slug, ep, mode = body.get("slug", ""), int(body.get("ep", 1)), body.get("mode", "sub")
-    quality = body.get("quality", await get_setting("quality", "best"))
+    quality = body.get("quality") or await get_setting("quality", "best")
     # Opsional: user pilih subtitle spesifik via UI ("sub_url" berisi URL track
     # yang aktif). Backend tetap attach seluruh subtitles[] ke MPV (--sub-file
     # bisa lebih dari satu) supaya user bisa cycle lewat tombol 'j'.
@@ -3246,22 +3515,28 @@ async def check_bookmark(slug: str = ""):
 
 @app.get("/api/settings")
 async def get_set():
+    # Ambil seluruh setting dalam SATU query (get_settings_bulk) — sebelumnya
+    # 13 query berurutan ke tabel yang hanya berisi ~6 baris.
+    s = await get_settings_bulk()
+    def _v(key, default=""):
+        val = s.get(key)
+        return default if val is None else val
     return ok({
-        "quality": await get_setting("quality", "best"),
-        "mode": await get_setting("mode", "sub"),
-        "player": await get_setting("player", "browser"),
-        "preferred_source": await get_setting("preferred_source", "hianime"),
+        "quality": _v("quality", "best"),
+        "mode": _v("mode", "sub"),
+        "player": _v("player", "browser"),
+        "preferred_source": _v("preferred_source", "hianime"),
         # Preferensi bahasa subtitle user. Default "English" karena sebagian besar
         # sumber (Megaplay, ZokoAnime) punya English sebagai track default. Kalau
         # user pernah pilih bahasa lain, disimpan di sini dan dipakai frontend
         # untuk auto-select track di episode berikutnya.
-        "sub_lang": await get_setting("sub_lang", "English"),
+        "sub_lang": _v("sub_lang", "English"),
         # Translate API (opsional). User isi via settings panel. Fallback ke
         # MyMemory kalau kosong. translate_apikey tidak pernah di-log.
-        "translate_apikey": await get_setting("translate_apikey", ""),
-        "translate_model": await get_setting("translate_model", "gemini-2.0-flash"),
-        "translate_apiurl": await get_setting("translate_apiurl", "https://generativelanguage.googleapis.com/v1beta/openai"),
-        "safe_mode": await get_setting("safe_mode", "1"),
+        "translate_apikey": _v("translate_apikey", ""),
+        "translate_model": _v("translate_model", "gemini-2.0-flash"),
+        "translate_apiurl": _v("translate_apiurl", "https://generativelanguage.googleapis.com/v1beta/openai"),
+        "safe_mode": _v("safe_mode", "1"),
     })
 
 @app.post("/api/settings")

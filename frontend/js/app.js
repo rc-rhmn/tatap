@@ -1295,7 +1295,14 @@ function openPlayer(ep, resumeTime, forceRefresh){
   closeTitle();
   closeResumeModal();
   $("player-modal").classList.remove("hidden");
-  TvNavigationManager.showPlayerControls($("pm-speed-select") || $("pm-close"));
+  if(TvNavigationManager.isTvMode()){
+    TvNavigationManager.showPlayerControls($("pm-speed-select") || $("pm-close"));
+  } else {
+    TvNavigationManager.showPlayerControls();
+    if(document.activeElement && document.activeElement !== document.body && $("player-modal").contains(document.activeElement)){
+      try { document.activeElement.blur(); } catch(_){}
+    }
+  }
   $("pm-title").textContent=cur.title;
   $("pm-meta").textContent="ep "+ep+" · "+cur.mode.toUpperCase();
   $("pm-spinner").classList.remove("hidden");
@@ -1303,7 +1310,7 @@ function openPlayer(ep, resumeTime, forceRefresh){
   updatePrevNext();
   var t0=Date.now();
   var src=cur.source||"";
-  window.Tatap.resolve(cur.slug,ep,cur.mode,cur.quality,src,forceRefresh).then(function(r){
+  window.Tatap.resolve(cur.slug,ep,cur.mode,cur.quality,src,forceRefresh,cur.title).then(function(r){
     if(cur.playToken !== token || cur.slug !== reqSlug || $("player-modal").classList.contains("hidden")) return;
     if(!r || !r.success){
       if(!forceRefresh){
@@ -1594,6 +1601,7 @@ function renderSubtitles(subtitles, activeUrl){
   }
   // Event listener: ganti track aktif seketika + simpan preferensi.
   sel.onchange=function(){
+    if(!TvNavigationManager.isTvMode()){ try { sel.blur(); } catch(_){} }
     var url=sel.value;
     if(url==="__custom_file__"){
       sel.value=activeUrl||"";
@@ -2515,17 +2523,6 @@ function playUrl(url,referrer,sub,subRef,resumeTime,token){
   }
   var b = (typeof apiBase === "function") ? apiBase() : "";
   var prox=b+"/api/player/video?url="+encodeURIComponent(url)+"&referer="+encodeURIComponent(referrer||"");
-  try{
-    var m=/^(.*\/)index-(f\d+-v\d+-a\d+)\.m3u8/.exec(url);
-    if(m){
-      for(var wi=1;wi<=2;wi++){
-        (function(n){
-          var seg=m[1]+"seg-"+n+"-"+m[2]+".jpg";
-          fetch("/api/player/video?url="+encodeURIComponent(seg)+"&referer="+encodeURIComponent(referrer||""),{mode:"no-cors"}).catch(function(){});
-        })(wi);
-      }
-    }
-  }catch(e){}
   // Bersihkan <track> lama lalu pasang track subtitle aktif (live switch).
   // Fungsi switchSubtitleTrack() menhandle Off (hapus semua) dan replace.
   var validSub = (typeof sub === "string" && !/^\d+$/.test(sub.trim())) ? sub : null;
@@ -2563,6 +2560,17 @@ function playUrl(url,referrer,sub,subRef,resumeTime,token){
       highBufferWatchdogPeriod:2,
       testBandwidth:false,
       progressive:true,
+      // Estimasi bandwidth awal dinaikkan dari default HLS.js (500 kbps) ke
+      // 3 Mbit/s. Dengan startLevel:-1 + testBandwidth:false, HLS.js memulai
+      // dari estimasi ini; pada 500 kbps player butuh 10-30 detik untuk
+      // meramping ke resolusi layak sehingga terasa lambat saat start.
+      // 3 Mbit/s adalah titik tengah yang realistis untuk koneksi lokal
+      // (proxy di 127.0.0.1) tanpa langsung melompat ke 1080p di jaringan
+      // lambat. Sejalan dengan Android yang memakai initial estimate 25 Mbps.
+      abrEwmaDefaultEstimate:3*1000*1000,
+      // Buffer awal lebih agresif supaya playback tidak sering rebuffer
+      // saat kualitas naik (ABR switch = renegosiasi + unduhan baru).
+      startBufferDuration:3,
       lowLatencyMode:false,
       defaultAudioCodec:"mp4a.40.2",
       enableWorker:true
@@ -2605,22 +2613,6 @@ function playUrl(url,referrer,sub,subRef,resumeTime,token){
           h.audioTrack = 0;
         }
       }
-    });
-    h.on(Hls.Events.FRAG_BUFFERED,function(){
-      try{
-        var nxt=null;
-        if(h.levels&&h.levelDetails&&h.levelDetails.fragments){
-          var fr=h.levelDetails.fragments;
-          for(var fi=0;fi<fr.length;fi++){if(!fr[fi].loaded){nxt=fr[fi];break;}}
-        }
-        if(nxt&&nxt.url){
-          var fetchTarget = nxt.url;
-          if(!fetchTarget.startsWith("/api/player/video") && !fetchTarget.startsWith("/api/")){
-            fetchTarget = "/api/player/video?url="+encodeURIComponent(nxt.url)+"&referer="+encodeURIComponent(referrer||"");
-          }
-          fetch(fetchTarget,{mode:"no-cors",priority:"low"}).catch(function(){});
-        }
-      }catch(e){}
     });
     h.on(Hls.Events.MANIFEST_PARSED,function(ev,data){
       if(data&&data.levels&&data.levels.length>1){
@@ -2676,12 +2668,10 @@ function playUrl(url,referrer,sub,subRef,resumeTime,token){
     h.on(Hls.Events.ERROR,function(ev,d){
       if(!d)return;
       if(d.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR || d.details === "bufferStalledError"){
-        try{
-          if(!v.paused && v.readyState >= 2){
-            v.currentTime += 0.08;
-          }
-          h.startLoad();
-        }catch(_){}
+        // Recovery stall TANPA seek. Seek 80ms sebelumnya membatalkan fragment
+        // load yang sedang berjalan di HLS.js sehingga memaksa unduhan ulang
+        // segmen dari keyframe lewat proxy Python — mahal dan memperparah stall.
+        try{ h.startLoad(); }catch(_){}
         return;
       }
       if(d.fatal){
@@ -3118,9 +3108,14 @@ function handleTitleModalKey(e){
 }
 
 function onKeyPlayer(e){
-  var t=(e.target.tagName||"");
-  var typing=t==="INPUT"||t==="SELECT"||t==="TEXTAREA";
-  if(typing&&e.key==="Escape"){e.target.blur();return;}
+  var t=(e.target&&e.target.tagName||"").toUpperCase();
+  var isTextEditing=(t==="INPUT" && ["button","checkbox","color","file","hidden","image","radio","range","reset","submit"].indexOf(((e.target&&e.target.type)||"text").toLowerCase())===-1) ||
+                    (t==="TEXTAREA") ||
+                    (e.target&&e.target.isContentEditable);
+  if(isTextEditing){
+    if(e.key==="Escape"){e.target.blur();}
+    return;
+  }
   var v=$("vid");
   if(e.key==="Escape"){
     var fsEl=document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement||document.msFullscreenElement;
@@ -3146,11 +3141,16 @@ function onKeyPlayer(e){
     return;
   }
 
+  var isSpace = e.key===" " || e.key==="Spacebar" || e.code==="Space" || e.keyCode===32;
+
   if(pState === TvNavigationManager.PLAYER_IDLE){
     if(e.key==="ArrowRight"){e.preventDefault();v.currentTime+=5;return;}
     if(e.key==="ArrowLeft"){e.preventDefault();v.currentTime-=5;return;}
-    if(e.key==="Enter"||e.key===" "){
+    if(e.key==="Enter"||isSpace){
       e.preventDefault();
+      if(document.activeElement && document.activeElement !== document.body && document.activeElement !== v){
+        try { document.activeElement.blur(); } catch(_){}
+      }
       var skipBtn = $("pm-skip-btn");
       if(skipBtn && !skipBtn.classList.contains("hidden") && (cur.activeSkipTarget > 0)){
         doSkip();
@@ -3189,54 +3189,78 @@ function onKeyPlayer(e){
   if(pState === TvNavigationManager.PLAYER_HUD_ACTIVE){
     TvNavigationManager.resetHudTimer();
 
-    var pm = $("player-modal");
-    var hudBtns = Array.prototype.slice.call(pm.querySelectorAll(".player-head-btns button, .player-head-btns select, .player-foot button, .player-foot select, .sub-size button, .sub-translate, .pm-skip-btn:not(.hidden)"));
-    var curFoc = document.activeElement;
-    if(e.key==="ArrowDown"){
-      var nextDown = TvNavigationManager.getSpatialTarget(curFoc, hudBtns, "down");
-      if(nextDown){
-        e.preventDefault();
-        TvNavigationManager.setFocus(nextDown, "player-hud");
-        return;
-      }
-    } else if(e.key==="ArrowUp"){
-      var nextUp = TvNavigationManager.getSpatialTarget(curFoc, hudBtns, "up");
-      if(nextUp){
-        e.preventDefault();
-        TvNavigationManager.setFocus(nextUp, "player-hud");
-        return;
-      }
-    } else if(e.key==="ArrowRight"){
-      var nextRight = TvNavigationManager.getSpatialTarget(curFoc, hudBtns, "right");
-      if(nextRight){
-        e.preventDefault();
-        TvNavigationManager.setFocus(nextRight, "player-hud");
-        return;
-      }
-    } else if(e.key==="ArrowLeft"){
-      var nextLeft = TvNavigationManager.getSpatialTarget(curFoc, hudBtns, "left");
-      if(nextLeft){
-        e.preventDefault();
-        TvNavigationManager.setFocus(nextLeft, "player-hud");
-        return;
+    if(TvNavigationManager.isTvMode()){
+      var pm = $("player-modal");
+      var hudBtns = Array.prototype.slice.call(pm.querySelectorAll(".player-head-btns button, .player-head-btns select, .player-foot button, .player-foot select, .sub-size button, .sub-translate, .pm-skip-btn:not(.hidden)"));
+      var curFoc = document.activeElement;
+      if(e.key==="ArrowDown"){
+        var nextDown = TvNavigationManager.getSpatialTarget(curFoc, hudBtns, "down");
+        if(nextDown){
+          e.preventDefault();
+          TvNavigationManager.setFocus(nextDown, "player-hud");
+          return;
+        }
+      } else if(e.key==="ArrowUp"){
+        var nextUp = TvNavigationManager.getSpatialTarget(curFoc, hudBtns, "up");
+        if(nextUp){
+          e.preventDefault();
+          TvNavigationManager.setFocus(nextUp, "player-hud");
+          return;
+        }
+      } else if(e.key==="ArrowRight"){
+        var nextRight = TvNavigationManager.getSpatialTarget(curFoc, hudBtns, "right");
+        if(nextRight){
+          e.preventDefault();
+          TvNavigationManager.setFocus(nextRight, "player-hud");
+          return;
+        }
+      } else if(e.key==="ArrowLeft"){
+        var nextLeft = TvNavigationManager.getSpatialTarget(curFoc, hudBtns, "left");
+        if(nextLeft){
+          e.preventDefault();
+          TvNavigationManager.setFocus(nextLeft, "player-hud");
+          return;
+        }
       }
     }
   }
 
-  if(e.key===" "){e.preventDefault();if(v.paused)v.play();else v.pause();}
-  else if(e.key==="f"||e.key==="F"){e.preventDefault();toggleFullscreen();}
-  else if(e.key==="n")stepEp(1);
-  else if(e.key==="p")stepEp(-1);
+  if(isSpace || (!TvNavigationManager.isTvMode() && e.key==="Enter")){
+    e.preventDefault();
+    if(document.activeElement && document.activeElement !== document.body && document.activeElement !== v){
+      try { document.activeElement.blur(); } catch(_){}
+    }
+    var skipBtn = $("pm-skip-btn");
+    if(skipBtn && !skipBtn.classList.contains("hidden") && (cur.activeSkipTarget > 0)){
+      doSkip();
+    } else {
+      if(v.paused) v.play(); else v.pause();
+    }
+    return;
+  }
+  else if(e.key==="f"||e.key==="F"){
+    e.preventDefault();
+    if(document.activeElement && document.activeElement !== document.body && document.activeElement !== v){
+      try { document.activeElement.blur(); } catch(_){}
+    }
+    toggleFullscreen();
+  }
+  else if(e.key==="n"||e.key==="N"){e.preventDefault();stepEp(1);}
+  else if(e.key==="p"||e.key==="P"){e.preventDefault();stepEp(-1);}
   else if(e.key===","||e.key==="<"){e.preventDefault();adjustSubDelay(-0.25);}
   else if(e.key==="."||e.key===">"){e.preventDefault();adjustSubDelay(0.25);}
   else if(e.key==="["||e.key==="{"){e.preventDefault();adjustPlaySpeed(-1);}
   else if(e.key==="]"||e.key==="}"){e.preventDefault();adjustPlaySpeed(1);}
-  else if(e.key==="m"||e.key==="M"){e.preventDefault();v.muted=!v.muted;}
+  else if(e.key==="m"||e.key==="M"){
+    e.preventDefault();
+    v.muted=!v.muted;
+    toast(v.muted ? "Muted" : "Unmuted ("+Math.round((v.volume||1)*100)+"%)", 1200);
+  }
   else if(e.key==="s"||e.key==="S"){
+    e.preventDefault();
     var skipBtn = $("pm-skip-btn");
     var isSkipActive = skipBtn && !skipBtn.classList.contains("hidden") && cur.activeSkipTarget > 0;
     if(isSkipActive){
-      e.preventDefault();
       doSkip();
       return;
     }
@@ -3652,12 +3676,14 @@ function init(){
   var qSel=$("pm-quality-select");
   if(qSel){
     qSel.addEventListener("change",function(){
+      if(!TvNavigationManager.isTvMode()){ try { this.blur(); } catch(_){} }
       switchQ(this.value);
     });
   }
   var spdSel=$("pm-speed-select");
   if(spdSel){
     spdSel.addEventListener("change",function(){
+      if(!TvNavigationManager.isTvMode()){ try { this.blur(); } catch(_){} }
       setPlaySpeed(parseFloat(this.value), true);
     });
   }

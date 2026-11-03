@@ -34,6 +34,7 @@ query ($season: MediaSeason, $year: Int, $page: Int, $perPage: Int, $statusIn: [
     pageInfo { total perPage currentPage lastPage hasNextPage }
     media(season: $season, seasonYear: $year, status_in: $statusIn, type: ANIME, sort: POPULARITY_DESC) {
       id
+      idMal
       status
       title { romaji english }
       format
@@ -96,6 +97,7 @@ query AiringFinished($page: Int, $perPage: Int) {
     pageInfo { total perPage currentPage lastPage hasNextPage }
     media(format: TV, status: FINISHED, type: ANIME, sort: [END_DATE_DESC, POPULARITY_DESC]) {
       id
+      idMal
       status
       title { romaji english }
       format
@@ -245,7 +247,7 @@ query ($now: Int, $end: Int, $perPage: Int) {
     airingSchedules(airingAt_greater: $now, airingAt_lesser: $end, sort: TIME) {
       id airingAt episode
       media {
-        id title { romaji english }
+        id idMal title { romaji english }
         season seasonYear format
         coverImage { large medium }
       }
@@ -263,7 +265,7 @@ query GetSchedule($page: Int, $now: Int, $end: Int, $perPage: Int) {
     airingSchedules(airingAt_greater: $now, airingAt_lesser: $end, sort: TIME) {
       id airingAt episode
       media {
-        id title { romaji english }
+        id idMal title { romaji english }
         season seasonYear format
         genres averageScore
         coverImage { large medium }
@@ -322,6 +324,7 @@ RELATIONS_QUERY = """
 query ($search: String) {
   Media(search: $search, type: ANIME) {
     id
+    idMal
     title { romaji english }
     format
     seasonYear
@@ -330,6 +333,7 @@ query ($search: String) {
         relationType
         node {
           id
+          idMal
           title { romaji english }
           format
           seasonYear
@@ -347,6 +351,7 @@ MEDIA_BY_ID_QUERY = """
 query ($id: Int) {
   Media(id: $id, type: ANIME) {
     id
+    idMal
     title { romaji english }
     format
     seasonYear
@@ -357,6 +362,7 @@ query ($id: Int) {
         relationType
         node {
           id
+          idMal
           title { romaji english }
           format
           seasonYear
@@ -486,6 +492,7 @@ query ($search: String, $perPage: Int) {
   Page(page: 1, perPage: $perPage) {
     media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
       id
+      idMal
       title { romaji english native }
       season
       seasonYear
@@ -497,7 +504,7 @@ query ($search: String, $perPage: Int) {
 
 
 def search_anime_metadata(search_query: str, per_page: int = 12) -> list:
-    """Cari metadata anime (season, year, title) dari AniList untuk memperkaya hasil pencarian."""
+    """Cari metadata anime (season, year, title, idMal) dari AniList untuk memperkaya hasil pencarian."""
     if not search_query or not search_query.strip() or _is_rate_limited():
         return []
     try:
@@ -513,6 +520,87 @@ def search_anime_metadata(search_query: str, per_page: int = 12) -> list:
         return data or []
     except Exception:
         return []
+
+
+def _match_title_tokens(target_q: str, candidate_title: str) -> bool:
+    """Validasi kemiripan judul berbasis token untuk mencegah false positive pada pencarian metadata."""
+    if not target_q or not candidate_title:
+        return False
+    import re
+    stopwords = {"the", "a", "an", "of", "in", "to", "and", "und", "der", "die", "das", "no", "wa", "ga", "ni", "de", "series"}
+    # Normalisasi apostrof lurus (') dan lengkung (’) agar "journey's", "journey’s", dan "journeys" setara
+    t_q = re.sub(r"['’]", "", target_q.lower())
+    t_c = re.sub(r"['’]", "", candidate_title.lower())
+    tok_q = {w for w in re.sub(r"[^\w]", " ", t_q).split() if w} - stopwords
+    tok_c = {w for w in re.sub(r"[^\w]", " ", t_c).split() if w} - stopwords
+    if not tok_q or not tok_c:
+        return False
+    overlap = len(tok_q & tok_c) / max(len(tok_q), 1)
+    return overlap >= 0.50
+
+
+def resolve_mal_id_by_title(search_query: str) -> int:
+    """Cari MAL ID (idMal) dari AniList berdasarkan judul anime.
+    Mendukung penanganan apostrof slug, normalisasi kepemilikan bahasa Inggris,
+    dan fallback pemendekan kata bertahap dengan validasi kemiripan judul ketat."""
+    if not search_query or not search_query.strip() or _is_rate_limited():
+        return 0
+    import re
+    clean = search_query.strip()
+    clean = re.sub(r"\b(\w+)\s+s\b", r"\1's", clean, flags=re.I)
+    # Ubah bentuk kepemilikan umum yang sering kehilangan tanda apostrof di slug (misal: journeys, heavens)
+    clean_apo = re.sub(r"\b(journey|heaven|assassin|titan|demon|knight|king|queen|sorcerer|magician|witch|hero|god|world|children)s\b", r"\1's", clean, flags=re.I)
+
+    words = clean.split()
+    words_apo = clean_apo.split()
+    c = _get_al_client()
+
+    attempts = []
+    for q in [clean_apo, clean]:
+        if q and q not in attempts:
+            attempts.append(q)
+
+    # Coba prefix sebelum separator (seperti colon atau tanda hubung pemisah judul dan subtitle)
+    for sep in [":", " - "]:
+        if sep in clean:
+            prefix = clean.split(sep)[0].strip()
+            if prefix and prefix not in attempts:
+                attempts.append(prefix)
+
+    # Fallback pemotongan kata bertahap
+    if len(words_apo) > 3:
+        w4 = " ".join(words_apo[:4])
+        w3 = " ".join(words_apo[:3])
+        w2 = " ".join(words_apo[:2])
+        for w in [w4, w3, w2]:
+            if w not in attempts:
+                attempts.append(w)
+
+    for att in attempts:
+        if _is_rate_limited():
+            break
+        try:
+            r = c.post(ANILIST_URL, json={
+                "query": SEARCH_METADATA_QUERY,
+                "variables": {"search": att, "perPage": 5}
+            })
+            if r.status_code != 200:
+                _record_rate_limit(r)
+                break
+            media_list = r.json().get("data", {}).get("Page", {}).get("media", []) or []
+            for m in media_list:
+                if m.get("idMal"):
+                    t_obj = m.get("title") or {}
+                    t_en = (t_obj.get("english") or "").strip()
+                    t_ro = (t_obj.get("romaji") or "").strip()
+                    if _match_title_tokens(clean, t_en) or _match_title_tokens(clean, t_ro) or _match_title_tokens(att, t_en) or _match_title_tokens(att, t_ro) or clean.lower() in t_en.lower() or clean.lower() in t_ro.lower():
+                        try:
+                            return int(m["idMal"])
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    return 0
 
 
 

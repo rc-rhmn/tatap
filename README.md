@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/tatap_icon_512.png" width="112" height="112" alt="Tatap Logo">
   <h1>Tatap</h1>
-  <p>Pemutar dan agregator anime mandiri multiplatform (Android Mobile, Android TV, Windows, Linux, Web) yang ringan, bebas iklan, tanpa registrasi akun, dan menjaga privasi data di penyimpanan lokal.</p>
+  <p>Aplikasi pemutar anime mandiri multiplatform (Android Mobile, Android TV, Windows, Linux, Web) yang berfokus pada kemudahan penggunaan dan penyimpanan data lokal.</p>
 
   <p>
     <a href="https://github.com/asfaraguest/tatap/releases/latest"><img src="https://img.shields.io/github/v/release/asfaraguest/tatap?style=flat-square&color=00dbeb&label=Rilis" alt="Release"></a>
@@ -13,8 +13,8 @@
   </p>
 
   <p>
-    <a href="https://github.com/asfaraguest/tatap/releases/latest/download/tatap-release-v2.12.0.apk"><img src="https://img.shields.io/badge/Download-Android%20Mobile-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android Mobile APK"></a>
-    <a href="https://github.com/asfaraguest/tatap/releases/latest/download/tatap-tv-release-v2.12.0.apk"><img src="https://img.shields.io/badge/Download-Android%20TV-0081C9?style=for-the-badge&logo=android&logoColor=white" alt="Android TV APK"></a>
+    <a href="https://github.com/asfaraguest/tatap/releases/latest/download/tatap-release-v2.12.5.apk"><img src="https://img.shields.io/badge/Download-Android%20Mobile-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android Mobile APK"></a>
+    <a href="https://github.com/asfaraguest/tatap/releases/latest/download/tatap-tv-release-v2.12.5.apk"><img src="https://img.shields.io/badge/Download-Android%20TV-0081C9?style=for-the-badge&logo=android&logoColor=white" alt="Android TV APK"></a>
     <a href="https://github.com/asfaraguest/tatap/releases/latest/download/tatap-windows-x64-portable.zip"><img src="https://img.shields.io/badge/Download-Windows%20x64-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows Portable"></a>
     <a href="https://github.com/asfaraguest/tatap/releases/latest/download/Tatap-x86_64.AppImage"><img src="https://img.shields.io/badge/Download-Linux%20AppImage-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux AppImage"></a>
   </p>
@@ -29,25 +29,24 @@
 
 ## Fitur Utama
 
-- **Agregasi Multi-Sumber & Anti-DPI:** Menghubungkan katalog stream (HiAnime & Otakudesu) dengan modul desinkronisasi TLS dan DNS-over-HTTPS (DoH) bawaan untuk menjaga konektivitas stream tanpa VPN pihak ketiga.
+- **Agregasi Sumber & Penanganan Koneksi:** Menghubungkan beberapa katalog stream anime dengan dukungan DNS-over-HTTPS (DoH) dan penanganan koneksi TLS untuk membantu stabilitas pemutaran.
 - **Deteksi Opening & Ending (AniSkip):** Mendeteksi durasi intro/outro otomatis dengan opsi lewati satu klik pada remote TV (`OK` / `>>`) maupun keyboard desktop (`S`).
 - **Resume Watch Multiplatform:** Menyimpan posisi tontonan per episode secara otomatis dan menyajikan dialog konfirmasi untuk melanjutkan atau memutar dari awal.
 - **Rasio Episode Ongoing & Katalog:** Menampilkan jumlah episode rilis terhadap total proyeksi musim (`Ep X/Y`), penanda status tamat, filter genre, serta jadwal rilis mingguan.
-- **Navigasi TV (10-Foot UI):** Antarmuka Leanback Android TV yang dioptimalkan penuh untuk remote kontrol D-pad tanpa memerlukan mouse pointer.
+- **Navigasi TV (10-Foot UI):** Antarmuka Leanback Android TV yang dioptimalkan untuk remote kontrol D-pad tanpa memerlukan mouse pointer.
 
 ---
 
-## Subtitle Engine
+## Takarir (Subtitle)
 
-Tatap menyediakan sistem takarir multi-tier yang dapat dipilih langsung dari pemutar:
+Tatap menyediakan opsi takarir yang dapat dipilih langsung dari pemutar:
 
-| Subtitle Engine | Nama di Pemutar | Keterangan |
+| Opsi Takarir | Pilihan di Pemutar | Keterangan |
 | :--- | :--- | :--- |
-| **AIGTX Smart Fansub** | `Indonesian (GTX+)` | Engine bawaan tanpa API key, dilengkapi kamus 500+ istilah khas anime & fansub Indonesia. |
-| **AI Fansub LLM** | `Indonesian (AI Fansub)` | Terjemahan kontekstual berbasis AI model bawaan kunci sendiri (BYOK: Gemini, Groq, OpenAI, Ollama). |
-| **Google Translate RPC** | `Indonesian (Google GTX)` | Penerjemahan cepat standar via Google Translate RPC (tanpa API key). |
-| **Track Asli (Softsub)** | `English` / Bahasa Asli | Takarir bawaan video resmi dalam format WebVTT/ASS. |
-| **Sumber Sub Indo** | `Otakudesu` | Pilihan beralih sumber ke rilisan takarir Bahasa Indonesia langsung. |
+| **Smart Fansub & Merge** | `Bahasa Indonesia` | Menggabungkan takarir komunitas (AnimeTosho & OpenSubtitles) dan takarir bawaan dengan penyesuaian istilah populer anime. |
+| **AI Fansub (BYOK)** | `Bahasa Indonesia (AI)` | Opsi terjemahan menggunakan model bahasa dengan kunci API pribadi pengguna (Gemini, Groq, OpenAI, Ollama). |
+| **Track Bawaan (Softsub)** | `English` / Bahasa Asli | Takarir bawaan resmi dari penyedia stream dalam format WebVTT/ASS. |
+| **Sumber Sub Indo** | `Otakudesu` | Pilihan beralih ke penyedia dengan takarir Bahasa Indonesia langsung. |
 
 ### Konfigurasi AI Fansub (BYOK)
 
@@ -70,8 +69,8 @@ Pilih paket instalasi resmi sesuai perangkat Anda:
 
 | Platform Perangkat | Tombol Unduh Langsung | Format Berkas | Keterangan & Kompatibilitas |
 | :--- | :---: | :---: | :--- |
-| **Android Ponsel / Tablet** | [![Unduh Android APK](https://img.shields.io/badge/Download-Android%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/asfaraguest/tatap/releases/latest/download/tatap-release-v2.12.0.apk) | `.apk` (~35 MB) | Signed Production APK (Android 7.0 s/d 16, Watch Portrait View & Adaptive Icons) |
-| **Android TV / Google TV** | [![Unduh Android TV APK](https://img.shields.io/badge/Download-Android%20TV%20APK-0081C9?style=for-the-badge&logo=android&logoColor=white)](https://github.com/asfaraguest/tatap/releases/latest/download/tatap-tv-release-v2.12.0.apk) | `.apk` (~35 MB) | Signed Production APK khusus TV (Leanback 10-foot UI & Remote D-pad) |
+| **Android Ponsel / Tablet** | [![Unduh Android APK](https://img.shields.io/badge/Download-Android%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/asfaraguest/tatap/releases/latest/download/tatap-release-v2.12.5.apk) | `.apk` (~35 MB) | Signed Production APK (Android 7.0 s/d 16, Watch Portrait View & Adaptive Icons) |
+| **Android TV / Google TV** | [![Unduh Android TV APK](https://img.shields.io/badge/Download-Android%20TV%20APK-0081C9?style=for-the-badge&logo=android&logoColor=white)](https://github.com/asfaraguest/tatap/releases/latest/download/tatap-tv-release-v2.12.5.apk) | `.apk` (~35 MB) | Signed Production APK khusus TV (Leanback 10-foot UI & Remote D-pad) |
 | **Windows (x64)** | [![Unduh Windows Portable](https://img.shields.io/badge/Download-Windows%20Portable-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/asfaraguest/tatap/releases/latest/download/tatap-windows-x64-portable.zip) | `.zip` (~26 MB) | Standalone Portable (Ekstrak zip & jalankan `Tatap.exe`) |
 | **Linux (x86_64)** | [![Unduh Linux AppImage](https://img.shields.io/badge/Download-Linux%20AppImage-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/asfaraguest/tatap/releases/latest/download/Tatap-x86_64.AppImage) | `.AppImage` (~58 MB) | Standalone AppImage (Berikan izin `chmod +x` lalu jalankan) |
 

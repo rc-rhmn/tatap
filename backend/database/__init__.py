@@ -103,14 +103,37 @@ async def _write_db():
 
 
 async def close_db_pool():
-    """Tutup seluruh koneksi pada pool (dipanggil saat shutdown app)."""
+    """Tutup seluruh koneksi pada pool (dipanggil saat shutdown app).
+
+    Catatan: `Connection.close()` aiosqlite hanya menutup handle sqlite, TIDAK
+    menghentikan worker thread-nya (thread non-daemon yang menunggu queue).
+    Tanpa `stop()` thread itu hidup selamanya → interpreter hang di
+    `threading._shutdown()` saat proses exit (mis. teardown pytest).
+    """
     global _pool
-    async with _pool_lock:
-        conns = list(_pool)
-        _pool = []
+    try:
+        async with _pool_lock:
+            conns, _pool = _pool, []
+    except RuntimeError:
+        # _pool_lock terikat ke event loop lain yang sudah tutup (teardown test).
+        conns, _pool = _pool, []
+    futs = []
     for c in conns:
         try:
-            await c.close()
+            stop = getattr(c, "stop", None)
+            if stop is not None:
+                fut = stop()
+                if fut is not None:
+                    futs.append(fut)
+            else:  # aiosqlite lama tanpa stop()
+                await c.close()
+        except Exception:
+            pass
+    if futs:
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*futs, return_exceptions=True), timeout=2
+            )
         except Exception:
             pass
 

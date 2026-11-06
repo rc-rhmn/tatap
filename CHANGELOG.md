@@ -13,9 +13,146 @@ Format versi menggunakan skema `MAJOR.MINOR.PATCH`:
 - **MINOR (x.Y.0):** Penambahan fitur atau kapabilitas baru yang tetap kompatibel ke belakang (*backward-compatible new features*). Digit PATCH direset ke 0.
 - **PATCH (x.y.Z):** Perbaikan bug, peningkatan stabilitas, atau perbaikan internal tanpa penambahan fitur baru (*backward-compatible bug fixes*).
 
-## [2.12.7] - 2026-11-03 (Fork Tatapan)
+## [2.12.8] - 2026-11-06 (Fork Tatapan)
 
-Sinkronisasi penuh dengan upstream v2.12.2–v2.12.6: perbaikan hotkey pemutar video desktop/web, navigasi D-Pad Android TV (rewind/FF/scrubber/focus dialog), perbaikan skip OP/ED & auto-skip anime terbaru (aniskip), optimasi resolve & buffering seluruh platform, serta peningkatan AI translate (fansub prompt). Rebrand Tatapan & appId personal tetap dipertahankan.
+Sinkronisasi upstream v2.12.7: **custom prompt AI Fansub** di semua platform (Android mobile & TV: dialog `dialog_ai_settings` baru dengan preset gaya dan navigasi D-pad), **optimasi resolve & buffering** (pre-seeding master m3u8 dari scraper, ring buffer segmen in-memory, predictive pre-resolve episode berikutnya, auto-recovery gap HLS), serta **perbaikan akurasi subtitle** (batas franchise, verifikasi musim, pencocokan episode deterministik, perbaikan HTTP 422 untuk seasonal string). Termasuk perbaikan fokus dialog TV, modal backstack, z-index, dan fix shutdown pool `aiosqlite` (worker thread non-daemon yang membuat proses hang saat exit). Rebrand Tatapan, appId `id.tatap.personal`, tuning low-RAM, dan update checker fork tetap dipertahankan.
+
+## [2.12.7] - 2026-11-03
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.12.6 -> 2.12.7)
+Kenaikan digit PATCH diterapkan sesuai kaidah Semantic Versioning 2.0.0 dan Direktif #3 [`AGENTS.md`](AGENTS.md) untuk optimasi performa resolving stream anime dan pemutaran buffering video di platform Web dan Desktop (eliminasi jeda sinkron AniSkip, master m3u8 pre-seeding dari scraper, in-memory segment ring cache, predictive next-episode pre-resolving, dan HLS.js micro-gap auto-recovery) tanpa perombakan skema database maupun modifikasi antarmuka eksternal yang tidak kompatibel.
+
+### Added
+1. **Migrasi Maksimal Seluruh Fungsi Video Player ke Native Artplayer.js (`frontend/`):**
+   - Mengganti arsitektur video player bawaan secara utuh dengan engine modern **Artplayer.js (v5.4.0)** mandiri tanpa dependensi CDN runtime eksternal.
+   - **Full-Browser Screen (Web Fullscreen):** Saat video diputar, pemutar secara otomatis menduduki 100% jendela browser/webview (`100vw` $\times$ `100vh`) borderless cinema mode dengan floating cyber HUD controls yang otomatis bersembunyi saat kursor diam (*idle*).
+   - **True 1-Monitor Fullscreen:** Mengisi 100% layar monitor fisik secara penuh tanpa border, taskbar, atau title bar, terintegrasi dengan bridge Win32 `tatap_set_fullscreen` (`WS_POPUP`) pada launcher Go Windows Portable serta HTML5 Fullscreen pada Linux & Web.
+   - **Dukungan Penuh Native Picture-in-Picture (PiP):** Tombol PiP resmi Artplayer aktif di bar kontrol utama, memungkinkan video diputar mengambang (*floating window*) di atas aplikasi lain.
+   - **Integrasi Subtitle Engine ke Native Artplayer:**
+     - Subtitle dirender langsung ke elemen subtitle Artplayer (`.art-subtitle`, `.art-subtitle-inner`) dengan tipografi fansub anime berkontras tinggi, outline text-shadow tebal, latar belakang kapsul gelap, dan penyesuaian ukuran font dinamis (`--sub-size`).
+     - Menu Setting Artplayer kini memuat pengaturan subtitle lengkap: *Pilih Subtitle* (termasuk Indonesian Smart Fansub & Merge, AI Fansub, dan OpenSubtitles), *Ukuran Subtitle (S/M/L)*, *Sinkronisasi Delay* (-0.5s, -0.25s, 0.0s, +0.25s, +0.5s), *Toggle Terjemahan ID*, dan *Muat File Subtitle Lokal*.
+     - Native track disupresi total (`video::cue { display: none !important; font-size: 0px !important; }`), mencegah fitur Windows Closed Captions mendistorsi tampilan subtitle Tatap.
+   - **Integrasi Video Settings Native:**
+     - Pemilih kualitas video HLS adaptive (Auto, 1080p, 720p, 480p, dsb.) langsung dari bar kontrol dan panel setting Artplayer.
+     - Pengaturan rasio aspek (Default, 16:9, 4:3), flip video horizontal/vertikal, dan kecepatan putar (0.5x – 2.0x).
+     - Tombol navigasi episode (Prev `⏮` / Next `⏭`), launcher MPV eksternal, dan tombol shortcut Pengaturan AI Fansub (`:ai`).
+     - Layer tombol mengambang AniSkip OP/ED terintegrasi langsung di dalam viewport Artplayer.
+2. **Custom Prompt AI Fansub & Translate di Seluruh Platform (`backend/api/translate.py`, `frontend/`, `android/`):**
+   - Mendukung instruksi persona dan gaya terjemahan khusus pengguna (`translate_custom_prompt`) yang diinjeksi dengan prioritas tinggi ke system prompt LLM AI Fansub.
+   - Tetap menjaga integritas format baris keluaran ber-ID `N|terjemahan` dan token `<br>` secara ketat sehingga parser subtitle Tatap tidak terganggu.
+   - **Web Desktop & Browser:** Menambahkan modal baru *Pengaturan AI Fansub* (`#ai-settings-modal`), tombol Drawer `:ai`, tombol langsung di footer pemutar video, serta perintah terminal `:ai` dan `:prompt <gaya/arahan>`. Dilengkapi template preset instan (*Santai/Gaul*, *Baku/Sopan*, *Honorifik & Jurus*, dan *Reset*).
+   - **Android Mobile & Android TV:** Memperbarui antarmuka `dialog_ai_settings.xml` dengan input multi-line `et_ai_custom_prompt`, tombol preset gaya, dukungan navigasi remote TV D-Pad (`TvFocusHelper`), serta integrasi langsung dari pemilih subtitle pemutar video (`PlayerActivity`).
+2. **In-Memory Segment Ring Buffer Cache (`backend/main.py`, Paritas `android/app/src/main/python/backend/main.py`):**
+   - Menambahkan LRU ring buffer memori `_SEGMENT_CACHE` (hingga 35MB) untuk menyimpan segmen video TS yang baru diunduh.
+   - Mengeliminasi round-trip jaringan ke upstream CDN saat pemutar melakukan rewind singkat 5–10 detik atau retry segmen akibat micro-stall.
+2. **On-Demand Skip Times Endpoint (`backend/main.py`):**
+   - Menambahkan endpoint `@app.get("/api/episode/skip_times")` agar klien dapat meminta timestamp intro/outro kapan saja tanpa menahan pemutaran video.
+3. **Predictive Next-Episode Background Pre-Resolving (`frontend/js/app.js`):**
+   - Otomatis memicu background pre-resolving dan pre-warming subtitle episode berikutnya saat progres video berjalan $\ge 70\%$ atau setelah 240 detik pemutaran stabil.
+   - Transisi ke episode berikutnya (baik via klik "Next" maupun auto-play) kini berjalan instan (0 milidetik).
+
+### Changed
+1. **Non-Blocking AniSkip Resolving (`backend/main.py`):**
+   - Resolusi episode kini mengembalikan URL stream seketika (< 350ms) tanpa menunggu request AniSkip eksternal. Jika skip times belum ada di cache, pencarian AniSkip dijalankan di latar belakang (`_spawn_background`) untuk memperbarui cache secara asinkron.
+2. **Master M3U8 Direct Pre-Seeding (`backend/api/hianime.py`, `backend/main.py`):**
+   - Resolver HiAnime (`_try_megaplay` & `_try_embed_legacy`) kini menyertakan `master_body` langsung pada hasil resolve, yang seketika disimpan ke `_MASTER_CACHE`. Mengeliminasi round-trip kedua ke CDN saat pemutar memuat master playlist pertama kali.
+3. **Optimasi Buffer & Caching Header HTTP (`backend/main.py`):**
+   - Menambahkan header `Cache-Control: public, max-age=86400, immutable` dan `Accept-Ranges: bytes` pada seluruh respons segmen video `/api/player/video`.
+4. **HLS.js Tuning & Micro-Gap Stall Auto-Recovery (`frontend/js/app.js`):**
+   - Mengaktifkan `startFragPrefetch: true` untuk mengeliminasi pause antar fragmen video.
+   - Memperluas durasi buffer: `maxBufferLength: 60s`, `maxMaxBufferLength: 120s`, `maxBufferSize: 60MB`, dan `startBufferDuration: 2s`.
+   - Mengimplementasikan pendeteksi celah mikro (micro-gap $\le 0.35$s) pada event `BUFFER_STALLED_ERROR` yang secara otomatis melompati jeda frame tanpa memaksa user scrubbing seekbar secara manual.
+
+5. **Redesign Total Antarmuka Modal Pengaturan AI Fansub (`frontend/index.html`, `frontend/css/style.css`):**
+   - Mengganti tampilan modal `#ai-settings-modal` yang sebelumnya bergaya form lawas menjadi antarmuka cyber modern yang menyatu sempurna (*blend*) dengan kontrol Artplayer dan tema Tatap.
+   - Menggunakan latar belakang gelap konsisten tanpa membebani GPU perangkat berspesifikasi rendah (*Zero Backdrop Blur Tax*), kontainer modular cards (`.ai-glass-card`), badge status bercahaya neon cyan (`.ai-cyber-badge`, `.ai-badge-dot`), tombol preset provider dengan ikon SVG minimalis, input password bertema cyber dark, serta textarea custom prompt dengan template instan bergaya tags.
+
+### Fixed
+1. **Pencegahan Ketat Subtitle Mismatch / Tertukar dengan Judul Anime Lain, Season Berbeda, atau Episode Tertukar (`backend/api/opensubtitles.py`, `backend/api/animetosho.py`, `backend/main.py`, `frontend/js/app.js`, Paritas Chaquopy `android/`):**
+   - **Pemisahan Batas Franchise & Spinoff:** Mengimplementasikan pengecekan relasi spinoff pada `is_accurate_sub_title_match()` dan `_title_similarity()` untuk menolak kecocokan palsu franchise turunan (misalnya anime *Naruto* yang sebelumnya dapat mencocokkan *Boruto - Naruto Next Generations* akibat token "naruto", begitu pula *Inuyasha* vs *Yashahime* atau *Bleach* vs *Burn the Witch*).
+   - **Eliminasi Mismatch Nomor Season:** Menambahkan ekstraksi season deterministik `_extract_file_season_num()` yang memverifikasi nomor season target (`S01`, `S02`, `Season 2`, `2nd Season`, `II`, `III`, dsb.). Kandidat subtitle dari Season 1 secara otomatis ditolak ketika pengguna sedang memutar Season 2 (begitu pula sebaliknya).
+   - **Eliminasi Regex Episode Bleed:** Mengganti regex parsial yang sebelumnya dapat mencocokkan nomor episode berdigit ganda/tiga (seperti Episode `108` yang keliru cocok dengan Episode `8`) dengan fungsi deterministik `_extract_file_episode_num()`. Jika nomor episode pada berkas berbeda dengan episode target, rilis diberi penalti mutlak score `-999` dan langsung dieliminasi.
+   - **Pencarian Multi-Tier Judul Sub-Arc Anime:** Menambahkan `clean_anime_title_variations()` untuk memecah judul ber-sub-arc panjang (seperti *Solo Leveling Season 2: Arise from the Shadow* menjadi variasi *Solo Leveling*) sehingga kueri ke API OpenSubtitles dan AnimeTosho tetap menemukan rilis fansub resmi tanpa gagal akibat sub-arc lokal.
+   - **Pembersihan Cache Subtitle Korup:** Menambahkan `clear_os_merge_subtitle_cache()` yang otomatis membersihkan entri usang `sub2|os_merge|%` dari database SQLite `subtitle_cache` saat startup, mencegah rilis lama yang mismatch muncul kembali.
+   - **Seamless Multi-Tier Fallback ke Smart GTX+:** Jika tidak ada kandidat subtitle fansub eksternal ID yang 100% cocok dengan anime, season, dan episodenya, sistem secara bersih menolak penggabungan dan langsung beralih ke terjemahan Smart GTX+ bawaan stream animenya.
+2. **Perbaikan Web Fullscreen (Fullwebscreen) Menjadi 100vw × 100vh Penuh (`frontend/css/style.css`, `frontend/js/app.js`):**
+   - Mengeliminasi pembatasan tinggi `max-height: calc(96vh - 110px)` dan `border-radius: 8px` warisan container `.ambient-stage video` pada elemen Artplayer `<video class="art-video">`, sehingga video mengisi 100% viewport pemutar secara proporsional tanpa terpotong atau menyisakan celah kosong di mode Web Fullscreen (`100vw` $\times$ `100vh`) maupun monitor fullscreen.
+   - Memperbaiki layout `.is-fullscreen-web` pada `#player-modal`, `.player-shell`, `.ambient-stage`, dan `.art-video-player` agar mengisi seluruh jendela browser (`100vw` $\times$ `100vh`) tanpa offset, tanpa border, dan tanpa pergeseran scrollbar.
+   - Menambahkan shortcut keyboard `w` / `W` untuk toggle Web Fullscreen secara instan, serta memastikan tombol `Escape` keluar dari Web Fullscreen secara halus tanpa menutup modal pemutar.
+3. **Perbaikan Monitor Fullscreen Sejati (True Fullscreen) & Bridge Native Desktop (`frontend/js/app.js`, `frontend/css/style.css`):**
+   - Memperbaiki fungsi `toggleFullscreen()` dari kondisi *double requestFullscreen race condition*, sehingga menyinkronkan state monitor fullscreen secara tangguh dengan bridge Go Windows Portable WebView2 (`window.tatap_set_fullscreen`) dan HTML5 Container Fullscreen Top-Layer pada browser dan Linux.
+   - Shortcut `f` / `F` dan double click kini mengeksekusi monitor fullscreen sejati 1-monitor tanpa window displacement.
+4. **Penanganan Modal Global & Interaktivitas UI (`frontend/js/term.js`, `frontend/index.html`):**
+   - Menambahkan `ai-settings-modal` ke dalam daftar `isModalOpen()` di `frontend/js/term.js`, sehingga penekanan tombol `Escape` maupun shortcut katalog saat modal pengaturan AI terbuka tidak bocor (*key event leak*) ke grid katalog anime di latar belakang.
+   - Menghapus atribut inline `style="display:none;"` dan menyelaraskan penanganan kelas `.hidden` secara bersih di HTML dan CSS untuk mencegah modal terkunci secara tidak sengaja.
+   - Menambahkan parameter *cache-busting* `?v=2.12.7` pada seluruh tag aset script dan stylesheet di `frontend/index.html`.
+5. **Kepatuhan Invarian Arsitektur & Kinerja Rendering Low-End GPU (`frontend/css/style.css`):**
+   - Memulihkan z-index `#resume-modal.overlay { z-index: 160; background: rgba(0,0,0,0.88); }` sesuai test suite `test_interactive_resume_modal_frontend`.
+   - Menghapus penggunaan `backdrop-filter: blur(...)` pada kontrol Artplayer, dropdown selector, in-player toast notice, modal dialog AI, dan toast global demi mematuhi kaidah *Zero Backdrop Blur Tax* untuk stabilitas CPU/GPU perangkat hemat daya.
+4. **Eliminasi UI Tumpang Tindih Pemutar Shell Lama / Player Shell Nyangkut (`frontend/css/style.css`, `frontend/js/app.js`):**
+   - Menyembunyikan bar kontrol luar lama (`.player-head`, `.player-foot`, `.player-hint`, `#pm-subs-overlay`, `#pm-gesture-stage`, `#pm-skip-btn`) saat `#player-modal` terbuka, sehingga Artplayer tampil murni 100% cinema mode tanpa sisa kontrol lama yang bertumpuk.
+   - Menambahkan header layer Artplayer terintegrasi (`.art-header-layer`) yang memuat judul anime/episode di kiri atas dan tombol tutup sleek (`✕`) di kanan atas yang otomatis bersembunyi saat kursor diam bersama kontrol bawaan Artplayer.
+2. **Sinkronisasi Waktu Subtitle & Eliminasi Duplikasi Video ID pada Artplayer (`frontend/js/app.js`, `frontend/css/style.css`):**
+   - Mengatasi masalah subtitle tidak muncul di Artplayer akibat pembacaan waktu `t` di `paintCue()` yang sebelumnya merujuk ke elemen video statis lama (`$("vid").currentTime = 0`), kini membaca waktu aktif secara langsung dari `window.art.currentTime`.
+   - Mengeliminasi duplikasi elemen `id="vid"` di DOM saat inisialisasi Artplayer, menjadikan `<video class="art-video">` sebagai satu-satunya elemen video aktif di dokumen.
+   - Menetapkan `display: flex !important` dan styling layout pada `.art-video-player .art-subtitle` agar container subtitle internal Artplayer selalu aktif dan dirender secara proporsional.
+3. **Penyimpanan Riwayat Tontonan & Penanganan Shortcut Keyboard pada Artplayer (`frontend/js/app.js`):**
+   - Menyelaraskan `recordWatchProgress()` agar mengambil progres waktu dan durasi dari `window.art.currentTime` dan `window.art.duration` sebelum pemutar ditutup (`closePlayer()`).
+   - Menyinkronkan seluruh hotkey pemutar (Space, Mute M, Seek ArrowLeft/Right, Volume ArrowUp/Down, Skip S) ke `window.art`.
+4. **Modal Stacking & Z-Index Collision di Web & Desktop (`frontend/css/style.css`, `frontend/js/app.js`):**
+   - Menetapkan z-index eksplisit `#ai-settings-modal.overlay { z-index: 160; background: rgba(0, 0, 0, 0.88); }` sehingga modal setelan AI Fansub selalu muncul di atas layer pemutar video `#player-modal`.
+   - Menghentikan pemutaran video secara otomatis (`v.pause()`) saat modal setelan dibuka dari dalam pemutar.
+2. **Dynamic Subtitle Cache Invalidation on Custom Prompt Change (`backend/main.py`, Paritas Chaquopy):**
+   - Mengikat kunci cache subtitle AI (`key_llm`) dengan hash kombinasi model dan prompt kustom pengguna (`sub2|llm|{base_hash}|{prompt_tag}`).
+   - Menghindari penyajian subtitle lama (stale cache) saat pengguna mengubah persona atau instruksi terjemahan di pengaturan AI Fansub.
+3. **Penyempurnaan Navigasi Input & Auto-Reload Subtitle di Android (`MainActivity.java`, `PlayerActivity.java`, `dialog_ai_settings.xml`):**
+   - Menambahkan penanganan `requestDisallowInterceptTouchEvent` pada `et_ai_custom_prompt` untuk mencegah tersangkutnya gestur gulir sentuh oleh `ScrollView` induk di perangkat layar sentuh.
+   - Mengintegrasikan penskalaan visual fokus D-Pad remote Android TV (`TvFocusHelper.attachFocusScale`).
+   - Otomatis memicu pemuatan ulang subtitle terjemahan (`applySubtitleSelection(true)`) saat pengguna menyimpan setelan AI Fansub dari dalam pemutar video aktif.
+4. **Live Subtitle Reload & Modal HUD State Machine di Web & Desktop (`frontend/js/app.js`):**
+   - Menambahkan reload otomatis subtitle AI Fansub seketika saat tombol *Simpan & Terapkan* diklik pada modal pengaturan ketika pemutar video aktif.
+   - Mengintegrasikan `TvNavigationManager.setPlayerModalState(true/false)` dan pembersihan `handleBack` agar penekanan tombol Escape menutup modal AI terlebih dahulu tanpa menutup pemutar video.
+5. **Pemulihan Fokus Remote D-Pad pada Dialog AI di Android TV (`TvFocusHelper.java`, `PlayerActivity.java`, `MainActivity.java`):**
+   - Menambahkan `dialog.setOnDismissListener(d -> restoreSubPickerTvFocus())` pada dialog pengaturan AI di `PlayerActivity.java`, mengeliminasi total masalah hilangnya kursor remote D-Pad (*dead cursor*) saat dialog ditutup di Android TV.
+   - Menyediakan metode `TvFocusHelper.applyCustomDialogTvFocus(Dialog)` untuk memfokuskan tombol navigasi awal secara otomatis saat dialog dibuka.
+6. **Eliminasi Total Layer Pemutar Bawaan HTML5 di Bawah Artplayer (`frontend/index.html`, `frontend/css/style.css`, `frontend/js/app.js`):**
+   - Menghapus atribut `controls` bawaan browser pada elemen `<video id="vid">` statis di `frontend/index.html` dan menambahkan `style="display:none !important"`.
+   - Mengeliminasi seluruh panggilan injeksi `v.setAttribute("controls", "")` pada `armAutohide()` di `frontend/js/app.js` yang sebelumnya memicu browser engine (Chromium, Firefox, Webview) merender kontrol media HTML5 native di dalam video Artplayer setiap kali kursor digerakkan atau video dijeda.
+   - Menggantinya dengan penegakan eksplisit `v.removeAttribute("controls")` dan menambahkan aturan CSS global untuk mensupresi total shadow DOM media controls browser (`video::-webkit-media-controls* { display: none !important; }`), serta menyembunyikan video non-Artplayer di dalam stage (`.ambient-stage > video:not(.art-video) { display: none !important; }`).
+7. **Perbaikan Menyeluruh Bug & Sinkronisasi Event Pemutar Artplayer.js (`frontend/js/app.js`, `frontend/css/style.css`):**
+   - Mengeliminasi fatal JS `ReferenceError` pada event `video:ended` akibat pemanggilan fungsi `markCurrentEpisodeFinished()` yang tidak ada, digantikan dengan penyimpanan progres 100%, pencatatan episode tuntas `recordEpisodeWatched()`, dan auto-play episode berikutnya (`stepEp(1)`) atau penutupan rapi.
+   - Mengaktifkan kembali Ambient Lighting dengan mendinamisasi closure elemen video pada `startAmbient()` agar membaca frame langsung dari `window.art.template.$video`.
+   - Menghilangkan tabrakan shortcut keyboard (double trigger pada tombol Space dan Arrow) dengan menonaktifkan internal hotkey Artplayer (`hotkey: false`) dan memusatkannya pada master key handler Tatap.
+   - Menambahkan kontrol resolusi video HLS (`quality`) ke control bar Artplayer dan menu Setting Artplayer.
+   - Mengintegrasikan persistensi ukuran subtitle pengguna (`syncSubSize()`) secara otomatis saat episode baru diputar serta menambahkan skalabilitas font responsif di perangkat mobile dan wrapping seimbang `text-wrap: balance;`.
+   - Mengeliminasi phantom click pada tombol AniSkip saat tombol berstatus `hidden`.
+   - Menampilkan status proses penerjemahan subtitle langsung di dalam viewport Artplayer.
+   - Menjeda (`pause`) video web secara otomatis saat MPV eksternal diluncurkan untuk mencegah tabrakan audio ganda (*dual-audio*).
+   - Menyelaraskan opacity tombol Prev/Next pada bar kontrol Artplayer sesuai ketersediaan episode.
+   - Menjamin isolasi DOM tanpa kebocoran memori saat berganti episode via pembersihan `art.destroy(true)` dan pembersihan container.
+8. **Migrasi Penuh Fungsi HTML5 Player ke Native Artplayer, Eliminasi Efek Vignette, & Opsi Resolusi Interaktif (`frontend/js/app.js`, `frontend/css/style.css`):**
+   - Menghilangkan total efek vignette / gradien hitam di bagian bawah video (`.art-bottom`, `.art-bottom-gradient`) agar subtitle 100% jernih, kontras, dan tidak tertutupi bayangan hitam.
+   - Menghadirkan tombol opsi resolusi (`quality`) interaktif pada bar kontrol dan menu Setting Artplayer lengkap dengan pop-up selector (Auto, 1080p, 720p, 480p, 360p) yang langsung terhubung ke multi-level HLS.js dan varian stream.
+   - Memigrasikan seluruh fitur player bawaan ke kontrol native Artplayer: pemilih track subtitle cepat (CC dropdown), toggle terjemahan ID (TR-ID), kustomisasi delay dan ukuran subtitle, seleksi trek audio ganda (Sub vs Dub), penangkapan tangkapan layar (screenshot native), rasio aspek, flip, mini progress bar, dan tombol MPV/AI Fansub.
+9. **Desain Ulang Kontrol Artplayer.js Flat Translucent Glass, Pengelompokan Logis, & Toast Navigasi Episode (`frontend/js/app.js`, `frontend/css/style.css`):**
+   - **Modern Flat Translucent Control Bar:** Mempercantik control bar Artplayer dengan estetika modern flat translucent glassmorphism (`rgba(10, 14, 22, 0.72)` + `backdrop-filter: blur(20px)` + subtle border + soft drop shadow), sudut melengkung halus, dan tata letak padat tanpa gradien gelap yang mengganggu.
+   - **Penataan & Pengelompokan Logis Kontrol:** Menata ulang seluruh tombol kontrol ke dalam kelompok terstruktur rapi:
+     - *Kelompok Kiri (Playback & Waktu):* Tombol Play/Pause, navigasi episode Sebelumnya (Prev `⏮`) dan Berikutnya (Next `⏭`), volume slider, dan indikator waktu video (`00:00 / 00:00`).
+     - *Kelompok Kanan 1 (Stream & Subtitle):* Selector Kualitas Resolusi (`1080p`, `720p`, dll.), Selector Subtitle (CC), Toggle Terjemahan ID (`TR-ID`), dan garis pemisah vertikal transparan (`art-ctrl-divider`).
+     - *Kelompok Kanan 2 (Enhancement Eksternal):* Tombol Pintasan Pengaturan AI Fansub (`AI`), Tombol Luncurkan MPV Eksternal (`MPV`), dan garis pemisah vertikal.
+     - *Kelompok Kanan 3 (Utility & Tampilan):* Cuplikan Layar (`Screenshot`), Menu Pengaturan Video (`Settings`), Picture-in-Picture (`PiP`), Layar Penuh Jendela (`WebFS`), Layar Penuh Monitor (`Fullscreen`), dan Tombol Tutup Player (`✕`).
+   - **Percantik Ikon & Tipografi Tombol:** Seluruh tombol fungsi kini menggunakan styling seragam (`.art-ctrl-btn`) dengan ikon SVG tajam dan modern, micro-interaction hover lembut, state aktif bercahaya biru aksen (`#38bdf8`), serta state nonaktif (`disabled`) pada episode batas dengan visual transparan 32% dan pointer events nonaktif.
+   - **Indikator Toast Navigasi Episode:** Menambahkan notifikasi toast interaktif seketika saat tombol Prev/Next diklik atau dipicu via shortcut keyboard (`⏳ Memuat episode berikutnya (Ep X)...` / `⏳ Memuat episode sebelumnya (Ep X)...`), serta pemberitahuan toast jika sudah berada di episode awal atau akhir.
+10. **Perbaikan Tampilan Toast, Modal Pengaturan AI Fansub, Navigasi Tombol Tutup Player, & Resolusi HLS Anime Baru (`frontend/js/app.js`, `frontend/css/style.css`):**
+    - **Eliminasi Zombie Overlay Artplayer & Retensi DOM:** Menonaktifkan `Artplayer.FULLSCREEN_WEB_IN_BODY = false` dan menghapus panggilan `art.fullscreenWeb = true` yang sebelumnya memaksa elemen Artplayer berpindah ke `document.body` dengan z-index 9999, meninggalkan zombie DOM overlay yang menutupi seluruh modal lain di aplikasi.
+    - **Restorasi Tampilan Toast:** Mengintegrasikan pemanggilan toast ke `window.art.notice.show` dan menaikkan z-index `.toast` ke level tertinggi (`999999 !important`), memastikan toast episode dan notifikasi sistem selalu tampil dengan jelas baik di dalam layar video maupun di antarmuka utama.
+    - **Restorasi Modal Pengaturan AI Fansub:** Menyelaraskan z-index `#ai-settings-modal.overlay` (`99999 !important`) dan menambahkan pause video otomatis saat tombol AI di bar kontrol diklik, serta listener event `mounted` langsung pada elemen kontrol.
+    - **Restorasi Navigasi Tombol Tutup ke List Episode:** Memperbaiki fungsi `closePlayer()` agar membersihkan sisa elemen Artplayer secara tuntas, keluar dari mode layar penuh secara rapi, serta langsung membuka kembali `#title-modal` dengan daftar episode (`renderEpRanges()` dan `renderEpGrid()`) yang menyorot episode terakhir ditonton (`.last-watch`).
+    - **Peningkatan Deteksi & Pemuatan Stream HLS Anime Baru:** Memperluas deteksi `isHls` pada format URL playlist master/varian dan menyembunyikan spinner buffering secara otomatis pada event `canplay`, `playing`, `loadeddata`, dan `loadedmetadata`.
+
+### Tests
+- Menambahkan test suite `tests/test_custom_prompt.py` untuk menguji pembuatan system prompt dengan instruksi khusus pengguna, prioritas prompt, dan persistensi database settings.
+- Menambahkan test suite `tests/test_stream_optimizations.py` untuk menguji cache master m3u8, in-memory segment ring cache, non-blocking AniSkip resolving, dan endpoint skip times.
 
 ## [2.12.6] - 2026-11-01
 

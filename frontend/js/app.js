@@ -31,6 +31,16 @@ function setSubDelay(sec, notify){
     el.classList.toggle("active", Math.abs(val) > 0.01);
   }
   paintCue();
+  if(window.art && window.art.notice && notify){
+    var signStr = val > 0 ? "+" : "";
+    window.art.notice.show = "Offset Subtitle: " + signStr + val.toFixed(2) + "s";
+  }
+  if(window.art && window.art.setting && window.art.setting.cache && window.art.setting.cache.has("subtitle-delay")){
+    try{
+      var sgn = val > 0 ? "+" : "";
+      window.art.setting.update({ name: "subtitle-delay", tooltip: sgn + val.toFixed(2) + "s" });
+    }catch(_){}
+  }
   if(notify){
     var signStr = val > 0 ? "+" : "";
     toast("Sinkronisasi Subtitle: " + signStr + val.toFixed(2) + " detik", 1500);
@@ -46,7 +56,9 @@ function setPlaySpeed(spd, notify){
   if(isNaN(num) || num <= 0) num = 1.0;
   currentPlaybackSpeed = num;
   var v = $("vid");
-  if(v){
+  if(window.art){
+    try { window.art.playbackRate = currentPlaybackSpeed; } catch(e){}
+  } else if(v){
     try {
       v.playbackRate = currentPlaybackSpeed;
     } catch(e){}
@@ -54,6 +66,9 @@ function setPlaySpeed(spd, notify){
   var sel = $("pm-speed-select");
   if(sel){
     sel.value = String(currentPlaybackSpeed);
+  }
+  if(window.art && window.art.notice && notify){
+    window.art.notice.show = "Kecepatan: " + currentPlaybackSpeed + "x";
   }
   if(notify){
     toast("Kecepatan: " + currentPlaybackSpeed + "x");
@@ -77,10 +92,19 @@ function adjustPlaySpeed(dir){
 function $(id){return document.getElementById(id);}
 function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
 function toast(msg,ms){
-  $("toast-msg").textContent=msg;
-  $("toast").classList.remove("hidden");
-  clearTimeout(window._toastT);
-  window._toastT=setTimeout(function(){$("toast").classList.add("hidden");},ms||2200);
+  try {
+    if(window.art && window.art.notice && typeof window.art.notice.show !== "undefined"){
+      window.art.notice.show = msg;
+    }
+  } catch(_){}
+  var tMsg = $("toast-msg");
+  var tBox = $("toast");
+  if(tMsg && tBox){
+    tMsg.textContent=msg;
+    tBox.classList.remove("hidden");
+    clearTimeout(window._toastT);
+    window._toastT=setTimeout(function(){tBox.classList.add("hidden");},ms||2200);
+  }
 }
 
 /* =====================================================================
@@ -443,6 +467,13 @@ var TvNavigationManager = (function(){
       if(e) e.preventDefault();
       if(typeof App !== "undefined" && App.closeUpdateModal) App.closeUpdateModal();
       else updM.classList.add("hidden");
+      restoreFocusState();
+      return true;
+    }
+    var aiM = $("ai-settings-modal");
+    if(aiM && !aiM.classList.contains("hidden")){
+      if(e) e.preventDefault();
+      closeAiSettingsModal();
       restoreFocusState();
       return true;
     }
@@ -1117,17 +1148,42 @@ function formatTimeSec(sec){
 
 var _lastProgressSaveTime = 0;
 function recordWatchProgress(force){
-  var v = $("vid");
-  if(!v || !cur.slug || !cur.ep) return;
+  if(!cur.slug || !cur.ep) return;
   var now = Date.now();
   if(!force && (now - _lastProgressSaveTime < 5000)) return;
   _lastProgressSaveTime = now;
-  var curPos = Math.floor(v.currentTime || 0);
-  var dur = Math.floor(v.duration || 0);
+  var curPos = 0;
+  var dur = 0;
+  if(window.art && typeof window.art.currentTime === "number" && !isNaN(window.art.currentTime)){
+    curPos = Math.floor(window.art.currentTime || 0);
+    dur = Math.floor(window.art.duration || 0);
+  } else {
+    var v = $("vid");
+    if(v && !isNaN(v.currentTime)){
+      curPos = Math.floor(v.currentTime || 0);
+      dur = Math.floor(v.duration || 0);
+    }
+  }
   if(curPos <= 0 && !force) return;
   window.Tatap.saveProgress(cur.slug, cur.ep, curPos, dur).then(function(){
     renderContinue();
   }).catch(function(){});
+
+  // Predictive Next-Episode Pre-resolving:
+  // Ketika tontonan mencapai >= 70% atau > 240 detik pemutaran stabil,
+  // resolve episode berikutnya di background agar pergantian episode menjadi 0ms (instan).
+  if(dur > 90 && curPos > 0 && (curPos / dur >= 0.70 || curPos >= 240)){
+    var preKey = cur.slug + ":" + (cur.ep + 1);
+    if(window._lastPreResolvedEp !== preKey){
+      window._lastPreResolvedEp = preKey;
+      var nextEp = cur.ep + 1;
+      var canPre = true;
+      if(cur.totalEps && nextEp > cur.totalEps) canPre = false;
+      if(canPre && window.Tatap && window.Tatap.resolve){
+        window.Tatap.resolve(cur.slug, nextEp, cur.mode, cur.quality, cur.source || "", false, cur.title).catch(function(){});
+      }
+    }
+  }
 }
 
 var _activeResumeCleanup = null;
@@ -1294,7 +1350,11 @@ function openPlayer(ep, resumeTime, forceRefresh){
   recordEpisodeWatched(cur.slug, ep);
   closeTitle();
   closeResumeModal();
-  $("player-modal").classList.remove("hidden");
+  var pmModal = $("player-modal");
+  if(pmModal){
+    pmModal.classList.remove("hidden");
+    pmModal.style.display = "flex";
+  }
   if(TvNavigationManager.isTvMode()){
     TvNavigationManager.showPlayerControls($("pm-speed-select") || $("pm-close"));
   } else {
@@ -1417,6 +1477,35 @@ function renderVariants(){
       sel.classList.remove("hidden");
     }
   }
+  syncArtplayerQuality();
+
+  if(window.art && window.art.setting && cur.res && cur.res.variants && cur.res.variants.length > 1){
+    try{
+      var sList = cur.res.variants.map(function(sv, sidx){
+        return {
+          html: sv.q || ("Server " + (sidx+1)),
+          variant: sv,
+          default: cur.res.picked && cur.res.picked.url === sv.url
+        };
+      });
+      var serverSetting = {
+        name: "stream-server",
+        width: 220,
+        html: "Server Stream",
+        tooltip: (cur.res.picked && cur.res.picked.q) || "Server",
+        selector: sList,
+        onSelect: function(item){
+          switchQ(item.html);
+          return item.html;
+        }
+      };
+      if(window.art.setting.cache && window.art.setting.cache.has("stream-server")){
+        window.art.setting.update(serverSetting);
+      } else {
+        window.art.setting.add(serverSetting);
+      }
+    }catch(_){}
+  }
 }
 
 
@@ -1522,6 +1611,271 @@ function isExactEnglishSubTrack(s){
   if(!s)return false;
   var lab=((s.label||"")+"").toLowerCase().trim();
   return isPureEnglishSubTrack(s)&&(lab==="english"||lab==="english [full]"||lab==="eng");
+}
+
+function buildSubtitleControl(subtitles, activeUrl){
+  subtitles = subtitles || (cur.res && cur.res.subtitles) || [];
+  var trackList = [
+    { name: "sub-off", html: "Off (Matikan Subtitle)", value: "", default: !activeUrl }
+  ];
+  var exactEn = null, anyEn = null;
+  for(var i=0; i<subtitles.length; i++){
+    var s = subtitles[i];
+    if(!exactEn && isExactEnglishSubTrack(s)) exactEn = s;
+    else if(!anyEn && isPureEnglishSubTrack(s)) anyEn = s;
+    trackList.push({
+      name: "sub-track-" + i,
+      html: s.label || ("Subtitle " + (i+1)) + (s.default ? " (Default)" : ""),
+      value: s.url || "",
+      default: s.url === activeUrl
+    });
+  }
+  var en = exactEn || anyEn;
+  if(en && en.url){
+    trackList.push({
+      name: "sub-os-merge",
+      html: "🇮🇩 Indonesian (Smart Fansub & Merge)",
+      value: "os_merge:" + en.url,
+      default: !!(activeUrl && (activeUrl.indexOf("os_merge:") === 0 || activeUrl.indexOf("gtx+:") === 0 || activeUrl.indexOf("gtx:") === 0))
+    });
+    trackList.push({
+      name: "sub-ai",
+      html: "🤖 Indonesian (AI Fansub)",
+      value: "ai:" + en.url,
+      default: !!(activeUrl && activeUrl.indexOf("ai:") === 0)
+    });
+  }
+  trackList.push({
+    name: "sub-search-os",
+    html: "🔍 [+] Cari Subtitle Indonesia (OpenSubtitles)",
+    value: "__opensubtitles_search__",
+    default: false
+  });
+  trackList.push({
+    name: "sub-load-file",
+    html: "📁 [+] Muat File Subtitle (.srt / .vtt)",
+    value: "__custom_file__",
+    default: false
+  });
+
+  return {
+    name: "sub-control",
+    position: "right",
+    index: 12,
+    style: { marginRight: "4px" },
+    html: '<span class="art-ctrl-btn art-ctrl-sub-btn" title="Pilih Subtitle"><svg class="art-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="3"></rect><path d="M7 15h3M14 15h3M7 11h10"></path></svg><span>SUB</span></span>',
+    tooltip: "Pilih Subtitle",
+    selector: trackList,
+    onSelect: function(item){
+      var sel = $("pm-subs");
+      if(sel){
+        sel.value = item.value;
+        if(typeof sel.onchange === "function") sel.onchange();
+      } else {
+        switchSubtitleTrack(item.value);
+      }
+      if(window.art && window.art.notice) window.art.notice.show = "Subtitle: " + item.html;
+      return '<span class="art-ctrl-btn art-ctrl-sub-btn" title="Pilih Subtitle"><svg class="art-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="3"></rect><path d="M7 15h3M14 15h3M7 11h10"></path></svg><span>SUB</span></span>';
+    },
+    mounted: function($control){
+      $control.addEventListener("click", function(e){
+        if(e.target.closest(".art-selector-item")){
+          $control.classList.remove("show");
+          $control.classList.remove("art-selector-show");
+          return;
+        }
+        $control.classList.toggle("show");
+        $control.classList.toggle("art-selector-show");
+      });
+    }
+  };
+}
+
+function syncArtplayerSubtitles(subtitles, activeUrl){
+  if(!window.art) return;
+  subtitles = subtitles || (cur.res && cur.res.subtitles) || [];
+  var subCtrl = buildSubtitleControl(subtitles, activeUrl);
+  var trackList = subCtrl.selector;
+
+  try{
+    if(window.art.controls){
+      if(window.art.controls.cache && window.art.controls.cache.has("sub-control")){
+        window.art.controls.remove("sub-control");
+      }
+      window.art.controls.add(subCtrl);
+    }
+  }catch(_){}
+
+  var curActive = trackList.find(function(t){ return t.default; }) || trackList[0];
+  var settingItem = {
+    name: "subtitle-track",
+    width: 290,
+    html: "Pilih Subtitle",
+    tooltip: curActive.html,
+    selector: trackList,
+    onSelect: function(item){
+      var sel = $("pm-subs");
+      if(sel){
+        sel.value = item.value;
+        if(typeof sel.onchange === "function") sel.onchange();
+      } else {
+        switchSubtitleTrack(item.value);
+      }
+      if(window.art && window.art.notice) window.art.notice.show = "Subtitle: " + item.html;
+      return item.html;
+    }
+  };
+  try{
+    if(window.art.setting){
+      if(window.art.setting.cache && window.art.setting.cache.has("subtitle-track")){
+        window.art.setting.update(settingItem);
+      } else {
+        window.art.setting.add(settingItem);
+      }
+    }
+    if(window.art.subtitle){
+      try { window.art.subtitle.show = !!activeUrl; } catch(_){}
+    }
+    if(window.art.template && window.art.template.$player){
+      window.art.template.$player.classList.toggle("art-subtitle-show", !!activeUrl);
+    }
+  }catch(_){}
+}
+
+function buildQualityControl(levels, activeQ){
+  levels = levels || (cur.res && cur.res.hlsLevels && cur.res.hlsLevels.length ? cur.res.hlsLevels : (cur.res && cur.res.variants)) || [];
+  activeQ = activeQ || "Auto";
+  if(window._hls && (window._hls.autoLevelEnabled || window._hls.currentLevel === -1)){
+    activeQ = "Auto";
+  } else if(window._hls && window._hls.currentLevel >= 0 && levels.length){
+    for(var i=0; i<levels.length; i++){
+      if(levels[i].levelIdx === window._hls.currentLevel){
+        activeQ = levels[i].q; break;
+      }
+    }
+  } else if(cur.res && cur.res.picked && cur.res.picked.q){
+    activeQ = cur.res.picked.q;
+  }
+
+  var selList = [];
+  if(levels && levels.length > 0){
+    selList = levels.map(function(l, lidx){
+      var label = l.q || (l.height ? (l.height + "p") : ("Level " + (lidx + 1)));
+      return {
+        html: label,
+        levelIdx: l.levelIdx !== undefined ? l.levelIdx : lidx,
+        default: label.toLowerCase() === activeQ.toLowerCase()
+      };
+    });
+  } else {
+    selList = [{ html: "Auto", levelIdx: -1, default: true }];
+  }
+
+  return {
+    name: "quality",
+    position: "right",
+    index: 10,
+    style: { marginRight: "4px" },
+    html: '<span class="art-ctrl-btn art-ctrl-quality-btn" id="art-quality-label" title="Pilih Resolusi Video"><svg class="art-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg><span class="art-quality-text">' + activeQ.toUpperCase() + '</span></span>',
+    tooltip: "Pilih Resolusi Video",
+    selector: selList,
+    onSelect: function(item){
+      switchQ(item.html);
+      if(window.art && window.art.notice) window.art.notice.show = "Resolusi: " + item.html;
+      return '<span class="art-ctrl-btn art-ctrl-quality-btn" id="art-quality-label" title="Pilih Resolusi Video"><svg class="art-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg><span class="art-quality-text">' + item.html.toUpperCase() + '</span></span>';
+    },
+    mounted: function($control){
+      $control.addEventListener("click", function(e){
+        if(e.target.closest(".art-selector-item")){
+          $control.classList.remove("show");
+          $control.classList.remove("art-selector-show");
+          return;
+        }
+        $control.classList.toggle("show");
+        $control.classList.toggle("art-selector-show");
+      });
+    }
+  };
+}
+
+function syncArtplayerQuality(levels){
+  if(!window.art) return;
+  levels = levels || (cur.res && cur.res.hlsLevels && cur.res.hlsLevels.length ? cur.res.hlsLevels : (cur.res && cur.res.variants)) || [];
+  
+  var activeQ = "Auto";
+  if(window._hls && (window._hls.autoLevelEnabled || window._hls.currentLevel === -1)){
+    activeQ = "Auto";
+  } else if(window._hls && window._hls.currentLevel >= 0 && levels.length){
+    for(var i=0; i<levels.length; i++){
+      if(levels[i].levelIdx === window._hls.currentLevel){
+        activeQ = levels[i].q; break;
+      }
+    }
+  } else if(cur.res && cur.res.picked && cur.res.picked.q){
+    activeQ = cur.res.picked.q;
+  }
+
+  var qualityControl = buildQualityControl(levels, activeQ);
+
+  try{
+    if(window.art.controls){
+      if(window.art.controls.cache && window.art.controls.cache.has("quality")){
+        window.art.controls.remove("quality");
+      }
+      window.art.controls.add(qualityControl);
+    }
+  }catch(_){}
+
+  try{
+    var qualitySetting = {
+      name: "video-quality",
+      width: 220,
+      html: "Kualitas Video",
+      tooltip: activeQ.toUpperCase(),
+      selector: qualityControl.selector,
+      onSelect: function(item){
+        switchQ(item.html);
+        if(window.art && window.art.notice) window.art.notice.show = "Resolusi: " + item.html;
+        return item.html;
+      }
+    };
+    if(window.art.setting && window.art.setting.cache && window.art.setting.cache.has("video-quality")){
+      window.art.setting.update(qualitySetting);
+    } else if(window.art.setting){
+      window.art.setting.add(qualitySetting);
+    }
+  }catch(_){}
+}
+
+function syncTranslateBtn(){
+  if(!window.art || !window.art.controls) return;
+  var trControl = {
+    name: "tr-btn",
+    position: "right",
+    index: 14,
+    style: { marginRight: "4px" },
+    html: '<span class="art-ctrl-btn art-ctrl-tr-btn' + (cur.translate ? ' active' : '') + '" title="Terjemahan Bahasa Indonesia (ID)"><svg class="art-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg><span>TR-ID</span></span>',
+    tooltip: cur.translate ? "Terjemahan Indonesia: Aktif" : "Terjemahan Indonesia: Nonaktif",
+    click: function(){
+      setTranslate(!cur.translate);
+    }
+  };
+  try{
+    if(window.art.controls.cache && window.art.controls.cache.has("tr-btn")){
+      window.art.controls.remove("tr-btn");
+    }
+    window.art.controls.add(trControl);
+  }catch(_){}
+
+  if(window.art.setting && window.art.setting.cache && window.art.setting.cache.has("subtitle-translate")){
+    try{
+      window.art.setting.update({
+        name: "subtitle-translate",
+        tooltip: cur.translate ? "Aktif" : "Nonaktif",
+        switch: !!cur.translate
+      });
+    }catch(_){}
+  }
 }
 
 function renderSubtitles(subtitles, activeUrl){
@@ -1705,6 +2059,7 @@ function renderSubtitles(subtitles, activeUrl){
       toast("Subtitle: Off");
     }
   };
+  syncArtplayerSubtitles(subtitles, activeUrl);
 }
 
 function closeOpenSubtitlesPicker(){
@@ -1730,7 +2085,14 @@ function openOpenSubtitlesPicker(subtitles, baseSubUrl){
     if(e.key==="Escape"){ e.preventDefault(); e.stopPropagation(); closeOpenSubtitlesPicker(); }
   });
   var token=cur.playToken;
-  window.Tatap.searchOpenSubtitles(cur.title, cur.slug, cur.ep, "id").then(function(res){
+  var altTitle=(cur.meta&&(cur.meta.title_romaji||cur.meta.title_english))||"";
+  var seasonNum=0;
+  if(cur.meta){
+    if(typeof cur.meta.season_number==="number") seasonNum=cur.meta.season_number;
+    else if(typeof cur.meta.season==="number") seasonNum=cur.meta.season;
+    else if(typeof cur.meta.season==="string" && /^\d+$/.test(cur.meta.season.trim())) seasonNum=parseInt(cur.meta.season.trim(),10);
+  }
+  window.Tatap.searchOpenSubtitles(cur.title, cur.slug, cur.ep, "id", seasonNum, altTitle).then(function(res){
     if(cur.playToken!==token||!document.getElementById("os-picker"))return;
     var items=(res&&res.success&&res.data&&res.data.items)||[];
     if(!items.length){
@@ -1938,92 +2300,84 @@ function syncNativeTextTrack(vttText, cues, langCode){
   }
 }
 function toggleFullscreen(){
-  var v=$("vid");
-  var stage=document.querySelector(".ambient-stage");
-  var fsEl=document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement||document.msFullscreenElement;
-  var isVideoFs=(v&&v.webkitDisplayingFullscreen);
+  var fsEl = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement;
+  var isFs = !!fsEl || (window.art && window.art.fullscreen) || (window._isTatapDesktopFs === true);
+  var targetState = !isFs;
 
-  if(fsEl||isVideoFs){
-    if(document.exitFullscreen){
-      try{document.exitFullscreen().catch(function(){});}catch(e){}
-    }else if(document.webkitExitFullscreen){
-      try{document.webkitExitFullscreen();}catch(e){}
-    }else if(document.mozCancelFullScreen){
-      try{document.mozCancelFullScreen();}catch(e){}
-    }else if(document.msExitFullscreen){
-      try{document.msExitFullscreen();}catch(e){}
-    }
-    if(v&&v.webkitExitFullscreen&&v.webkitDisplayingFullscreen){
-      try{v.webkitExitFullscreen();}catch(e){}
-    }
-    if(typeof window.tatap_set_fullscreen === "function"){
-      try{ window.tatap_set_fullscreen(false); }catch(_){}
-    }
-    return;
+  // 1. Sinkronkan ke native Go WebView2 jika ada (Windows Portable)
+  window._isTatapDesktopFs = targetState;
+  if(typeof window.tatap_set_fullscreen === "function"){
+    try{ window.tatap_set_fullscreen(targetState); }catch(_){}
   }
 
-  // iOS Safari video native fullscreen
-  if(v&&v.webkitEnterFullscreen&&(!stage||!stage.requestFullscreen)){
-    try{
-      v.webkitEnterFullscreen();
-      return;
-    }catch(err){
-      console.warn("webkitEnterFullscreen error:",err);
+  // 2. Jalankan fullscreen pada Artplayer jika aktif
+  var artHandled = false;
+  if(window.art){
+    try {
+      window.art.fullscreen = targetState;
+      artHandled = true;
+    } catch(e){
+      console.warn("art.fullscreen toggle error:", e);
     }
   }
 
-  var enterVideoFs=function(){
-    if(!v)return;
-    if(v.requestFullscreen){
-      try{v.requestFullscreen().catch(function(){if(v.webkitEnterFullscreen)v.webkitEnterFullscreen();});}catch(e){if(v.webkitEnterFullscreen)v.webkitEnterFullscreen();}
-    }else if(v.webkitRequestFullscreen){
-      try{v.webkitRequestFullscreen();}catch(e){if(v.webkitEnterFullscreen)v.webkitEnterFullscreen();}
-    }else if(v.mozRequestFullScreen){
-      try{v.mozRequestFullScreen();}catch(e){}
-    }else if(v.msRequestFullscreen){
-      try{v.msRequestFullscreen();}catch(e){}
-    }else if(v.webkitEnterFullscreen){
-      try{v.webkitEnterFullscreen();}catch(e){}
-    }
-  };
-
-  if(stage&&(stage.requestFullscreen||stage.webkitRequestFullscreen||stage.mozRequestFullScreen||stage.msRequestFullscreen)){
-    var p;
-    try{
-      if(stage.requestFullscreen){
-        p=stage.requestFullscreen();
-      }else if(stage.webkitRequestFullscreen){
-        p=stage.webkitRequestFullscreen();
-      }else if(stage.mozRequestFullScreen){
-        p=stage.mozRequestFullScreen();
-      }else if(stage.msRequestFullscreen){
-        p=stage.msRequestFullscreen();
+  // 3. Fallback browser HTML5 requestFullscreen jika Artplayer belum menangani fullscreen
+  if(!artHandled){
+    var stage = (window.art && window.art.template && window.art.template.$player) || document.getElementById("player-modal") || document.querySelector(".ambient-stage");
+    if(targetState){
+      if(!fsEl && stage){
+        var req = stage.requestFullscreen || stage.webkitRequestFullscreen || stage.mozRequestFullScreen || stage.msRequestFullscreen;
+        if(req){
+          try{
+            var p = req.call(stage);
+            if(p && p.catch) p.catch(function(){});
+          }catch(_){}
+        }
       }
-      if(p&&p.catch){
-        p.catch(function(err){
-          console.warn("stage.requestFullscreen rejected, falling back to video:",err);
-          enterVideoFs();
-        });
+    } else {
+      if(fsEl){
+        var exit = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen || document.msExitFullscreen;
+        if(exit){
+          try{
+            var p = exit.call(document);
+            if(p && p.catch) p.catch(function(){});
+          }catch(_){}
+        }
       }
-    }catch(err){
-      console.warn("stage fullscreen exception, falling back to video:",err);
-      enterVideoFs();
     }
-  }else{
-    enterVideoFs();
   }
+
+  var pm = $("player-modal");
+  if(pm){
+    if(targetState) pm.classList.add("is-fullscreen");
+    else pm.classList.remove("is-fullscreen");
+  }
+
+  var stageEl = document.querySelector(".ambient-stage");
+  if(stageEl){
+    if(targetState) stageEl.classList.add("is-fullscreen");
+    else stageEl.classList.remove("is-fullscreen");
+  }
+  syncFullscreenSubtitles();
 }
 function paintCue(){
   var box=$("pm-subs-overlay");
   var v=$("vid");
-  if(!box||!v)return;
+  if(!box)return;
   var s=box.querySelector("span");
-  if(!s)return;
-  if($("player-modal").classList.contains("hidden")){s.innerHTML="";return;}
-  var t=v.currentTime||0;
+  if($("player-modal").classList.contains("hidden")){
+    if(s){ s.innerHTML=""; s._last=""; }
+    if(window.art && window.art.template && window.art.template.$subtitle){
+      window.art.template.$subtitle.innerHTML="";
+    }
+    return;
+  }
+  var t = (window.art && typeof window.art.currentTime === "number" && !isNaN(window.art.currentTime))
+          ? window.art.currentTime
+          : ((v && !isNaN(v.currentTime)) ? v.currentTime : 0);
   var subTime = t - (cur.subDelay || 0.0);
   if(isVideoFullscreen() && !isDesktopEnv()){
-    if(s._last!==""){s.innerHTML="";s._last="";}
+    if(s && s._last!==""){s.innerHTML="";s._last="";}
     box.style.display="none";
   }else{
     box.style.display="";
@@ -2035,7 +2389,14 @@ function paintCue(){
       }
     }
     var html=activeParts.join("<br>");
-    if(s._last!==html){s.innerHTML=html;s._last=html;}
+    if(s && s._last!==html){s.innerHTML=html;s._last=html;}
+    if(window.art && window.art.template && window.art.template.$subtitle){
+      var artSub = window.art.template.$subtitle;
+      if(artSub._last !== html){
+        artSub.innerHTML = html ? ("<div class='art-subtitle-inner'>" + html + "</div>") : "";
+        artSub._last = html;
+      }
+    }
   }
   checkSkipTimes(t);
 }
@@ -2043,64 +2404,76 @@ function paintCue(){
 function checkSkipTimes(currentTime){
   var btn=$("pm-skip-btn");
   var label=$("pm-skip-label");
-  if(!btn){return;}
+  var artBtn=$("art-aniskip-btn");
+  var artLabel=$("art-aniskip-text");
+  if(!btn && !artBtn){return;}
   var v=$("vid");
   var intro=cur.intro;
   var outro=cur.outro;
   var isAutoSkip = !!(window.settings && window.settings.autoSkip !== undefined ? window.settings.autoSkip : cur.autoSkip);
+  var t = (typeof currentTime === "number" && !isNaN(currentTime)) ? currentTime : ((window.art && !isNaN(window.art.currentTime)) ? window.art.currentTime : (v ? v.currentTime : 0));
+  var dur = (window.art && !isNaN(window.art.duration)) ? window.art.duration : (v ? v.duration : Infinity);
 
-  var inIntro=(intro && intro.end > intro.start && intro.end > 0 && currentTime >= intro.start && currentTime < (intro.end - 0.5));
-  var inOutro=(outro && outro.end > outro.start && outro.end > 0 && currentTime >= outro.start && currentTime < (outro.end - 0.5));
+  var inIntro=(intro && intro.end > intro.start && intro.end > 0 && t >= intro.start && t < (intro.end - 0.5));
+  var inOutro=(outro && outro.end > outro.start && outro.end > 0 && t >= outro.start && t < (outro.end - 0.5));
 
   if(inIntro){
-    cur.activeSkipTarget = Math.min((v && v.duration) || Infinity, intro.end + 0.5);
+    cur.activeSkipTarget = Math.min(dur, intro.end + 0.5);
     if(isAutoSkip && !cur.hasAutoSkippedIntro){
       cur.hasAutoSkippedIntro = true;
-      if(v){
-        v.currentTime = cur.activeSkipTarget;
-        btn.classList.add("hidden");
-        cur.activeSkipTarget = 0;
-        toast("⏩ Lewati Opening otomatis", 1500);
-        return;
-      }
+      if(window.art) window.art.currentTime = cur.activeSkipTarget;
+      else if(v) v.currentTime = cur.activeSkipTarget;
+      if(btn) btn.classList.add("hidden");
+      if(artBtn) artBtn.classList.add("hidden");
+      cur.activeSkipTarget = 0;
+      toast("⏩ Lewati Opening otomatis", 1500);
+      return;
     }
     if(label) label.textContent = "Lewati Opening (S)";
-    btn.classList.remove("hidden");
+    if(artLabel) artLabel.textContent = "Lewati Opening (S)";
+    if(btn) btn.classList.remove("hidden");
+    if(artBtn) artBtn.classList.remove("hidden");
   }else if(inOutro){
-    cur.activeSkipTarget = Math.min((v && v.duration) || Infinity, outro.end + 0.5);
+    cur.activeSkipTarget = Math.min(dur, outro.end + 0.5);
     if(isAutoSkip && !cur.hasAutoSkippedOutro){
       cur.hasAutoSkippedOutro = true;
-      if(v){
-        v.currentTime = cur.activeSkipTarget;
-        btn.classList.add("hidden");
-        cur.activeSkipTarget = 0;
-        toast("⏩ Lewati Ending otomatis", 1500);
-        return;
-      }
+      if(window.art) window.art.currentTime = cur.activeSkipTarget;
+      else if(v) v.currentTime = cur.activeSkipTarget;
+      if(btn) btn.classList.add("hidden");
+      if(artBtn) artBtn.classList.add("hidden");
+      cur.activeSkipTarget = 0;
+      toast("⏩ Lewati Ending otomatis", 1500);
+      return;
     }
     if(label) label.textContent = "Lewati Ending (S)";
-    btn.classList.remove("hidden");
+    if(artLabel) artLabel.textContent = "Lewati Ending (S)";
+    if(btn) btn.classList.remove("hidden");
+    if(artBtn) artBtn.classList.remove("hidden");
   }else{
     cur.activeSkipTarget = 0;
-    btn.classList.add("hidden");
+    if(btn) btn.classList.add("hidden");
+    if(artBtn) artBtn.classList.add("hidden");
   }
 }
 
 function doSkip(){
   if(cur.activeSkipTarget && cur.activeSkipTarget > 0){
     var v=$("vid");
-    if(v){
-      var t = v.currentTime;
+    if(window.art || v){
+      var t = (window.art && !isNaN(window.art.currentTime)) ? window.art.currentTime : (v ? v.currentTime : 0);
       if(cur.intro && t >= cur.intro.start && t < cur.intro.end){
         cur.hasAutoSkippedIntro = true;
       }
       if(cur.outro && t >= cur.outro.start && t < cur.outro.end){
         cur.hasAutoSkippedOutro = true;
       }
-      v.currentTime = cur.activeSkipTarget;
+      if(window.art) window.art.currentTime = cur.activeSkipTarget;
+      else if(v) v.currentTime = cur.activeSkipTarget;
       var btn=$("pm-skip-btn");
       if(btn) btn.classList.add("hidden");
-      toast("⏩ Melompat ke "+formatTime(v.currentTime), 1500);
+      var artBtn=$("art-aniskip-btn");
+      if(artBtn) artBtn.classList.add("hidden");
+      toast("⏩ Melompat ke "+formatTime(cur.activeSkipTarget), 1500);
       cur.activeSkipTarget = 0;
       return true;
     }
@@ -2159,7 +2532,16 @@ function prefetchSubtitleTrack(url, ref, langCode){
   if(isDual) qs += "&dual=true";
   if(isOs){
     // Konteks judul & episode agar backend dapat mencari rilis yang cocok di OpenSubtitles
+    var altTitle=(cur.meta&&(cur.meta.title_romaji||cur.meta.title_english))||"";
+    var seasonNum=0;
+    if(cur.meta){
+      if(typeof cur.meta.season_number==="number") seasonNum=cur.meta.season_number;
+      else if(typeof cur.meta.season==="number") seasonNum=cur.meta.season;
+      else if(typeof cur.meta.season==="string" && /^\d+$/.test(cur.meta.season.trim())) seasonNum=parseInt(cur.meta.season.trim(),10);
+    }
     qs += "&title=" + encodeURIComponent(cur.title || "") + "&slug=" + encodeURIComponent(cur.slug || "") + "&ep=" + encodeURIComponent(cur.ep || 1);
+    if(seasonNum) qs += "&season=" + encodeURIComponent(seasonNum);
+    if(altTitle) qs += "&alt_title=" + encodeURIComponent(altTitle);
   }
   var prox = "/api/player/sub?" + qs;
 
@@ -2250,6 +2632,10 @@ function switchSubtitleTrack(url, langCode){
         osp.textContent="[" + waitMsg + "]";
         osp._last=osp.textContent;
       }
+    }
+    if(window.art && window.art.template && window.art.template.$subtitle){
+      window.art.template.$subtitle.innerHTML = "<div class='art-subtitle-inner' style='opacity:0.75;font-size:14px;'>[" + esc(waitMsg) + "]</div>";
+      window.art.template.$subtitle._last = waitMsg;
     }
   }
   var ref=cur.res&&cur.res.referer||"";
@@ -2383,25 +2769,31 @@ var TouchGestures = {
     if(this.armed) return;
     this.armed = true;
     var stage = document.querySelector(".ambient-stage");
-    var v = $("vid");
-    if(!stage || !v) return;
+    if(!stage) return;
 
     var self = this;
+    var getVid = function(){
+      return (window.art && window.art.template && window.art.template.$video) || $("vid");
+    };
 
     stage.addEventListener("touchstart", function(e){
       if(e.touches.length !== 1) return;
+      var v = getVid();
+      if(!v) return;
       var touch = e.touches[0];
       var rect = stage.getBoundingClientRect();
       self.startX = touch.clientX;
       self.startY = touch.clientY;
       self.mode = null;
-      self.initVol = v.volume;
+      self.initVol = (window.art && typeof window.art.volume === "number") ? window.art.volume : (v.volume || 1);
       self.initBright = self.currentBright;
-      self.initTime = v.currentTime;
+      self.initTime = (window.art && typeof window.art.currentTime === "number") ? window.art.currentTime : (v.currentTime || 0);
     }, {passive: true});
 
     stage.addEventListener("touchmove", function(e){
       if(e.touches.length !== 1) return;
+      var v = getVid();
+      if(!v) return;
       var touch = e.touches[0];
       var rect = stage.getBoundingClientRect();
       var dx = touch.clientX - self.startX;
@@ -2417,7 +2809,7 @@ var TouchGestures = {
       }
 
       if(self.mode === "seek"){
-        var dur = v.duration || 1400;
+        var dur = (window.art && window.art.duration) || v.duration || 1400;
         var scrub = (dx / rect.width) * 90; // geser penuh layar = +/- 90 detik
         var target = Math.max(0, Math.min(dur, self.initTime + scrub));
         var diff = Math.round(target - self.initTime);
@@ -2430,6 +2822,7 @@ var TouchGestures = {
       } else if(self.mode === "volume"){
         var deltaV = (-dy / rect.height) * 1.5;
         var nv = Math.max(0, Math.min(1, self.initVol + deltaV));
+        if(window.art) window.art.volume = nv;
         v.volume = nv;
         v.muted = (nv === 0);
         var ic = nv === 0 ? '<svg class="ui-icon"><use href="#icon-volume-mute"/></svg>' : (nv < 0.5 ? '<svg class="ui-icon"><use href="#icon-volume-mid"/></svg>' : '<svg class="ui-icon"><use href="#icon-volume-high"/></svg>');
@@ -2447,8 +2840,10 @@ var TouchGestures = {
     }, {passive: true});
 
     stage.addEventListener("touchend", function(e){
+      var v = getVid();
       if(self.mode === "seek" && self._targetSeek != null){
-        v.currentTime = self._targetSeek;
+        if(window.art) window.art.currentTime = self._targetSeek;
+        else if(v) v.currentTime = self._targetSeek;
         self._targetSeek = null;
         self.mode = null;
         return;
@@ -2467,13 +2862,17 @@ var TouchGestures = {
         // Double Tap
         self.lastTap = 0; // reset
         if(relX < 0.35){
-          v.currentTime = Math.max(0, v.currentTime - 10);
+          if(window.art) window.art.seek = Math.max(0, window.art.currentTime - 10);
+          else if(v) v.currentTime = Math.max(0, v.currentTime - 10);
           self.triggerRipple("left", "-10s");
         } else if(relX > 0.65){
-          v.currentTime = Math.min(v.duration || 99999, v.currentTime + 10);
+          var dur = (window.art && window.art.duration) || (v && v.duration) || 99999;
+          if(window.art) window.art.seek = Math.min(dur, window.art.currentTime + 10);
+          else if(v) v.currentTime = Math.min(dur, v.currentTime + 10);
           self.triggerRipple("right", "+10s");
         } else {
-          if(v.paused) v.play(); else v.pause();
+          if(window.art) window.art.toggle();
+          else if(v) { if(v.paused) v.play(); else v.pause(); }
         }
       } else {
         self.lastTap = now;
@@ -2494,28 +2893,36 @@ function armAutohide(){
     TvNavigationManager.showPlayerControls();
   };
   var wake=function(){
-    if(!v.hasAttribute("controls"))v.setAttribute("controls","");
+    var vid = $("vid");
+    if(vid && vid.hasAttribute("controls")) vid.removeAttribute("controls");
     show();
   };
   ["mousemove","touchstart","click"].forEach(function(ev){stage.addEventListener(ev,wake,{passive:true});});
-  v.addEventListener("play",show);
-  v.addEventListener("pause",function(){
-    clearTimeout(TvNavigationManager.getHudTimer && TvNavigationManager.getHudTimer());
-    v.setAttribute("controls","");
-    if(stage) stage.classList.remove("idle");
-    if(shell) shell.classList.remove("idle");
-    TvNavigationManager.setPlayerState(TvNavigationManager.PLAYER_HUD_ACTIVE);
-  });
-  v.addEventListener("seeking",show);
+  if(v){
+    v.removeAttribute("controls");
+    v.addEventListener("play",show);
+    v.addEventListener("pause",function(){
+      clearTimeout(TvNavigationManager.getHudTimer && TvNavigationManager.getHudTimer());
+      v.removeAttribute("controls");
+      if(stage) stage.classList.remove("idle");
+      if(shell) shell.classList.remove("idle");
+      TvNavigationManager.setPlayerState(TvNavigationManager.PLAYER_HUD_ACTIVE);
+    });
+    v.addEventListener("seeking",show);
+  }
   show();
 }
 function playUrl(url,referrer,sub,subRef,resumeTime,token){
   var pm = $("player-modal");
   var v=$("vid");
   if(!pm || pm.classList.contains("hidden") || (token && cur.playToken !== token)){
+    if(window.art){try{window.art.destroy(false);window.art=null;}catch(e){}}
     if(window._hls){try{window._hls.destroy();window._hls=null;}catch(e){}}
     if(v){try{v.pause();v.removeAttribute("src");v.load();}catch(e){}}
     return;
+  }
+  if(window.art){
+    try{window.art.destroy(false);window.art=null;}catch(e){}
   }
   if(v){
     v.muted=false;
@@ -2532,191 +2939,798 @@ function playUrl(url,referrer,sub,subRef,resumeTime,token){
   var onCan=function(){
     $("pm-spinner").classList.add("hidden");
     if(resumeTime && resumeTime > 0){
-      try{v.currentTime = resumeTime;}catch(e){}
+      try{
+        if(window.art) window.art.currentTime = resumeTime;
+        else if(v) v.currentTime = resumeTime;
+      }catch(e){}
     }
   };
-  v.addEventListener("canplay",onCan,{once:true});
+  if(v) v.addEventListener("canplay",onCan,{once:true});
   var cleanPath = (url || "").split("?")[0].toLowerCase();
   var isSeg = cleanPath.endsWith(".ts") || cleanPath.endsWith(".ts.jpg") || cleanPath.endsWith(".mp4") || cleanPath.endsWith(".aac");
-  var isHls = !isSeg && ((url.indexOf(".m3u8") >= 0) || (url.indexOf("format=m3u8") >= 0) || (url.indexOf("/api/hls") >= 0) || (url.indexOf("/hls/playlist") >= 0));
-  if(window.Hls&&window.Hls.isSupported()&&isHls){
-    if(window._hls){try{window._hls.destroy();}catch(e){}}
-    var h=new Hls({
-      maxBufferLength:30,
-      maxMaxBufferLength:60,
-      maxBufferSize:40*1000*1000,
-      startLevel:-1,
-      capLevelToPlayerSize:true,
-      fragLoadingMaxRetry:6,
-      manifestLoadingMaxRetry:4,
-      levelLoadingMaxRetry:4,
-      fragLoadingMaxRetryTimeout:12000,
-      backBufferLength:30,
-      liveSyncDurationCount:2,
-      maxFragLookUpTolerance:0.5,
-      nudgeOffset:0.1,
-      nudgeMaxRetry:5,
-      maxStarvationDelay:4,
-      highBufferWatchdogPeriod:2,
-      testBandwidth:false,
-      progressive:true,
-      // Estimasi bandwidth awal dinaikkan dari default HLS.js (500 kbps) ke
-      // 3 Mbit/s. Dengan startLevel:-1 + testBandwidth:false, HLS.js memulai
-      // dari estimasi ini; pada 500 kbps player butuh 10-30 detik untuk
-      // meramping ke resolusi layak sehingga terasa lambat saat start.
-      // 3 Mbit/s adalah titik tengah yang realistis untuk koneksi lokal
-      // (proxy di 127.0.0.1) tanpa langsung melompat ke 1080p di jaringan
-      // lambat. Sejalan dengan Android yang memakai initial estimate 25 Mbps.
-      abrEwmaDefaultEstimate:3*1000*1000,
-      // Buffer awal lebih agresif supaya playback tidak sering rebuffer
-      // saat kualitas naik (ABR switch = renegosiasi + unduhan baru).
-      startBufferDuration:3,
-      lowLatencyMode:false,
-      defaultAudioCodec:"mp4a.40.2",
-      enableWorker:true
+  var isHls = !isSeg && ((url.indexOf(".m3u8") >= 0) || (url.indexOf("format=m3u8") >= 0) || (url.indexOf("/api/hls") >= 0) || (url.indexOf("/hls/playlist") >= 0) || (url.indexOf("/api/player/video") >= 0) || (url.indexOf("master") >= 0) || (url.indexOf("playlist") >= 0) || (cur.res && cur.res.variants && cur.res.variants.length > 0));
+
+  var artContainer = $("artplayer-container");
+  if(typeof Artplayer !== "undefined" && artContainer){
+    Artplayer.FULLSCREEN_WEB_IN_BODY = false;
+    if(window.art){
+      try{
+        if(window.art.fullscreenWeb) window.art.fullscreenWeb = false;
+        if(window.art.fullscreen) window.art.fullscreen = false;
+        if(window.art.template && window.art.template.$player && window.art.template.$player.parentNode){
+          window.art.template.$player.parentNode.removeChild(window.art.template.$player);
+        }
+        window.art.destroy(true);
+        window.art = null;
+      }catch(_){}
+    }
+    document.querySelectorAll("body > .art-video-player").forEach(function(el){
+      try{ el.parentNode.removeChild(el); }catch(_){}
     });
-    window._hls=h;
-    h._networkRetryCount = 0;
-    h._mediaRetryCount = 0;
-    h.on(Hls.Events.FRAG_LOADED, function(){
-      h._networkRetryCount = 0;
-      h._mediaRetryCount = 0;
-    });
-    h.on(Hls.Events.AUDIO_TRACKS_UPDATED,function(ev,data){
-      if(data&&data.audioTracks&&data.audioTracks.length){
-        var isDub = (cur.mode === "dub");
-        var selectedIdx = -1;
-        if(isDub){
-          for(var ai=0;ai<data.audioTracks.length;ai++){
-            var t = data.audioTracks[ai];
-            var lang = (t.lang || "").toLowerCase();
-            var name = (t.name || "").toLowerCase();
-            if(lang === "en" || name.indexOf("english") >= 0 || name.indexOf("dub") >= 0){
-              selectedIdx = ai;
-              break;
+    document.body.classList.remove("art-fullscreen-web");
+    artContainer.innerHTML = "";
+    var epTitle = (cur.title || "") + (cur.ep ? (" - Episode " + cur.ep) : "");
+    var initialSubCtrl = buildSubtitleControl((cur.res && cur.res.subtitles) || [], validSub);
+    var initialQualityCtrl = buildQualityControl((cur.res && cur.res.hlsLevels) || (cur.res && cur.res.variants), cur.quality || "Auto");
+    var initialSubLabel = (initialSubCtrl.selector.find(function(t){ return t.default; }) || {}).html || "Off";
+
+    var art = new Artplayer({
+      container: artContainer,
+      url: prox,
+      type: isHls ? "m3u8" : "mp4",
+      title: epTitle,
+      poster: cur.poster || "",
+      volume: (v && v.volume !== undefined) ? v.volume : 1.0,
+      isLive: false,
+      muted: false,
+      autoplay: true,
+      autoSize: false,
+      autoMini: false,
+      screenshot: true,
+      setting: true,
+      loop: false,
+      flip: true,
+      playbackRate: true,
+      aspectRatio: true,
+      hotkey: false,
+      pip: true,
+      fullscreen: true,
+      fullscreenWeb: true,
+      miniProgressBar: true,
+      mutex: true,
+      backdrop: true,
+      playsInline: true,
+      autoPlayback: true,
+      theme: "#38bdf8",
+      lang: "id",
+      settings: [
+        {
+          name: "subtitle-track",
+          width: 290,
+          html: "Pilih Subtitle",
+          tooltip: initialSubLabel,
+          selector: initialSubCtrl.selector,
+          onSelect: function(item){
+            var sel = $("pm-subs");
+            if(sel){ sel.value = item.value; if(typeof sel.onchange === "function") sel.onchange(); }
+            else switchSubtitleTrack(item.value);
+            if(window.art && window.art.notice) window.art.notice.show = "Subtitle: " + item.html;
+            return item.html;
+          }
+        },
+        {
+          name: "video-quality",
+          width: 220,
+          html: "Kualitas Video",
+          tooltip: (cur.quality || "Auto").toUpperCase(),
+          selector: initialQualityCtrl.selector,
+          onSelect: function(item){
+            switchQ(item.html);
+            if(window.art && window.art.notice) window.art.notice.show = "Resolusi: " + item.html;
+            return item.html;
+          }
+        },
+        {
+          name: "subtitle-size",
+          width: 220,
+          html: "Ukuran Subtitle",
+          tooltip: (cur.subSize || "m").toUpperCase(),
+          selector: [
+            { name: "sub-sz-s", html: "Kecil (S)", value: "s", default: cur.subSize === "s" },
+            { name: "sub-sz-m", html: "Sedang (M)", value: "m", default: !cur.subSize || cur.subSize === "m" },
+            { name: "sub-sz-l", html: "Besar (L)", value: "l", default: cur.subSize === "l" }
+          ],
+          onSelect: function(item){
+            setSubSize(item.value);
+            return item.html;
+          }
+        },
+        {
+          name: "subtitle-delay",
+          width: 240,
+          html: "Sinkronisasi Delay",
+          tooltip: (cur.subDelay || 0).toFixed(2) + "s",
+          selector: [
+            { html: "-0.50 detik", value: -0.5 },
+            { html: "-0.25 detik (Pintasan: ,)", value: -0.25 },
+            { html: "0.0s (Reset Sinkron)", value: 0, default: true },
+            { html: "+0.25 detik (Pintasan: .)", value: 0.25 },
+            { html: "+0.50 detik", value: 0.5 }
+          ],
+          onSelect: function(item){
+            if(item.value === 0) setSubDelay(0.0, true);
+            else adjustSubDelay(item.value);
+            return (cur.subDelay > 0 ? "+" : "") + (cur.subDelay || 0).toFixed(2) + "s";
+          }
+        },
+        {
+          name: "subtitle-translate",
+          width: 240,
+          html: "Terjemahan ID",
+          tooltip: cur.translate ? "Aktif" : "Nonaktif",
+          switch: !!cur.translate,
+          onSwitch: function(state){
+            setTranslate(state);
+            return state;
+          }
+        },
+        {
+          name: "custom-sub-file",
+          width: 260,
+          html: "📁 Muat Subtitle Lokal (.srt/.vtt)",
+          click: function(){
+            var fi = $("pm-custom-sub-file");
+            if(fi) fi.click();
+          }
+        },
+        {
+          name: "ai-settings-modal",
+          width: 260,
+          html: "🤖 Pengaturan AI Fansub (:ai)",
+          click: function(){
+            openAiSettingsModal();
+          }
+        },
+        {
+          name: "launch-mpv",
+          width: 240,
+          html: "🚀 Putar di MPV Eksternal",
+          click: function(){
+            playMPV();
+          }
+        }
+      ],
+      controls: [
+        {
+          name: "prev-btn",
+          position: "left",
+          index: 11,
+          html: '<span class="art-ctrl-btn art-ctrl-ep-btn" id="art-ctrl-prev" title="Episode Sebelumnya (p)"><svg class="art-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg><span>PREV</span></span>',
+          tooltip: "Episode Sebelumnya (p)",
+          click: function(){ stepEp(-1); }
+        },
+        {
+          name: "next-btn",
+          position: "left",
+          index: 12,
+          html: '<span class="art-ctrl-btn art-ctrl-ep-btn" id="art-ctrl-next" title="Episode Berikutnya (n)"><span>NEXT</span><svg class="art-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg></span>',
+          tooltip: "Episode Berikutnya (n)",
+          click: function(){ stepEp(1); }
+        },
+        initialQualityCtrl,
+        initialSubCtrl,
+        {
+          name: "tr-btn",
+          position: "right",
+          index: 14,
+          style: { marginRight: "4px" },
+          html: '<span class="art-ctrl-btn art-ctrl-tr-btn' + (cur.translate ? ' active' : '') + '" title="Terjemahan Bahasa Indonesia (ID)"><svg class="art-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg><span>TR-ID</span></span>',
+          tooltip: cur.translate ? "Terjemahan Indonesia: Aktif" : "Terjemahan Indonesia: Nonaktif",
+          click: function(){ setTranslate(!cur.translate); }
+        },
+        {
+          name: "sep-1",
+          position: "right",
+          index: 15,
+          html: '<span class="art-ctrl-divider"></span>'
+        },
+        {
+          name: "ai-btn",
+          position: "right",
+          index: 20,
+          html: '<span class="art-ctrl-btn art-ctrl-ai-btn" title="Pengaturan AI Fansub (:ai)"><svg class="art-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg><span>AI</span></span>',
+          tooltip: "Pengaturan AI Fansub (:ai)",
+          click: function(){ openAiSettingsModal(); },
+          mounted: function($control){
+            $control.addEventListener("click", function(e){
+              e.stopPropagation();
+              openAiSettingsModal();
+            });
+          }
+        },
+        {
+          name: "mpv-btn",
+          position: "right",
+          index: 22,
+          html: '<span class="art-ctrl-btn art-ctrl-mpv-btn" title="Putar di MPV Eksternal"><svg class="art-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>MPV</span></span>',
+          tooltip: "Putar di MPV Eksternal",
+          click: function(){ playMPV(); },
+          mounted: function($control){
+            $control.addEventListener("click", function(e){
+              e.stopPropagation();
+              playMPV();
+            });
+          }
+        },
+        {
+          name: "sep-2",
+          position: "right",
+          index: 25,
+          html: '<span class="art-ctrl-divider"></span>'
+        },
+        {
+          name: "close-btn",
+          position: "right",
+          index: 95,
+          html: '<span class="art-ctrl-btn art-ctrl-close-btn" title="Tutup Pemutar (Esc)"><svg class="art-ctrl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></span>',
+          tooltip: "Tutup Pemutar (Esc)",
+          click: function(){ closePlayer(); },
+          mounted: function($control){
+            $control.addEventListener("click", function(e){
+              e.stopPropagation();
+              closePlayer();
+            });
+          }
+        }
+      ],
+      layers: [
+        {
+          name: "header-layer",
+          html: '<div class="art-header-layer" id="art-header-layer">' +
+                  '<div class="art-header-title" id="art-header-title">' + esc(epTitle) + '</div>' +
+                  '<button type="button" class="art-header-close" id="art-header-close" title="Tutup Pemutar Video (Esc)">✕</button>' +
+                '</div>',
+          style: {
+            position: "absolute",
+            top: "0",
+            left: "0",
+            right: "0",
+            zIndex: 25,
+            pointerEvents: "none"
+          },
+          mounted: function($layer){
+            var btn = $layer.querySelector("#art-header-close");
+            if(btn){
+              btn.addEventListener("click", function(e){
+                e.stopPropagation();
+                closePlayer();
+              });
+            }
+          },
+          click: function(e){
+            if(e.target && (e.target.id === "art-header-close" || e.target.closest("#art-header-close"))){
+              closePlayer();
             }
           }
-        } else {
-          for(var ai=0;ai<data.audioTracks.length;ai++){
-            var t = data.audioTracks[ai];
-            var lang = (t.lang || "").toLowerCase();
-            var name = (t.name || "").toLowerCase();
-            if(lang === "ja" || lang === "jpn" || name.indexOf("japan") >= 0 || t.default){
-              selectedIdx = ai;
-              break;
+        },
+        {
+          name: "aniskip-layer",
+          html: '<button id="art-aniskip-btn" class="art-aniskip-btn hidden" title="Lewati Opening/Ending (Tekan S)">' +
+                '<svg style="width:14px;height:14px;vertical-align:middle;margin-right:6px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>' +
+                '<span id="art-aniskip-text">Lewati Opening (S)</span>' +
+                '</button>',
+          style: {
+            position: "absolute",
+            bottom: "76px",
+            right: "24px",
+            zIndex: 25,
+            pointerEvents: "auto"
+          },
+          click: function(){
+            var artBtn = $("art-aniskip-btn");
+            if(artBtn && !artBtn.classList.contains("hidden")){
+              doSkip();
             }
           }
         }
-        if(selectedIdx !== -1){
-          h.audioTrack = selectedIdx;
-        } else if(h.audioTrack === -1 || h.audioTrack === undefined){
-          h.audioTrack = 0;
+      ],
+      customType: {
+        m3u8: function(video, playUrl, artInstance){
+          if(window.Hls && window.Hls.isSupported()){
+            if(window._hls){ try{ window._hls.destroy(); }catch(e){} }
+            var h = new Hls({
+              maxBufferLength: 60,
+              maxMaxBufferLength: 120,
+              maxBufferSize: 60 * 1000 * 1000,
+              startLevel: -1,
+              capLevelToPlayerSize: true,
+              fragLoadingMaxRetry: 6,
+              manifestLoadingMaxRetry: 4,
+              levelLoadingMaxRetry: 4,
+              fragLoadingRetryDelay: 800,
+              fragLoadingMaxRetryTimeout: 16000,
+              backBufferLength: 30,
+              liveSyncDurationCount: 2,
+              maxFragLookUpTolerance: 0.5,
+              nudgeOffset: 0.1,
+              nudgeMaxRetry: 5,
+              maxStarvationDelay: 4,
+              highBufferWatchdogPeriod: 2,
+              testBandwidth: false,
+              progressive: true,
+              abrEwmaDefaultEstimate: 3 * 1000 * 1000,
+              startBufferDuration: 2,
+              startFragPrefetch: true,
+              lowLatencyMode: false,
+              defaultAudioCodec: "mp4a.40.2",
+              enableWorker: true
+            });
+            window._hls = h;
+            artInstance.hls = h;
+            h._networkRetryCount = 0;
+            h._mediaRetryCount = 0;
+            h.on(Hls.Events.FRAG_LOADED, function(){
+              h._networkRetryCount = 0;
+              h._mediaRetryCount = 0;
+            });
+            h.on(Hls.Events.AUDIO_TRACKS_UPDATED, function(ev, data){
+              if(data && data.audioTracks && data.audioTracks.length){
+                var isDub = (cur.mode === "dub");
+                var selectedIdx = -1;
+                if(isDub){
+                  for(var ai=0; ai<data.audioTracks.length; ai++){
+                    var t = data.audioTracks[ai];
+                    var lang = (t.lang || "").toLowerCase();
+                    var name = (t.name || "").toLowerCase();
+                    if(lang === "en" || name.indexOf("english") >= 0 || name.indexOf("dub") >= 0){
+                      selectedIdx = ai; break;
+                    }
+                  }
+                } else {
+                  for(var ai=0; ai<data.audioTracks.length; ai++){
+                    var t = data.audioTracks[ai];
+                    var lang = (t.lang || "").toLowerCase();
+                    var name = (t.name || "").toLowerCase();
+                    if(lang === "ja" || lang === "jpn" || name.indexOf("japan") >= 0 || t.default){
+                      selectedIdx = ai; break;
+                    }
+                  }
+                }
+                if(selectedIdx !== -1) h.audioTrack = selectedIdx;
+                else if(h.audioTrack === -1 || h.audioTrack === undefined) h.audioTrack = 0;
+
+                if(data.audioTracks.length > 1 && artInstance && artInstance.setting){
+                  var aList = data.audioTracks.map(function(trk, ti){
+                    return {
+                      html: trk.name || trk.lang || ("Audio " + (ti+1)),
+                      trackIdx: ti,
+                      default: ti === (selectedIdx !== -1 ? selectedIdx : 0)
+                    };
+                  });
+                  var activeAudioName = (data.audioTracks[h.audioTrack] && (data.audioTracks[h.audioTrack].name || data.audioTracks[h.audioTrack].lang)) || "Audio";
+                  try{
+                    var audioSettingItem = {
+                      name: "audio-track",
+                      width: 220,
+                      html: "Trek Audio (Sulih Suara)",
+                      tooltip: activeAudioName,
+                      selector: aList,
+                      onSelect: function(item){
+                        h.audioTrack = item.trackIdx;
+                        toast("Trek Audio: " + item.html);
+                        return item.html;
+                      }
+                    };
+                    if(artInstance.setting.cache && artInstance.setting.cache.has("audio-track")){
+                      artInstance.setting.update(audioSettingItem);
+                    } else {
+                      artInstance.setting.add(audioSettingItem);
+                    }
+                  }catch(_){}
+                }
+              }
+            });
+            h.on(Hls.Events.MANIFEST_PARSED, function(ev, data){
+              if(data && data.levels && data.levels.length > 1){
+                var hlsVars = [];
+                for(var li=0; li<data.levels.length; li++){
+                  var lvl = data.levels[li];
+                  var lHeight = lvl.height || 0;
+                  var lLabel = lHeight ? (lHeight + "p") : ("Level " + (li+1));
+                  hlsVars.push({ q: lLabel, levelIdx: li, height: lHeight, url: lvl.url || (lvl.details && lvl.details.url) || "" });
+                }
+                hlsVars.sort(function(a,b){ return b.height - a.height; });
+                hlsVars.unshift({ q: "Auto", levelIdx: -1, height: 99999, url: "" });
+                cur.res = cur.res || {};
+                cur.res.hlsLevels = hlsVars;
+                renderVariants();
+                syncArtplayerQuality(hlsVars);
+                if(cur.quality && cur.quality.toLowerCase() !== "auto" && cur.quality.toLowerCase() !== "best"){
+                  var targetQ = cur.quality.toLowerCase();
+                  for(var qk=0; qk<hlsVars.length; qk++){
+                    if(hlsVars[qk].q.toLowerCase().indexOf(targetQ) >= 0 || targetQ.indexOf(hlsVars[qk].q.toLowerCase()) >= 0){
+                      if(hlsVars[qk].levelIdx !== -1){
+                        h.currentLevel = hlsVars[qk].levelIdx;
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
+            });
+            h.on(Hls.Events.LEVEL_SWITCHED, function(ev, data){
+              if(cur.res && cur.res.hlsLevels){
+                var curIdx = h.currentLevel;
+                var autoMode = (h.autoLevelEnabled || curIdx === -1);
+                var activeLabel = "AUTO";
+                if(!autoMode){
+                  for(var hi=0; hi<cur.res.hlsLevels.length; hi++){
+                    if(cur.res.hlsLevels[hi].levelIdx === curIdx){
+                      activeLabel = cur.res.hlsLevels[hi].q.toUpperCase();
+                      break;
+                    }
+                  }
+                }
+                var sel = $("pm-quality-select");
+                if(sel && !sel.classList.contains("user-interacting")){
+                  sel.value = autoMode ? "Auto" : activeLabel.toLowerCase();
+                }
+                syncArtplayerQuality();
+              }
+            });
+            h.loadSource(playUrl);
+            h.attachMedia(video);
+            h.on(Hls.Events.ERROR, function(ev, d){
+              if(!d) return;
+              if(d.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR || d.details === "bufferStalledError"){
+                try{
+                  if(video && video.buffered && video.buffered.length > 0 && !video.paused){
+                    var ct = video.currentTime;
+                    for(var bi = 0; bi < video.buffered.length; bi++){
+                      var bStart = video.buffered.start(bi);
+                      if(bStart > ct && (bStart - ct) <= 0.35){
+                        video.currentTime = bStart + 0.05;
+                        video.play().catch(function(){});
+                        return;
+                      }
+                    }
+                  }
+                  h.startLoad();
+                }catch(_){}
+                return;
+              }
+              if(d.fatal){
+                if(d.type === Hls.ErrorTypes.NETWORK_ERROR){
+                  h._networkRetryCount = (h._networkRetryCount || 0) + 1;
+                  if(h._networkRetryCount <= 4){
+                    $("pm-status").textContent = "mencoba memulihkan koneksi stream (" + h._networkRetryCount + "/4)...";
+                    setTimeout(function(){ try{ h.startLoad(); }catch(_){} }, 600);
+                    return;
+                  }
+                } else if(d.type === Hls.ErrorTypes.MEDIA_ERROR){
+                  h._mediaRetryCount = (h._mediaRetryCount || 0) + 1;
+                  if(h._mediaRetryCount <= 3){
+                    $("pm-status").textContent = "mencoba memulihkan codec media (" + h._mediaRetryCount + "/3)...";
+                    setTimeout(function(){ try{ h.recoverMediaError(); }catch(_){} }, 500);
+                    return;
+                  }
+                }
+                $("pm-status").textContent = "player error: " + (d.type || "fatal") + " — " + (d.details || "");
+                try{ h.destroy(); }catch(_){}
+                return;
+              }
+              if(d.details === "fragLoadError" || d.details === "manifestLoadError" || d.details === "networkError"){
+                $("pm-status").textContent = "gagal load: " + (d.details || "network");
+              }
+            });
+          } else if(video.canPlayType("application/vnd.apple.mpegurl")){
+            video.src = playUrl;
+          }
         }
       }
     });
-    h.on(Hls.Events.MANIFEST_PARSED,function(ev,data){
-      if(data&&data.levels&&data.levels.length>1){
-        var hlsVars=[];
-        for(var li=0;li<data.levels.length;li++){
-          var lvl=data.levels[li];
-          var lHeight = lvl.height || 0;
-          var lLabel = lHeight ? (lHeight + "p") : ("Level " + (li+1));
-          hlsVars.push({q: lLabel, levelIdx: li, height: lHeight, url: lvl.url || (lvl.details && lvl.details.url) || ""});
-        }
-        // Urutkan dari tertinggi ke terendah
-        hlsVars.sort(function(a,b){return b.height - a.height;});
-        // Tambahkan opsi Auto di awal
-        hlsVars.unshift({q: "Auto", levelIdx: -1, height: 99999, url: ""});
-        cur.res = cur.res || {};
-        cur.res.hlsLevels = hlsVars;
-        renderVariants();
-        // Terapkan kualitas yang cocok jika user memilih kualitas tertentu
-        if(cur.quality && cur.quality.toLowerCase() !== "auto" && cur.quality.toLowerCase() !== "best"){
-          var targetQ = cur.quality.toLowerCase();
-          for(var qk=0; qk<hlsVars.length; qk++){
-            if(hlsVars[qk].q.toLowerCase().indexOf(targetQ) >= 0 || targetQ.indexOf(hlsVars[qk].q.toLowerCase()) >= 0){
-              if(hlsVars[qk].levelIdx !== -1){
-                h.currentLevel = hlsVars[qk].levelIdx;
+
+    window.art = art;
+
+    if(art.template && art.template.$video){
+      var oldV = $("vid");
+      if(oldV && oldV !== art.template.$video && oldV.parentNode){
+        try{ oldV.parentNode.removeChild(oldV); }catch(_){}
+      }
+      art.template.$video.id = "vid";
+      art.template.$video.removeAttribute("controls");
+      art.template.$video.setAttribute("controlsList", "nodownload nofullscreen noremoteplayback");
+      art.template.$video.removeAttribute("disablePictureInPicture");
+      art.template.$video.disablePictureInPicture = false;
+      v = art.template.$video;
+    }
+
+    art.on("control", function(show){
+      var hdr = $("art-header-layer");
+      if(hdr){
+        hdr.style.opacity = show ? "1" : "0";
+      }
+    });
+
+    // Monitor Fullscreen Handler terintegrasi dengan launcher Windows Portable (1 Monitor)
+    art.on("fullscreen", function(state){
+      window._isTatapDesktopFs = !!state;
+      if(typeof window.tatap_set_fullscreen === "function"){
+        try{ window.tatap_set_fullscreen(state); }catch(_){}
+      }
+      var pm = $("player-modal");
+      if(pm){
+        if(state) pm.classList.add("is-fullscreen");
+        else pm.classList.remove("is-fullscreen");
+      }
+      var stageEl = document.querySelector(".ambient-stage");
+      if(stageEl){
+        if(state) stageEl.classList.add("is-fullscreen");
+        else stageEl.classList.remove("is-fullscreen");
+      }
+      syncFullscreenSubtitles();
+    });
+
+    art.on("fullscreenWeb", function(state){
+      var pm = $("player-modal");
+      if(pm){
+        if(state) pm.classList.add("is-fullscreen-web");
+        else pm.classList.remove("is-fullscreen-web");
+      }
+      var stageEl = document.querySelector(".ambient-stage");
+      if(stageEl){
+        if(state) stageEl.classList.add("is-fullscreen-web");
+        else stageEl.classList.remove("is-fullscreen-web");
+      }
+      document.body.classList.toggle("is-webfs-locked", !!state);
+      syncFullscreenSubtitles();
+    });
+
+    art.on("pip", function(state){
+      toast(state ? "Masuk ke mode Picture-in-Picture (PiP)" : "Keluar dari mode Picture-in-Picture", 1500);
+    });
+
+    art.on("video:ratechange", function(){
+      var sel = $("pm-speed-select");
+      if(sel && art.playbackRate){
+        sel.value = art.playbackRate.toString();
+      }
+    });
+
+    syncSubSize();
+    updatePrevNext();
+    syncArtplayerSubtitles((cur.res && cur.res.subtitles) || [], cur.activeSub);
+    syncArtplayerQuality();
+    syncTranslateBtn();
+
+    var hideSpinner = function(){
+      var sp = $("pm-spinner");
+      if(sp) sp.classList.add("hidden");
+    };
+    art.once("video:canplay", function(){
+      hideSpinner();
+      if(resumeTime && resumeTime > 0){
+        try{ art.currentTime = resumeTime; }catch(e){}
+        resumeTime = 0;
+      }
+    });
+    art.once("video:playing", hideSpinner);
+    art.once("video:loadeddata", hideSpinner);
+    art.once("video:loadedmetadata", hideSpinner);
+
+    art.on("video:timeupdate", function(){
+      paintCue();
+      recordWatchProgress();
+    });
+
+    art.on("video:ended", function(){
+      var endedSlug = cur.slug;
+      var endedEp = cur.ep;
+      if(endedSlug && endedEp){
+        var dur = Math.floor((window.art && window.art.duration) || 0);
+        window.Tatap.saveProgress(endedSlug, endedEp, dur, dur).catch(function(){});
+        recordEpisodeWatched(endedSlug, endedEp);
+      }
+      var idx = -1;
+      for(var i=0; i<cur.eps.length; i++) if(cur.eps[i].ep === cur.ep) idx = i;
+      if(idx >= 0 && idx < cur.eps.length - 1){
+        toast("Episode " + cur.ep + " selesai. Memutar episode berikutnya...", 1500);
+        stepEp(1);
+      } else {
+        closePlayer();
+        toast("Episode " + cur.ep + " selesai diputar (episode terakhir)");
+      }
+    });
+
+    art.on("video:pause", function(){
+      recordWatchProgress(true);
+    });
+  } else {
+    if(window.Hls&&window.Hls.isSupported()&&isHls){
+      if(window._hls){try{window._hls.destroy();}catch(e){}}
+      var h=new Hls({
+        maxBufferLength:60,
+        maxMaxBufferLength:120,
+        maxBufferSize:60*1000*1000,
+        startLevel:-1,
+        capLevelToPlayerSize:true,
+        fragLoadingMaxRetry:6,
+        manifestLoadingMaxRetry:4,
+        levelLoadingMaxRetry:4,
+        fragLoadingRetryDelay:800,
+        fragLoadingMaxRetryTimeout:16000,
+        backBufferLength:30,
+        liveSyncDurationCount:2,
+        maxFragLookUpTolerance:0.5,
+        nudgeOffset:0.1,
+        nudgeMaxRetry:5,
+        maxStarvationDelay:4,
+        highBufferWatchdogPeriod:2,
+        testBandwidth:false,
+        progressive:true,
+        abrEwmaDefaultEstimate:3*1000*1000,
+        startBufferDuration:2,
+        startFragPrefetch:true,
+        lowLatencyMode:false,
+        defaultAudioCodec:"mp4a.40.2",
+        enableWorker:true
+      });
+      window._hls=h;
+      h._networkRetryCount = 0;
+      h._mediaRetryCount = 0;
+      h.on(Hls.Events.FRAG_LOADED, function(){
+        h._networkRetryCount = 0;
+        h._mediaRetryCount = 0;
+      });
+      h.on(Hls.Events.AUDIO_TRACKS_UPDATED,function(ev,data){
+        if(data&&data.audioTracks&&data.audioTracks.length){
+          var isDub = (cur.mode === "dub");
+          var selectedIdx = -1;
+          if(isDub){
+            for(var ai=0;ai<data.audioTracks.length;ai++){
+              var t = data.audioTracks[ai];
+              var lang = (t.lang || "").toLowerCase();
+              var name = (t.name || "").toLowerCase();
+              if(lang === "en" || name.indexOf("english") >= 0 || name.indexOf("dub") >= 0){
+                selectedIdx = ai;
+                break;
+              }
+            }
+          } else {
+            for(var ai=0;ai<data.audioTracks.length;ai++){
+              var t = data.audioTracks[ai];
+              var lang = (t.lang || "").toLowerCase();
+              var name = (t.name || "").toLowerCase();
+              if(lang === "ja" || lang === "jpn" || name.indexOf("japan") >= 0 || t.default){
+                selectedIdx = ai;
                 break;
               }
             }
           }
+          if(selectedIdx !== -1){
+            h.audioTrack = selectedIdx;
+          } else if(h.audioTrack === -1 || h.audioTrack === undefined){
+            h.audioTrack = 0;
+          }
         }
-      }
-    });
-    h.on(Hls.Events.LEVEL_SWITCHED,function(ev,data){
-      if(cur.res && cur.res.hlsLevels){
-        var curIdx = h.currentLevel;
-        var autoMode = (h.autoLevelEnabled || curIdx === -1);
-        var activeLabel = "AUTO";
-        if(!autoMode){
-          for(var hi=0;hi<cur.res.hlsLevels.length;hi++){
-            if(cur.res.hlsLevels[hi].levelIdx === curIdx){
-              activeLabel = cur.res.hlsLevels[hi].q.toUpperCase();
-              break;
+      });
+      h.on(Hls.Events.MANIFEST_PARSED,function(ev,data){
+        if(data&&data.levels&&data.levels.length>1){
+          var hlsVars=[];
+          for(var li=0;li<data.levels.length;li++){
+            var lvl=data.levels[li];
+            var lHeight = lvl.height || 0;
+            var lLabel = lHeight ? (lHeight + "p") : ("Level " + (li+1));
+            hlsVars.push({q: lLabel, levelIdx: li, height: lHeight, url: lvl.url || (lvl.details && lvl.details.url) || ""});
+          }
+          // Urutkan dari tertinggi ke terendah
+          hlsVars.sort(function(a,b){return b.height - a.height;});
+          // Tambahkan opsi Auto di awal
+          hlsVars.unshift({q: "Auto", levelIdx: -1, height: 99999, url: ""});
+          cur.res = cur.res || {};
+          cur.res.hlsLevels = hlsVars;
+          renderVariants();
+          // Terapkan kualitas yang cocok jika user memilih kualitas tertentu
+          if(cur.quality && cur.quality.toLowerCase() !== "auto" && cur.quality.toLowerCase() !== "best"){
+            var targetQ = cur.quality.toLowerCase();
+            for(var qk=0; qk<hlsVars.length; qk++){
+              if(hlsVars[qk].q.toLowerCase().indexOf(targetQ) >= 0 || targetQ.indexOf(hlsVars[qk].q.toLowerCase()) >= 0){
+                if(hlsVars[qk].levelIdx !== -1){
+                  h.currentLevel = hlsVars[qk].levelIdx;
+                  break;
+                }
+              }
             }
           }
         }
-        var sel=$("pm-quality-select");
-        if(sel && !sel.classList.contains("user-interacting")){
-          sel.value = autoMode ? "Auto" : activeLabel.toLowerCase();
-        }
-      }
-    });
-    h.loadSource(prox);
-    h.attachMedia(v);
-    h.on(Hls.Events.ERROR,function(ev,d){
-      if(!d)return;
-      if(d.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR || d.details === "bufferStalledError"){
-        // Recovery stall TANPA seek. Seek 80ms sebelumnya membatalkan fragment
-        // load yang sedang berjalan di HLS.js sehingga memaksa unduhan ulang
-        // segmen dari keyframe lewat proxy Python — mahal dan memperparah stall.
-        try{ h.startLoad(); }catch(_){}
-        return;
-      }
-      if(d.fatal){
-        if(d.type===Hls.ErrorTypes.NETWORK_ERROR){
-          h._networkRetryCount = (h._networkRetryCount || 0) + 1;
-          if(h._networkRetryCount <= 4){
-            $("pm-status").textContent="mencoba memulihkan koneksi stream ("+h._networkRetryCount+"/4)...";
-            setTimeout(function(){ try{h.startLoad();}catch(_){} }, 600);
-            return;
+      });
+      h.on(Hls.Events.LEVEL_SWITCHED,function(ev,data){
+        if(cur.res && cur.res.hlsLevels){
+          var curIdx = h.currentLevel;
+          var autoMode = (h.autoLevelEnabled || curIdx === -1);
+          var activeLabel = "AUTO";
+          if(!autoMode){
+            for(var hi=0;hi<cur.res.hlsLevels.length;hi++){
+              if(cur.res.hlsLevels[hi].levelIdx === curIdx){
+                activeLabel = cur.res.hlsLevels[hi].q.toUpperCase();
+                break;
+              }
+            }
           }
-        }else if(d.type===Hls.ErrorTypes.MEDIA_ERROR){
-          h._mediaRetryCount = (h._mediaRetryCount || 0) + 1;
-          if(h._mediaRetryCount <= 3){
-            $("pm-status").textContent="mencoba memulihkan codec media ("+h._mediaRetryCount+"/3)...";
-            setTimeout(function(){ try{h.recoverMediaError();}catch(_){} }, 500);
-            return;
+          var sel=$("pm-quality-select");
+          if(sel && !sel.classList.contains("user-interacting")){
+            sel.value = autoMode ? "Auto" : activeLabel.toLowerCase();
           }
         }
-        $("pm-status").textContent="player error: "+(d.type||"fatal")+" — "+(d.details||"");
-        try{h.destroy();}catch(_){}
-        return;
-      }
-      // Non-fatal: fragLoadError / manifestLoadError / networkError — kalau host
-      // mati (dramahot.top RST), proxy return 502; HLS.js fire ini. Beri pesan
-      // jelas di spinner & stop setelah beberapa retry agar user tidak hang.
-      var n=(h.config&&h.config.fragLoadingMaxRetry)||4;
-      if(d.details==="fragLoadError"||d.details==="manifestLoadError"||d.details==="networkError"){
-        $("pm-status").textContent="gagal load: "+(d.details||"network");
-      }
-    });
-  }else{
-    v.src=isHls?prox:url;
+      });
+      h.loadSource(prox);
+      h.attachMedia(v);
+      h.on(Hls.Events.ERROR,function(ev,d){
+        if(!d)return;
+        if(d.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR || d.details === "bufferStalledError"){
+          // Recovery stall cerdas: periksa apakah player terjebak pada micro-gap buffer
+          try{
+            if(v && v.buffered && v.buffered.length > 0 && !v.paused){
+              var ct = v.currentTime;
+              for(var bi = 0; bi < v.buffered.length; bi++){
+                var bStart = v.buffered.start(bi);
+                if(bStart > ct && (bStart - ct) <= 0.35){
+                  v.currentTime = bStart + 0.05;
+                  v.play().catch(function(){});
+                  return;
+                }
+              }
+            }
+            h.startLoad();
+          }catch(_){}
+          return;
+        }
+        if(d.fatal){
+          if(d.type===Hls.ErrorTypes.NETWORK_ERROR){
+            h._networkRetryCount = (h._networkRetryCount || 0) + 1;
+            if(h._networkRetryCount <= 4){
+              $("pm-status").textContent="mencoba memulihkan koneksi stream ("+h._networkRetryCount+"/4)...";
+              setTimeout(function(){ try{h.startLoad();}catch(_){} }, 600);
+              return;
+            }
+          }else if(d.type===Hls.ErrorTypes.MEDIA_ERROR){
+            h._mediaRetryCount = (h._mediaRetryCount || 0) + 1;
+            if(h._mediaRetryCount <= 3){
+              $("pm-status").textContent="mencoba memulihkan codec media ("+h._mediaRetryCount+"/3)...";
+              setTimeout(function(){ try{h.recoverMediaError();}catch(_){} }, 500);
+              return;
+            }
+          }
+          $("pm-status").textContent="player error: "+(d.type||"fatal")+" — "+(d.details||"");
+          try{h.destroy();}catch(_){}
+          return;
+        }
+        // Non-fatal: fragLoadError / manifestLoadError / networkError — kalau host
+        // mati (dramahot.top RST), proxy return 502; HLS.js fire ini. Beri pesan
+        // jelas di spinner & stop setelah beberapa retry agar user tidak hang.
+        var n=(h.config&&h.config.fragLoadingMaxRetry)||4;
+        if(d.details==="fragLoadError"||d.details==="manifestLoadError"||d.details==="networkError"){
+          $("pm-status").textContent="gagal load: "+(d.details||"network");
+        }
+      });
+    }else{
+      v.src=isHls?prox:url;
+    }
   }
   if(pm.classList.contains("hidden") || (token && cur.playToken !== token)){
     if(window._hls){try{window._hls.destroy();window._hls=null;}catch(e){}}
     if(v){try{v.pause();v.removeAttribute("src");v.load();}catch(e){}}
     return;
   }
-  v.play().catch(function(err){
-    $("pm-spinner").classList.add("hidden");
-    if(err && err.name === "NotAllowedError"){
-      v.muted = true;
-      v.play().catch(function(){});
-    }
-  });
+  if(v && !window.art){
+    v.play().catch(function(err){
+      $("pm-spinner").classList.add("hidden");
+      if(err && err.name === "NotAllowedError"){
+        v.muted = true;
+        v.play().catch(function(){});
+      }
+    });
+  }
   armAutohide();
 }
 function switchQ(q){
@@ -2735,6 +3749,7 @@ function switchQ(q){
         }
         if(cur.res.picked) cur.res.picked.q = hl.q;
         renderVariants();
+        syncArtplayerQuality();
         return;
       }
     }
@@ -2742,11 +3757,12 @@ function switchQ(q){
 
   // 2. Fallback: reload varian URL jika bukan live multi-level HLS.js
   if(!cur.res||!cur.res.variants)return;
-  var curTime = ($("vid") && $("vid").currentTime) || 0;
+  var curTime = (window.art && !isNaN(window.art.currentTime)) ? window.art.currentTime : (($("vid") && $("vid").currentTime) || 0);
   for(var i=0;i<cur.res.variants.length;i++){
     if(cur.res.variants[i].q.toLowerCase()===qLow){
       cur.res.picked=cur.res.variants[i];
       renderVariants();
+      syncArtplayerQuality();
       var validFallbackSub = (cur.res && cur.res.sub && typeof cur.res.sub === "string" && !/^\d+$/.test(cur.res.sub.trim())) ? cur.res.sub : null;
       playUrl(cur.res.variants[i].url,cur.res.referer,cur.activeSub||validFallbackSub,cur.res.referer,curTime);
       toast("Resolusi: "+cur.res.variants[i].q.toUpperCase());
@@ -2758,8 +3774,26 @@ function switchQ(q){
 function updatePrevNext(){
   var idx=-1;
   for(var i=0;i<cur.eps.length;i++)if(cur.eps[i].ep===cur.ep)idx=i;
-  $("pm-prev").disabled=idx<=0;
-  $("pm-next").disabled=idx<0||idx>=cur.eps.length-1;
+  var hasPrev = idx > 0;
+  var hasNext = idx >= 0 && idx < cur.eps.length - 1;
+  var btnP = $("pm-prev"); if(btnP) btnP.disabled = !hasPrev;
+  var btnN = $("pm-next"); if(btnN) btnN.disabled = !hasNext;
+  if(window.art && window.art.controls){
+    try{
+      var pBtn = window.art.controls["prev-btn"];
+      if(pBtn){
+        pBtn.style.opacity = hasPrev ? "1" : "0.35";
+        pBtn.style.pointerEvents = hasPrev ? "auto" : "none";
+        pBtn.classList.toggle("disabled", !hasPrev);
+      }
+      var nBtn = window.art.controls["next-btn"];
+      if(nBtn){
+        nBtn.style.opacity = hasNext ? "1" : "0.35";
+        nBtn.style.pointerEvents = hasNext ? "auto" : "none";
+        nBtn.classList.toggle("disabled", !hasNext);
+      }
+    }catch(_){}
+  }
 }
 function stepEp(d){
   if($("player-modal").classList.contains("hidden"))return;
@@ -2769,9 +3803,12 @@ function stepEp(d){
   if(nxt){
     cur.ep=nxt.ep;
     updatePrevNext();
+    var epLabel = nxt.ep ? ("Episode " + nxt.ep) : "";
+    var dirLabel = d > 0 ? "Memuat episode berikutnya" : "Memuat episode sebelumnya";
+    toast("⏳ " + dirLabel + (epLabel ? " (" + epLabel + ")" : "") + "...", 2000);
     openPlayer(nxt.ep);
   }
-  else toast(d>0?"Sudah episode terakhir":"Sudah episode pertama");
+  else toast(d>0 ? "Sudah berada di episode terakhir" : "Sudah berada di episode pertama", 1500);
 }
 function closePlayer(){
   // 1. Invalidate all pending async playback tokens immediately
@@ -2779,10 +3816,41 @@ function closePlayer(){
   TvNavigationManager.hidePlayerControls();
   closeOpenSubtitlesPicker();
 
+  try{ recordWatchProgress(true); }catch(e){}
+
+  if(window.art){
+    try{
+      if(window.art.fullscreenWeb) window.art.fullscreenWeb = false;
+      if(window.art.fullscreen) window.art.fullscreen = false;
+      if(window.art.template && window.art.template.$player && window.art.template.$player.parentNode){
+        window.art.template.$player.parentNode.removeChild(window.art.template.$player);
+      }
+      window.art.destroy(true);
+      window.art = null;
+    }catch(e){}
+  }
+  document.querySelectorAll("body > .art-video-player").forEach(function(el){
+    try{ el.parentNode.removeChild(el); }catch(_){}
+  });
+  document.body.classList.remove("art-fullscreen-web");
+  var artCont = $("artplayer-container");
+  if(artCont) artCont.innerHTML = "";
+
+  // Restore placeholder dummy vid if needed for non-playing state
+  var stage = document.querySelector(".ambient-stage");
+  if(stage && !$("vid")){
+    var placeholderVid = document.createElement("video");
+    placeholderVid.id = "vid";
+    placeholderVid.removeAttribute("controls");
+    placeholderVid.setAttribute("controlsList", "nodownload nofullscreen noremoteplayback");
+    placeholderVid.setAttribute("disablePictureInPicture", "");
+    placeholderVid.style.cssText = "display:none !important; width:0; height:0;";
+    stage.appendChild(placeholderVid);
+  }
+
   // 2. Safely stop and destroy video & HLS stream
   var v=$("vid");
-  try{recordWatchProgress(true);}catch(e){}
-  if(v){
+  if(v && v.style.display !== "none"){
     try{v.pause();}catch(e){}
     v.removeAttribute("src");
     try{v.load();}catch(e){}
@@ -2793,10 +3861,27 @@ function closePlayer(){
   syncNativeTextTrack("", [], "");
 
   // 3. Hide modal & spinner
-  $("player-modal").classList.add("hidden");
+  var pmModalClose = $("player-modal");
+  if(pmModalClose){
+    pmModalClose.classList.add("hidden");
+    pmModalClose.style.display = "none";
+  }
   $("pm-spinner").classList.add("hidden");
 
   // 4. Exit fullscreen safely if active
+  if(window.art){
+    try{
+      if(window.art.fullscreenWeb) window.art.fullscreenWeb = false;
+      if(window.art.fullscreen) window.art.fullscreen = false;
+    }catch(_){}
+  }
+  window._isTatapDesktopFs = false;
+  var pm = $("player-modal");
+  if(pm){
+    pm.classList.remove("is-fullscreen");
+    pm.classList.remove("is-fullscreen-web");
+  }
+  document.body.classList.remove("is-webfs-locked");
   if(document.fullscreenElement || document.webkitFullscreenElement){
     try{
       if(document.exitFullscreen) document.exitFullscreen();
@@ -2804,7 +3889,10 @@ function closePlayer(){
     }catch(e){}
   }
   var stageEl = document.querySelector(".ambient-stage");
-  if(stageEl) stageEl.classList.remove("is-fullscreen");
+  if(stageEl){
+    stageEl.classList.remove("is-fullscreen");
+    stageEl.classList.remove("is-fullscreen-web");
+  }
   if(typeof window.tatap_set_fullscreen === "function"){
     try{ window.tatap_set_fullscreen(false); }catch(e){}
   }
@@ -2814,7 +3902,15 @@ function closePlayer(){
   if(savedSlug){
     var tm = $("title-modal");
     if(cur.eps && cur.eps.length > 0){
-      if(tm) tm.classList.remove("hidden");
+      if(tm){
+        tm.classList.remove("hidden");
+        var titleEl = $("tm-title");
+        if(titleEl && cur.title) titleEl.textContent = cur.title;
+        var subEl = $("tm-sub");
+        if(subEl && cur.slug) subEl.textContent = cur.slug;
+        var countEl = $("tm-count");
+        if(countEl && cur.eps) countEl.textContent = cur.eps.length + " episode · " + (cur.mode||"SUB").toUpperCase();
+      }
       renderEpRanges();
       renderEpGrid();
       TvNavigationManager.restoreFocusState(".ep.last-watch");
@@ -2824,6 +3920,9 @@ function closePlayer(){
   }
 }
 function playMPV(){
+  if(window.art){
+    try { window.art.pause(); } catch(_){}
+  }
   window.Tatap.playMPV({slug:cur.slug,title:cur.title,ep:cur.ep||1,mode:cur.mode,quality:cur.quality}).then(function(r){
     toast(r.success?("MPV: "+r.data.picked.q):("ERROR: "+r.error));
   });
@@ -2943,8 +4042,6 @@ function setFallback(r,g,b){
 function startAmbient(){
   var cv=$("ambient"),ctx=null;
   try{ctx=cv.getContext("2d",{willReadFrequently:true});}catch(e){ctx=cv.getContext("2d");}
-  var v=$("vid");
-  v.setAttribute("crossorigin","anonymous");
   var tmp=document.createElement("canvas");
   tmp.width=48;tmp.height=27;
   var tctx=null;
@@ -2953,6 +4050,9 @@ function startAmbient(){
     if(document.hidden)return;
     if(document.body.classList.contains("no-ambient"))return;
     if($("player-modal").classList.contains("hidden"))return;
+    var v=(window.art && window.art.template && window.art.template.$video) || $("vid");
+    if(!v)return;
+    if(!v.hasAttribute("crossorigin")) v.setAttribute("crossorigin","anonymous");
     if(v.paused||v.ended||v.readyState<2||v.videoWidth===0)return;
     if(isVideoFullscreen())return;
     try{
@@ -3118,9 +4218,22 @@ function onKeyPlayer(e){
   }
   var v=$("vid");
   if(e.key==="Escape"){
+    var aiM = $("ai-settings-modal");
+    if(aiM && !aiM.classList.contains("hidden")){
+      closeAiSettingsModal();
+      return;
+    }
     var fsEl=document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement||document.msFullscreenElement;
     if(fsEl){
       // Fullscreen will be closed natively by browser, keep player modal open
+      return;
+    }
+    if(window.art && window.art.fullscreenWeb){
+      window.art.fullscreenWeb = false;
+      return;
+    }
+    if(window._isTatapDesktopFs){
+      toggleFullscreen();
       return;
     }
     if(TvNavigationManager.handleBack(e)) return;
@@ -3144,18 +4257,30 @@ function onKeyPlayer(e){
   var isSpace = e.key===" " || e.key==="Spacebar" || e.code==="Space" || e.keyCode===32;
 
   if(pState === TvNavigationManager.PLAYER_IDLE){
-    if(e.key==="ArrowRight"){e.preventDefault();v.currentTime+=5;return;}
-    if(e.key==="ArrowLeft"){e.preventDefault();v.currentTime-=5;return;}
+    if(e.key==="ArrowRight"){
+      e.preventDefault();
+      if(window.art) window.art.seek = Math.min(window.art.duration || Infinity, window.art.currentTime + 5);
+      else if(v) v.currentTime += 5;
+      return;
+    }
+    if(e.key==="ArrowLeft"){
+      e.preventDefault();
+      if(window.art) window.art.seek = Math.max(0, window.art.currentTime - 5);
+      else if(v) v.currentTime -= 5;
+      return;
+    }
     if(e.key==="Enter"||isSpace){
       e.preventDefault();
       if(document.activeElement && document.activeElement !== document.body && document.activeElement !== v){
         try { document.activeElement.blur(); } catch(_){}
       }
       var skipBtn = $("pm-skip-btn");
-      if(skipBtn && !skipBtn.classList.contains("hidden") && (cur.activeSkipTarget > 0)){
+      var artBtn = $("art-aniskip-btn");
+      if(((skipBtn && !skipBtn.classList.contains("hidden")) || (artBtn && !artBtn.classList.contains("hidden"))) && (cur.activeSkipTarget > 0)){
         doSkip();
       } else {
-        if(v.paused) v.play(); else v.pause();
+        if(window.art) window.art.toggle();
+        else if(v) { if(v.paused) v.play(); else v.pause(); }
       }
       return;
     }
@@ -3165,8 +4290,13 @@ function onKeyPlayer(e){
         TvNavigationManager.showPlayerControls($("pm-speed-select") || $("pm-close"));
         return;
       }
-      v.volume=Math.min(1, Math.round(((v.volume||1)+0.1)*10)/10);
-      toast("Volume: "+Math.round(v.volume*100)+"%", 1200);
+      if(window.art){
+        window.art.volume = Math.min(1, Math.round(((window.art.volume || 1) + 0.1) * 10) / 10);
+        toast("Volume: " + Math.round(window.art.volume * 100) + "%", 1200);
+      } else if(v){
+        v.volume = Math.min(1, Math.round(((v.volume || 1) + 0.1) * 10) / 10);
+        toast("Volume: " + Math.round(v.volume * 100) + "%", 1200);
+      }
       return;
     }
     if(e.key==="ArrowDown"){
@@ -3180,8 +4310,13 @@ function onKeyPlayer(e){
         }
         return;
       }
-      v.volume=Math.max(0, Math.round(((v.volume||1)-0.1)*10)/10);
-      toast("Volume: "+Math.round(v.volume*100)+"%", 1200);
+      if(window.art){
+        window.art.volume = Math.max(0, Math.round(((window.art.volume || 1) - 0.1) * 10) / 10);
+        toast("Volume: " + Math.round(window.art.volume * 100) + "%", 1200);
+      } else if(v){
+        v.volume = Math.max(0, Math.round(((v.volume || 1) - 0.1) * 10) / 10);
+        toast("Volume: " + Math.round(v.volume * 100) + "%", 1200);
+      }
       return;
     }
   }
@@ -3231,10 +4366,12 @@ function onKeyPlayer(e){
       try { document.activeElement.blur(); } catch(_){}
     }
     var skipBtn = $("pm-skip-btn");
-    if(skipBtn && !skipBtn.classList.contains("hidden") && (cur.activeSkipTarget > 0)){
+    var artBtn = $("art-aniskip-btn");
+    if(((skipBtn && !skipBtn.classList.contains("hidden")) || (artBtn && !artBtn.classList.contains("hidden"))) && (cur.activeSkipTarget > 0)){
       doSkip();
     } else {
-      if(v.paused) v.play(); else v.pause();
+      if(window.art) window.art.toggle();
+      else if(v) { if(v.paused) v.play(); else v.pause(); }
     }
     return;
   }
@@ -3245,6 +4382,12 @@ function onKeyPlayer(e){
     }
     toggleFullscreen();
   }
+  else if(e.key==="w"||e.key==="W"){
+    e.preventDefault();
+    if(window.art){
+      window.art.fullscreenWeb = !window.art.fullscreenWeb;
+    }
+  }
   else if(e.key==="n"||e.key==="N"){e.preventDefault();stepEp(1);}
   else if(e.key==="p"||e.key==="P"){e.preventDefault();stepEp(-1);}
   else if(e.key===","||e.key==="<"){e.preventDefault();adjustSubDelay(-0.25);}
@@ -3253,48 +4396,73 @@ function onKeyPlayer(e){
   else if(e.key==="]"||e.key==="}"){e.preventDefault();adjustPlaySpeed(1);}
   else if(e.key==="m"||e.key==="M"){
     e.preventDefault();
-    v.muted=!v.muted;
-    toast(v.muted ? "Muted" : "Unmuted ("+Math.round((v.volume||1)*100)+"%)", 1200);
+    if(window.art){
+      window.art.muted = !window.art.muted;
+      toast(window.art.muted ? "Muted" : "Unmuted (" + Math.round((window.art.volume || 1) * 100) + "%)", 1200);
+    } else if(v){
+      v.muted = !v.muted;
+      toast(v.muted ? "Muted" : "Unmuted (" + Math.round((v.volume || 1) * 100) + "%)", 1200);
+    }
   }
   else if(e.key==="s"||e.key==="S"){
     e.preventDefault();
     var skipBtn = $("pm-skip-btn");
-    var isSkipActive = skipBtn && !skipBtn.classList.contains("hidden") && cur.activeSkipTarget > 0;
+    var artBtn = $("art-aniskip-btn");
+    var isSkipActive = ((skipBtn && !skipBtn.classList.contains("hidden")) || (artBtn && !artBtn.classList.contains("hidden"))) && cur.activeSkipTarget > 0;
     if(isSkipActive){
       doSkip();
       return;
     }
     switchSource();
   }
-  else if(e.key==="ArrowRight"){e.preventDefault();v.currentTime+=5;}
-  else if(e.key==="ArrowLeft"){e.preventDefault();v.currentTime-=5;}
+  else if(e.key==="ArrowRight"){
+    e.preventDefault();
+    if(window.art) window.art.seek = Math.min(window.art.duration || Infinity, window.art.currentTime + 5);
+    else if(v) v.currentTime += 5;
+  }
+  else if(e.key==="ArrowLeft"){
+    e.preventDefault();
+    if(window.art) window.art.seek = Math.max(0, window.art.currentTime - 5);
+    else if(v) v.currentTime -= 5;
+  }
   else if(e.key==="ArrowUp"){
     e.preventDefault();
     v.volume=Math.min(1, Math.round(((v.volume||1)+0.1)*10)/10);
+    if(window.art) try { window.art.volume = v.volume; } catch(_){}
     toast("Volume: "+Math.round(v.volume*100)+"%", 1200);
   }
   else if(e.key==="ArrowDown"){
     e.preventDefault();
     v.volume=Math.max(0, Math.round(((v.volume||1)-0.1)*10)/10);
+    if(window.art) try { window.art.volume = v.volume; } catch(_){}
     toast("Volume: "+Math.round(v.volume*100)+"%", 1200);
   }
 }
 
 function syncSubSize(){
+  var sz = cur.subSize || "m";
   var box=$("pm-subs-overlay");
   if(box){
     box.classList.remove("sz-s","sz-m","sz-l");
-    box.classList.add("sz-"+(cur.subSize||"m"));
+    box.classList.add("sz-"+sz);
   }
   document.querySelectorAll(".sub-size button").forEach(function(b){
-    b.classList.toggle("active",b.getAttribute("data-subsize")===(cur.subSize||"m"));
+    b.classList.toggle("active",b.getAttribute("data-subsize")===sz);
   });
+  if(window.art && window.art.template && window.art.template.$subtitle){
+    var isMobile = /android|iphone|ipad|ipod|windows phone|blackberry|mobile/i.test(navigator.userAgent || "") || window.innerWidth < 768;
+    var fSize = sz === "s" ? (isMobile ? "13px" : "16px") : (sz === "l" ? (isMobile ? "20px" : "28px") : (isMobile ? "16px" : "22px"));
+    window.art.template.$subtitle.style.setProperty("--sub-size", fSize);
+  }
 }
 function setSubSize(sz){
   if(sz!=="s"&&sz!=="m"&&sz!=="l")return;
   cur.subSize=sz;
   try{localStorage.setItem("tatap_subsize",sz);}catch(e){}
   syncSubSize();
+  if(window.art && window.art.setting && window.art.setting.cache && window.art.setting.cache.has("subtitle-size")){
+    try{ window.art.setting.update({ name: "subtitle-size", tooltip: sz.toUpperCase() }); }catch(_){}
+  }
 }
 
 function syncTranslate(){
@@ -3317,6 +4485,8 @@ function setTranslate(on){
     }
   }
   renderSubtitles(subs, cur.activeSub);
+  syncArtplayerSubtitles(subs, cur.activeSub);
+  syncTranslateBtn();
   toast("Translate: "+(cur.translate?"ON":"OFF"));
 }
 
@@ -3435,6 +4605,56 @@ function closeUpdateModal(){
   if(m) m.classList.add("hidden");
 }
 
+async function openAiSettingsModal(){
+  var m = $("ai-settings-modal");
+  if(!m) return;
+  m.classList.remove("hidden");
+  m.style.display = "flex";
+  if(window.TvNavigationManager) window.TvNavigationManager.setPlayerModalState(true);
+  if(window.art){
+    try { window.art.pause(); } catch(e){}
+  } else {
+    var v = $("vid");
+    if(v && !v.paused){
+      try { v.pause(); } catch(e){}
+    }
+  }
+  try{
+    var r = await window.Tatap.getSettings();
+    var d = (r && r.success && r.data) || {};
+    var key = d.translate_apikey || "";
+    var model = d.translate_model || "gemini-2.0-flash";
+    var url = d.translate_apiurl || "https://generativelanguage.googleapis.com/v1beta/openai";
+    var prompt = d.translate_custom_prompt || "";
+
+    if($("ai-input-key")) $("ai-input-key").value = key;
+    if($("ai-input-model")) $("ai-input-model").value = model;
+    if($("ai-input-url")) $("ai-input-url").value = url;
+    if($("ai-input-prompt")) $("ai-input-prompt").value = prompt;
+
+    var provLabel = key ? (key.indexOf("gsk_")===0 ? "Groq" : (key.indexOf("AQ.")===0 || key.indexOf("AIza")===0) ? "Google Gemini" : key.indexOf("sk-")===0 ? "OpenAI" : "Aktif (Kustom)") : "Belum Disetel";
+    if($("ai-status-prov")) {
+      $("ai-status-prov").textContent = provLabel;
+      $("ai-status-prov").className = "badge-status " + (key ? "completed" : "ongoing");
+    }
+    if($("ai-status-model")) $("ai-status-model").textContent = model;
+  }catch(e){
+    console.error("Gagal memuat setelan AI", e);
+  }
+}
+
+function closeAiSettingsModal(){
+  var m = $("ai-settings-modal");
+  if(m){
+    m.classList.add("hidden");
+    m.style.display = "none";
+  }
+  if(window.TvNavigationManager) window.TvNavigationManager.setPlayerModalState(false);
+}
+
+window.openAiSettingsModal = openAiSettingsModal;
+window.closeAiSettingsModal = closeAiSettingsModal;
+
 function checkForUpdate(manualTrigger){
   if(manualTrigger) toast("Memeriksa update ke GitHub…", 2000);
   window.Tatap.checkUpdate(!!manualTrigger).then(function(res){
@@ -3470,6 +4690,7 @@ App = {
   setSubDelay:setSubDelay, adjustSubDelay:adjustSubDelay,
   openDrawer:openDrawer, closeDrawer:closeDrawer,
   openUpdateModal:openUpdateModal, closeUpdateModal:closeUpdateModal,
+  openAiSettingsModal:openAiSettingsModal, closeAiSettingsModal:closeAiSettingsModal,
   checkForUpdate:checkForUpdate,
   closeResumeModal:closeResumeModal, dismissResumeModal:dismissResumeModal,
   openGenreModal:function(){
@@ -3876,6 +5097,105 @@ function init(){
   var um = $("update-modal");
   if(um) um.addEventListener("click", function(e){
     if(e.target === um) closeUpdateModal();
+  });
+
+  // AI Settings Modal & Drawer Triggers
+  var drawerAi = $("drawer-ai-settings");
+  if(drawerAi) drawerAi.addEventListener("click", function(){
+    closeDrawer();
+    openAiSettingsModal();
+  });
+  var pmAiBtn = $("pm-ai-settings");
+  if(pmAiBtn) pmAiBtn.addEventListener("click", function(){
+    openAiSettingsModal();
+  });
+  var aiClose = $("ai-modal-close");
+  if(aiClose) aiClose.addEventListener("click", closeAiSettingsModal);
+  var aiCancel = $("ai-btn-cancel");
+  if(aiCancel) aiCancel.addEventListener("click", closeAiSettingsModal);
+  var aiModal = $("ai-settings-modal");
+  if(aiModal) aiModal.addEventListener("click", function(e){
+    if(e.target === aiModal) closeAiSettingsModal();
+  });
+
+  // AI Presets
+  document.querySelectorAll(".ai-presets-row .btn-preset").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var prov = btn.getAttribute("data-provider");
+      if(prov === "gemini"){
+        if($("ai-input-model")) $("ai-input-model").value = "gemini-2.0-flash";
+        if($("ai-input-url")) $("ai-input-url").value = "https://generativelanguage.googleapis.com/v1beta/openai";
+      } else if(prov === "groq"){
+        if($("ai-input-model")) $("ai-input-model").value = "llama-3.3-70b-versatile";
+        if($("ai-input-url")) $("ai-input-url").value = "https://api.groq.com/openai/v1";
+      } else if(prov === "ollama"){
+        if($("ai-input-model")) $("ai-input-model").value = "gpt-oss:20b";
+        if($("ai-input-url")) $("ai-input-url").value = "https://ollama.com/v1";
+      } else if(prov === "openai"){
+        if($("ai-input-model")) $("ai-input-model").value = "gpt-4o-mini";
+        if($("ai-input-url")) $("ai-input-url").value = "https://api.openai.com/v1";
+      }
+    });
+  });
+
+  // Custom Prompt Templates
+  var tplCasual = $("btn-tpl-casual");
+  if(tplCasual) tplCasual.addEventListener("click", function(){
+    if($("ai-input-prompt")) $("ai-input-prompt").value = "Gaya bahasa santai & casual anak muda (gunakan aku-kamu / gue-lu secara luwes sesuai karakter). Pertahankan istilah anime populer.";
+  });
+  var tplFormal = $("btn-tpl-formal");
+  if(tplFormal) tplFormal.addEventListener("click", function(){
+    if($("ai-input-prompt")) $("ai-input-prompt").value = "Gunakan bahasa Indonesia baku, sopan, dan terstruktur baik. Hindari bahasa gaul/slang.";
+  });
+  var tplWibu = $("btn-tpl-wibu");
+  if(tplWibu) tplWibu.addEventListener("click", function(){
+    if($("ai-input-prompt")) $("ai-input-prompt").value = "Pertahankan honorifik bahasa Jepang (-san, -kun, -chan, Senpai, Sensei, Sama), nama jurus/sihir, dan istilah anime tanpa diterjemahkan.";
+  });
+  var tplReset = $("btn-tpl-reset");
+  if(tplReset) tplReset.addEventListener("click", function(){
+    if($("ai-input-prompt")) $("ai-input-prompt").value = "";
+  });
+
+  // Reset API key
+  var aiResetKey = $("ai-btn-reset-key");
+  if(aiResetKey) aiResetKey.addEventListener("click", function(){
+    window.Tatap.setSetting({ translate_apikey: "" }).then(function(){
+      if($("ai-input-key")) $("ai-input-key").value = "";
+      if($("ai-status-prov")) {
+        $("ai-status-prov").textContent = "Belum Disetel";
+        $("ai-status-prov").className = "badge-status ongoing";
+      }
+      toast("API Key AI berhasil dihapus", 2000);
+    });
+  });
+
+  // Save AI Settings
+  var aiSave = $("ai-btn-save");
+  if(aiSave) aiSave.addEventListener("click", function(){
+    var key = ($("ai-input-key") ? $("ai-input-key").value.trim() : "");
+    var model = ($("ai-input-model") ? $("ai-input-model").value.trim() : "");
+    var url = ($("ai-input-url") ? $("ai-input-url").value.trim() : "");
+    var prompt = ($("ai-input-prompt") ? $("ai-input-prompt").value.trim() : "");
+
+    var payload = {
+      translate_apikey: key,
+      translate_model: model || "gemini-2.0-flash",
+      translate_apiurl: url || "https://generativelanguage.googleapis.com/v1beta/openai",
+      translate_custom_prompt: prompt
+    };
+
+    window.Tatap.setSetting(payload).then(function(){
+      toast("Pengaturan AI Fansub berhasil disimpan!", 2500);
+      closeAiSettingsModal();
+      if(!$("player-modal").classList.contains("hidden") && cur.subLang === "Indonesian (AI)"){
+        cur._subPrefetch = null;
+        if(cur.activeSub){
+          switchSubtitleTrack(cur.activeSub, "id");
+        }
+      }
+    }).catch(function(err){
+      toast("Gagal menyimpan setelan: " + err, 3000);
+    });
   });
 
   var rmClose = $("rm-close");

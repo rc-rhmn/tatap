@@ -10,6 +10,9 @@ import urllib.parse
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from config import OTAKU_BASE, HI_UA
 
+# Kunci AES /api/pk dikirim sebagai hex mentah (bukan HTML/JSON).
+_HEX_RE = re.compile(r"[0-9a-fA-F]{64,}")
+
 HEADERS = {
     "User-Agent": HI_UA,
     "Referer": OTAKU_BASE + "/",
@@ -66,7 +69,7 @@ def _fetch(url: str, referer: str = None, timeout: int = 12) -> str:
         from api.desync import tls_desync_request
         raw = tls_desync_request(url, headers=h, timeout=timeout)
         txt = raw.decode("utf-8", errors="replace")
-        if txt and ("<html" in txt.lower() or "{" in txt):
+        if txt and ("<html" in txt.lower() or "{" in txt or _HEX_RE.fullmatch(txt.strip())):
             return txt
     except Exception:
         pass

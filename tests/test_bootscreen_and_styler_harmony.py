@@ -20,14 +20,16 @@ def test_bootscreen_html_exists_and_valid():
     assert "progress-bar" in content
     assert "status-text" in content
 
-def test_cors_middleware_enabled_and_ping_has_cors():
+def test_host_origin_guard_replaces_wildcard_cors():
     client = TestClient(app)
-    # Simulate a request from a file:// or other origin
-    response = client.get("/api/ping", headers={"Origin": "null"})
-    assert response.status_code == 200
-    assert response.json() == {"success": True, "data": {"status": "running"}}
-    # Check CORS header
-    assert response.headers.get("access-control-allow-origin") == "*"
+    # Request lintas origin (termasuk Origin: null dari file://) harus ditolak.
+    blocked = client.get("/api/ping", headers={"Origin": "null"})
+    assert blocked.status_code == 403
+    assert blocked.headers.get("access-control-allow-origin") is None
+    # Klien native tidak mengirim Origin -> tetap boleh.
+    ok = client.get("/api/ping")
+    assert ok.status_code == 200
+    assert ok.json() == {"success": True, "data": {"status": "running"}}
 
 def test_apprun_has_bootscreen_support():
     apprun_path = os.path.join(os.path.dirname(__file__), "..", "linux", "AppRun")

@@ -10,6 +10,11 @@ from config import DATABASE_PATH
 
 DB_PATH = DATABASE_PATH
 
+
+def _like_escape(s: str) -> str:
+    """Escape wildcard LIKE: slug '%' tidak boleh cocok ke semua baris."""
+    return (s or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 # ---------------------------------------------------------------------------
 # Connection pool + PRAGMA tuning.
 #
@@ -76,17 +81,29 @@ async def _connect_db():
     try:
         yield db
     finally:
+        # Koneksi tidak boleh kembali ke pool dengan transaksi terbuka:
+        # statement yang gagal di tengah write akan ikut ter-commit oleh
+        # request berikutnya, dan writer lain kena "database is locked".
         try:
-            async with _pool_lock:
-                if len(_pool) < _pool_max:
-                    _pool.append(db)
-                    db = None
-        finally:
-            if db is not None:
-                try:
-                    await db.close()
-                except Exception:
-                    pass
+            if db.in_transaction:
+                await db.rollback()
+        except Exception:
+            try:
+                await db.close()
+            finally:
+                db = None
+        if db is not None:
+            try:
+                async with _pool_lock:
+                    if len(_pool) < _pool_max:
+                        _pool.append(db)
+                        db = None
+            finally:
+                if db is not None:
+                    try:
+                        await db.close()
+                    except Exception:
+                        pass
 
 
 @asynccontextmanager
@@ -308,8 +325,10 @@ async def purge_expired_caches() -> dict:
     specs = [
         ("episode_cache", 2 * 3600),
         ("search_cache", 24 * 3600),
-        ("browse_cache", 6 * 3600),
-        ("subtitle_cache", 7 * 24 * 3600),
+        # TTL sweeper harus >= TTL pembaca terpanjang (fallback rilis 30 hari).
+        # Naikkan angka ini kalau ada pembaca baru dengan ttl lebih panjang.
+        ("browse_cache", 30 * 24 * 3600),
+        ("subtitle_cache", 30 * 24 * 3600),
         ("slug_map", 7 * 24 * 3600),
         ("mal_map", 30 * 24 * 3600),
     ]
@@ -442,10 +461,10 @@ async def update_episode_cache_skip_times(slug: str, ep: int, intro: dict, outro
     async with _write_db() as db:
         cur = await db.execute("""UPDATE episode_cache 
                                   SET intro = ?, outro = ?
-                                  WHERE (slug = ? OR slug = ? OR slug LIKE ? OR slug LIKE ?)
+                                  WHERE (slug = ? OR slug = ? OR slug LIKE ? ESCAPE '\\' OR slug LIKE ? ESCAPE '\\')
                                     AND ep = ?""",
                                (intro_json, outro_json, clean, clean_no_prefix,
-                                f"%:{clean_no_prefix}", f"{clean_no_prefix}:%", ep))
+                                f"%:{_like_escape(clean_no_prefix)}", f"{_like_escape(clean_no_prefix)}:%", ep))
         await db.commit()
         return cur.rowcount
 
@@ -455,8 +474,8 @@ async def clear_episode_cache_for_slug(slug: str) -> int:
         return 0
     clean = slug.strip()
     async with _write_db() as db:
-        cur = await db.execute("DELETE FROM episode_cache WHERE slug = ? OR slug LIKE ? OR slug LIKE ?",
-                              (clean, f"{clean}:%", f"%:{clean}"))
+        cur = await db.execute("DELETE FROM episode_cache WHERE slug = ? OR slug LIKE ? ESCAPE '\\' OR slug LIKE ? ESCAPE '\\'",
+                              (clean, f"{_like_escape(clean)}:%", f"%:{_like_escape(clean)}"))
         await db.commit()
         return cur.rowcount
 
@@ -577,8 +596,8 @@ async def add_bookmark(slug: str, title: str, poster: str = "", type: str = "", 
         await db.execute("""INSERT OR REPLACE INTO bookmarks(slug, title, poster, type, sub, eps, score, created_at)
             VALUES(?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
             (clean, title, poster or "", type or "", sub or "", eps or "", float(score or 0.0)))
-        await db.execute("DELETE FROM episode_cache WHERE slug = ? OR slug LIKE ? OR slug LIKE ?",
-                         (clean, f"{clean}:%", f"%:{clean}"))
+        await db.execute("DELETE FROM episode_cache WHERE slug = ? OR slug LIKE ? ESCAPE '\\' OR slug LIKE ? ESCAPE '\\'",
+                         (clean, f"{_like_escape(clean)}:%", f"%:{_like_escape(clean)}"))
         await db.commit()
 
 async def remove_bookmark(slug: str):
@@ -588,8 +607,8 @@ async def remove_bookmark(slug: str):
     clean = slug.strip()
     async with _write_db() as db:
         await db.execute("DELETE FROM bookmarks WHERE slug=?", (clean,))
-        await db.execute("DELETE FROM episode_cache WHERE slug = ? OR slug LIKE ? OR slug LIKE ?",
-                         (clean, f"{clean}:%", f"%:{clean}"))
+        await db.execute("DELETE FROM episode_cache WHERE slug = ? OR slug LIKE ? ESCAPE '\\' OR slug LIKE ? ESCAPE '\\'",
+                         (clean, f"{_like_escape(clean)}:%", f"%:{_like_escape(clean)}"))
         await db.commit()
 
 async def get_bookmarks(limit: int = 200):

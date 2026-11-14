@@ -3048,9 +3048,9 @@ public class MainActivity extends Activity {
                             extractedHasPagingInfo = true;
                         }
                     }
-                    totalPages = extractedTotalPages;
-                    hasNextPage = extractedHasNext;
-                    hasPagingInfo = extractedHasPagingInfo;
+                    final int fTotalPages = extractedTotalPages;
+                    final boolean fHasNextPage = extractedHasNext;
+                    final boolean fHasPagingInfo = extractedHasPagingInfo;
 
                     if ("jadwal".equals(currentView)) {
                         if (dataObj != null) {
@@ -3068,11 +3068,15 @@ public class MainActivity extends Activity {
                     }
 
                     if (canCache) {
-                        tabDataCache.put(cacheKey, new TabCacheEntry(list, count, totalPages, hasNextPage, hasPagingInfo));
+                        tabDataCache.put(cacheKey, new TabCacheEntry(list, count, fTotalPages, fHasNextPage, fHasPagingInfo));
                     }
 
                     runOnUiThread(() -> {
                         if (fetchToken != currentFetchToken.get()) return;
+                        // State paging hanya boleh ditulis di UI thread.
+                        totalPages = fTotalPages;
+                        hasNextPage = fHasNextPage;
+                        hasPagingInfo = fHasPagingInfo;
                         renderAnimeData(list, count);
                     });
                 } else {

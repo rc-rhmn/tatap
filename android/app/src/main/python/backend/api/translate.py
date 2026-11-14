@@ -23,6 +23,10 @@ import httpx as _httpx
 
 TRANSLATE_LOGS = _collections.deque(maxlen=100)
 
+# Batas keras minimal untuk satu panggilan translate GTX (detik).
+# Dinaikkan di test agar timeout parsial bisa diuji tanpa menunggu 60 detik.
+_TRANSLATE_TIMEOUT_FLOOR = 60.0
+
 
 def log_translate(msg: str):
     """Catat pesan log translasi ke ring-buffer in-memory dan stdout (flush)."""
@@ -392,11 +396,11 @@ def build_vtt(cues):
 
 
 def _fmt_ts(seconds):
-    seconds = max(0.0, seconds)
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = seconds - h * 3600 - m * 60
-    return f"{h:02d}:{m:02d}:{s:06.3f}"
+    total_ms = int(round(max(0.0, float(seconds)) * 1000))
+    h, rem = divmod(total_ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
 LANG_NAMES = {
@@ -2974,6 +2978,25 @@ def close_gtx_client():
         _gtx_client = None
 
 
+async def _collect_batch_results(tasks, batch_lines_list, timeout):
+    """Tunggu batch translate dengan timeout keras; hasil SELALU sejajar input.
+
+    Batch yang belum selesai dibatalkan dan diisi teks aslinya `(lines, False)`
+    supaya index cue tidak bergeser. Return (batch_results, jumlah_timeout).
+    """
+    futures = [_asyncio.ensure_future(t) for t in tasks]
+    done, pending = await _asyncio.wait(futures, timeout=timeout)
+    for t in pending:
+        t.cancel()
+    results = []
+    for bl, t in zip(batch_lines_list, futures):
+        if t in done and not t.cancelled() and t.exception() is None:
+            results.append(t.result())
+        else:
+            results.append((bl, False))
+    return results, len(pending)
+
+
 async def call_gtx_translate(cues, src="en", tgt="id", timeout=20.0, mode="gtx+"):
     """Translate via Google Translate Web RPC (Unmetered, Zero-Key, Super Cepat).
     Menggunakan HTTP POST form-encoded dengan HTML preservation (<p id="i">...</p>)
@@ -3147,29 +3170,19 @@ async def call_gtx_translate(cues, src="en", tgt="id", timeout=20.0, mode="gtx+"
     # menjadi 3-4 gelombang sehingga waktu translate turun ~40%.
     # Batas tetap dijaga agar tidak memicu rate-limit Google Translate.
     _workers = min(6, max(1, len(batch_lines_list)))
-    with ThreadPoolExecutor(max_workers=_workers) as executor:
+    executor = ThreadPoolExecutor(max_workers=_workers)
+    try:
         tasks = [loop.run_in_executor(executor, lambda b=bl: _fetch_batch_sync(b)) for bl in batch_lines_list]
-        # Batas waktu keseluruhan (parameter `timeout` sebelumnya tidak
-        # pernah dipakai sehingga fungsi ini tanpa batas waktu). Timeout
-        # per-endpoint 6s x 4 endpoint x mini-batch =~ 96s per batch, jadi
-        # default 20s terlalu agresif untuk episode penuh — gunakan 180s
-        # sebagai batas keras yang tetap mencegah request menggantung.
-        try:
-            batch_results = await _asyncio.wait_for(
-                _asyncio.gather(*tasks), timeout=max(60.0, float(timeout or 180.0))
-            )
-        except _asyncio.TimeoutError:
-            # Timeout: pakai hasil parsial yang sudah tersedia.
-            done_results = []
-            for t in tasks:
-                if t.done() and not t.exception():
-                    done_results.append(t.result())
-                else:
-                    t.cancel()
-            if not done_results:
-                raise RuntimeError("Timeout translate Google Translate.")
-            batch_results = done_results
-            log_translate(f"Timeout translate parsial: {len(done_results)}/{len(tasks)} batch selesai")
+        # Batas waktu keseluruhan. `asyncio.wait` (bukan wait_for+gather) agar
+        # timeout benar-benar memotong waktu tunggu dan batch yang gagal tetap
+        # punya slot sendiri -> index cue tidak bergeser.
+        batch_results, timed_out = await _collect_batch_results(
+            tasks, batch_lines_list, max(_TRANSLATE_TIMEOUT_FLOOR, float(timeout or 180.0))
+        )
+        if timed_out:
+            log_translate(f"Timeout translate parsial: {len(tasks) - timed_out}/{len(tasks)} batch selesai")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     success_count = 0
     for item in batch_results:

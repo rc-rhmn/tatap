@@ -68,20 +68,22 @@ public class ImageLoader {
         imageView.setImageDrawable(new android.graphics.drawable.ColorDrawable(0xFF151822));
         final boolean isTv = TvFocusHelper.isTv(imageView.getContext());
         executor.execute(() -> {
+            HttpURLConnection conn = null;
             try {
                 if (!urlString.equals(imageView.getTag())) {
                     return;
                 }
                 URL url = new URL(urlString);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn = (HttpURLConnection) url.openConnection();
                 conn.setConnectTimeout(7000);
                 conn.setReadTimeout(7000);
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0");
                 conn.connect();
 
-                InputStream input = conn.getInputStream();
-                byte[] data = readFully(input);
-                conn.disconnect();
+                byte[] data;
+                try (InputStream input = conn.getInputStream()) {
+                    data = readFully(input);
+                }
 
                 if (!urlString.equals(imageView.getTag())) {
                     return;
@@ -119,7 +121,12 @@ public class ImageLoader {
                         });
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            } finally {
+                if (conn != null) {
+                    conn.disconnect();
+                }
+            }
         });
     }
 

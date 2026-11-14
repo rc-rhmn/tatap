@@ -580,6 +580,12 @@ def _match_title_tokens(target_q: str, candidate_title: str) -> bool:
     tok_c = {w for w in re.sub(r"[^\w]", " ", t_c).split() if w} - stopwords
     if not tok_q or not tok_c:
         return False
+    # Entri berbeda angka = entri berbeda (film "X 0" != seri "X";
+    # season 2 != season 3). "2nd Season" vs "Season 2" tetap lolos.
+    nums_q = set(re.findall(r"\d+", t_q))
+    nums_c = set(re.findall(r"\d+", t_c))
+    if nums_q != nums_c:
+        return False
     overlap = len(tok_q & tok_c) / max(len(tok_q), 1)
     return overlap >= 0.50
 

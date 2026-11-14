@@ -95,6 +95,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -283,9 +284,9 @@ public class PlayerActivity extends Activity {
     private String streamReferer = "";
     private String masterStreamUrl = "";
     private int currentResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
-    private final List<JSONObject> streamVariants = new ArrayList<>();
+    private volatile List<JSONObject> streamVariants = Collections.emptyList();
     private String activeQuality = "best";
-    private List<JSONObject> subtitleTracks = new ArrayList<>();
+    private volatile List<JSONObject> subtitleTracks = Collections.emptyList();
     private String enSourceSubUrl = "";
     private String idNativeSubUrl = "";
     private String activeSubUrl = "";
@@ -2861,12 +2862,15 @@ public class PlayerActivity extends Activity {
 
                     // Simpan stream variants untuk selector resolusi
                     JSONArray varsArr = data.optJSONArray("variants");
-                    streamVariants.clear();
+                    List<JSONObject> vars = new ArrayList<>();
                     if (varsArr != null) {
                         for (int i = 0; i < varsArr.length(); i++) {
-                            streamVariants.add(varsArr.getJSONObject(i));
+                            vars.add(varsArr.getJSONObject(i));
                         }
                     }
+                    // Swap referensi atomik: pembaca di UI thread tidak pernah
+                    // melihat list setengah jadi.
+                    streamVariants = Collections.unmodifiableList(vars);
                     String pickedQ = "HD";
                     if (data.has("picked")) {
                         pickedQ = data.getJSONObject("picked").optString("q", "HD");
@@ -2900,7 +2904,7 @@ public class PlayerActivity extends Activity {
                         return;
                     }
 
-                    subtitleTracks.clear();
+                    List<JSONObject> newTracks = new ArrayList<>();
                     String foundEnSub = "";
                     String foundExactEnSub = "";
                     String foundAnyEnSub = "";
@@ -2920,7 +2924,7 @@ public class PlayerActivity extends Activity {
                     if (subArr != null) {
                         for (int i = 0; i < subArr.length(); i++) {
                             JSONObject s = subArr.getJSONObject(i);
-                            subtitleTracks.add(s);
+                            newTracks.add(s);
                             String lang = s.optString("lang", "").toLowerCase().trim();
                             String lbl = s.optString("label", "").toLowerCase().trim();
                             String url = s.optString("url", "");
@@ -2956,6 +2960,8 @@ public class PlayerActivity extends Activity {
                             }
                         }
                     }
+                    // Swap referensi atomik setelah list selesai dibangun.
+                    subtitleTracks = Collections.unmodifiableList(newTracks);
 
                     if (!foundExactEnSub.isEmpty()) {
                         foundEnSub = foundExactEnSub;
@@ -3607,7 +3613,8 @@ public class PlayerActivity extends Activity {
     }
 
     private void showQualitySelectorDialog() {
-        if (streamVariants.isEmpty()) {
+        final List<JSONObject> variants = streamVariants;
+        if (variants.isEmpty()) {
             Toast.makeText(this, "Hanya satu kualitas resolusi tersedia untuk video ini", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -3616,8 +3623,8 @@ public class PlayerActivity extends Activity {
 
         List<String> options = new ArrayList<>();
         int selectedIdx = 0;
-        for (int i = 0; i < streamVariants.size(); i++) {
-            JSONObject v = streamVariants.get(i);
+        for (int i = 0; i < variants.size(); i++) {
+            JSONObject v = variants.get(i);
             String q = v.optString("q", "auto");
             boolean isCurrent = q.equalsIgnoreCase(activeQuality)
                     || (rawStreamUrl.equals(v.optString("url", "")) && !rawStreamUrl.isEmpty());
@@ -3626,8 +3633,8 @@ public class PlayerActivity extends Activity {
         }
 
         builder.setSingleChoiceItems(options.toArray(new String[0]), selectedIdx, (dialog, which) -> {
-            if (which >= 0 && which < streamVariants.size()) {
-                JSONObject picked = streamVariants.get(which);
+            if (which >= 0 && which < variants.size()) {
+                JSONObject picked = variants.get(which);
                 String newQ = picked.optString("q", "auto");
                 String newUrl = picked.optString("url", "");
                 dialog.dismiss();
@@ -3890,8 +3897,9 @@ public class PlayerActivity extends Activity {
             }
 
             // 6. Daftar track bahasa lain yang tersedia (misal Spanish, French, Japanese, dsb.)
-            for (int i = 0; i < subtitleTracks.size(); i++) {
-                JSONObject s = subtitleTracks.get(i);
+            final List<JSONObject> tracks = subtitleTracks;
+            for (int i = 0; i < tracks.size(); i++) {
+                JSONObject s = tracks.get(i);
                 String url = s.optString("url", "");
                 String lbl = s.optString("label", "Track " + (i + 1));
                 String lang = s.optString("lang", "").toLowerCase();
@@ -6008,7 +6016,7 @@ public class PlayerActivity extends Activity {
         rawStreamUrl = "";
         activeSubUrl = "";
         masterStreamUrl = "";
-        subtitleTracks.clear();
+        subtitleTracks = Collections.emptyList();
         hasFallbackAttempted = false;
         hasAutoRetriedStream = false;
         consecutiveRecoveryAttempts = 0;

@@ -253,6 +253,10 @@ def tls_desync_request(url: str, headers: dict = None, timeout: float = 10.0, _r
                         loc = h_ln.split(b":", 1)[1].strip().decode("utf-8", errors="replace")
                         if loc:
                             next_url = urllib.parse.urljoin(url, loc)
+                            # Validasi setiap hop redirect: cegah desync dipakai
+                            # sebagai jalur SSRF ke host lokal.
+                            from netguard import assert_public_url
+                            assert_public_url(next_url)
                             raw_sock.close()
                             return tls_desync_request(next_url, headers=headers, timeout=timeout, _redirects=_redirects + 1)
             return _decode_http_body(hdr_part, body_part)

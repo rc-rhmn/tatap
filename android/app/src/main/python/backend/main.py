@@ -65,6 +65,7 @@ def _master_cache_set(url: str, text):
 from collections import OrderedDict as _OrderedDict
 _SEGMENT_CACHE = _OrderedDict()   # url -> (media_type, bytes)
 _SEGMENT_CACHE_MAX_BYTES = 35 * 1024 * 1024  # 35 MB
+_SEGMENT_CACHE_ITEM_MAX = 6 * 1024 * 1024    # 6 MB per segmen (batas item cache)
 _SEGMENT_CACHE_CUR_BYTES = 0
 
 def _segment_cache_get(url: str):
@@ -80,7 +81,7 @@ def _segment_cache_get(url: str):
 def _segment_cache_set(url: str, media_type: str, data: bytes):
     """Simpan segmen video ke ring buffer memori dengan batas 35MB."""
     global _SEGMENT_CACHE_CUR_BYTES
-    if not url or not data or len(data) > 6 * 1024 * 1024:
+    if not url or not data or len(data) > _SEGMENT_CACHE_ITEM_MAX:
         return
     if url in _SEGMENT_CACHE:
         _, old_data = _SEGMENT_CACHE[url]
@@ -185,16 +186,56 @@ async def lifespan(app: FastAPI):
         pass
 
 from version import __version__ as CURRENT_VERSION
-from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Tatap", version=CURRENT_VERSION, lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+# Guard Host/Origin: server ini hanya untuk klien lokal (native app & frontend
+# yang disajikan dari origin yang sama). Tanpa ini, CORS "*" + tanpa auth
+# membuat halaman web mana pun di device yang sama bisa membaca /api/settings
+# (termasuk API key) dan memanggil /api/shutdown.
+_ALLOWED_HOSTS = {f"127.0.0.1:{APP_PORT}", f"localhost:{APP_PORT}", "127.0.0.1", "localhost"}
+_ALLOWED_HOSTS |= {
+    h.strip().lower() for h in os.getenv("TATAP_ALLOWED_HOSTS", "").split(",") if h.strip()
+}
+if "pytest" in sys.modules:      # TestClient/ASGITransport memakai Host: testserver / test
+    _ALLOWED_HOSTS |= {"testserver", "test"}
+_ALLOWED_ORIGINS = {f"http://{h}" for h in _ALLOWED_HOSTS}
+
+
+def _host_allowed(host: str) -> bool:
+    """Host header valid? Loopback dengan port apa pun diizinkan (instance kedua/E2E)."""
+    host = (host or "").lower()
+    if host in _ALLOWED_HOSTS:
+        return True
+    import urllib.parse as _up
+
+    name = (_up.urlsplit(f"//{host}").hostname or "").lower()
+    return name in ("127.0.0.1", "localhost", "::1")
+
+
+def _origin_allowed(origin: str) -> bool:
+    if not origin:
+        return True
+    import urllib.parse as _up
+
+    p = _up.urlsplit(origin)
+    if p.scheme not in ("http", "https"):
+        return False
+    host = (p.netloc or "").lower()
+    return host in _ALLOWED_ORIGINS or _host_allowed(host)
+
+
+@app.middleware("http")
+async def _local_only_guard(request, call_next):
+    host = (request.headers.get("host") or "").lower()
+    origin = (request.headers.get("origin") or "").rstrip("/").lower()
+    if (
+        not _host_allowed(host)
+        or not _origin_allowed(origin)
+        or request.headers.get("sec-fetch-site") == "cross-site"
+    ):
+        return JSONResponse({"success": False, "error": "forbidden"}, status_code=403)
+    return await call_next(request)
 
 def ok(data):
     return {"success": True, "data": data}
@@ -720,9 +761,7 @@ def _schedule_airing_refresh(key, page, safe_mode_int):
         finally:
             _AIRING_REFRESH_INFLIGHT.discard(key)
 
-    try:
-        asyncio.get_running_loop().create_task(_runner())
-    except RuntimeError:
+    if _spawn_background(_runner()) is None:
         _AIRING_REFRESH_INFLIGHT.discard(key)
 
 
@@ -947,9 +986,9 @@ async def seasonal(which: str = Query("", pattern="^(now|prev|airing)$|^$"),
                 season_year, season_name = al.prev_season(name_cur, year_cur)
             else:
                 season_name, season_year = name_cur, year_cur
-            cache_id = which or "now"
+            cache_id = _seasonal_cache_id(which)
 
-        key = f"seasonal_v4|{cache_id}|page={page}"
+        key = f"seasonal_v5|{cache_id}|page={page}"
         hit = await get_browse_cache(key)
         if hit:
             hit["cached"] = True
@@ -2218,57 +2257,37 @@ async def resolve(slug: str = Query(""), ep: int = Query(1), mode: str = Query("
         return fail(str(e))
 
 def _validate_external_proxy_url(url: str) -> None:
-    """Validasi keamanan URL proxy eksternal untuk mencegah SSRF (Server-Side Request Forgery).
-    Menolak skema non-HTTP(S), IP private, loopback, link-local, multicast, dan localhost."""
+    """Validasi URL proxy eksternal (delegasi ke netguard: satu sumber aturan SSRF)."""
+    from netguard import assert_public_url, UnsafeURL
+
     if not url or not isinstance(url, str):
         raise HTTPException(status_code=400, detail="URL proxy tidak valid")
-    clean_u = url.strip()
-    import urllib.parse as _up
-    import ipaddress as _ipa
-    import socket as _sock
-
-    p = _up.urlsplit(clean_u)
-    if p.scheme.lower() not in ("http", "https"):
-        raise HTTPException(status_code=400, detail="Skema URL hanya boleh http atau https")
-    hostname = (p.hostname or "").strip().lower()
-    if not hostname:
-        raise HTTPException(status_code=400, detail="Hostname URL tidak ditemukan")
-
-    if hostname in ("localhost", "0.0.0.0", "127.0.0.1", "::1") or hostname.endswith(".local") or hostname.endswith(".internal"):
-        raise HTTPException(status_code=403, detail="Akses ke host lokal dilarang (SSRF protection)")
-
-    # Pengecekan IP numerik langsung
     try:
-        ip = _ipa.ip_address(hostname)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
-            raise HTTPException(status_code=403, detail="Akses ke IP privat/lokal dilarang (SSRF protection)")
-        return
-    except ValueError:
-        pass
+        assert_public_url(url)
+    except UnsafeURL as e:
+        # Kontrak lama: skema/URL tidak valid = 400, host lokal/privat = 403.
+        code = 400 if ("skema" in str(e) or "hostname" in str(e)) else 403
+        raise HTTPException(status_code=code, detail=f"URL ditolak (SSRF protection): {e}")
 
-    # Resolusi DNS untuk mendeteksi domain yang menunjuk ke IP lokal/privat
+
+async def _avalidate_url(url: str) -> None:
+    """Versi async: resolusi DNS dijalankan di thread agar event loop tidak beku."""
+    await asyncio.to_thread(_validate_external_proxy_url, url)
+
+
+def _safe_sub_filename(slug: str, ep: int, url: str) -> str:
+    """Nama file subtitle mpv yang aman: tanpa separator path / traversal."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(slug or ""))[:80].lstrip(".") or "sub"
     try:
-        addr_info = _sock.getaddrinfo(hostname, None, _sock.AF_UNSPEC, _sock.SOCK_STREAM)
-        for family, socktype, proto, canonname, sockaddr in addr_info:
-            ip_str = sockaddr[0]
-            ip = _ipa.ip_address(ip_str)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
-                # ISP DNS Poisoning bypass:
-                # Bila DNS ISP lokal meresolusi domain publik ke IP sinkhole privat (10.x / 127.x / 0.0.0.0),
-                # verifikasi ulang menggunakan DoH publik (_resolve_host).
-                # Jika DoH meresolusi ke IP publik asli, izinkan (bukan serangan SSRF lokal).
-                try:
-                    from api.desync import _resolve_host
-                    real_ip = _resolve_host(hostname)
-                    if real_ip and real_ip != hostname:
-                        rip = _ipa.ip_address(real_ip)
-                        if not (rip.is_private or rip.is_loopback or rip.is_link_local or rip.is_multicast or rip.is_reserved or rip.is_unspecified):
-                            continue
-                except Exception:
-                    pass
-                raise HTTPException(status_code=403, detail=f"Resolusi domain mengarah ke IP privat/lokal ({ip_str})")
-    except (_sock.gaierror, _sock.herror):
-        pass
+        ep_num = int(ep)
+    except (TypeError, ValueError):
+        ep_num = 1
+    return f"{safe}-ep{ep_num}-{abs(hash(url)) % 10**8}.vtt"
+
+
+def _seasonal_cache_id(which: str) -> str:
+    """ID cache /api/seasonal — bedakan 'tanpa filter status' vs 'now'/'prev'."""
+    return which if which in ("now", "prev") else "current"
 
 
 def _is_m3u8_url(url: str, ctype: str = "") -> bool:
@@ -2320,7 +2339,7 @@ async def proxy_video(url: str = Query(""), referer: str = Query(""), range: str
         except Exception:
             pass
 
-    _validate_external_proxy_url(url)
+    await _avalidate_url(url)
 
     is_m3u8 = _is_m3u8_url(url)
     media_type = "application/vnd.apple.mpegurl" if is_m3u8 else "video/mp2t"
@@ -2542,6 +2561,7 @@ def _get_video_client(url: str):
     """Direct client murni untuk video normal (Megaplay, Otakudesu, dll.)."""
     global _direct_client
     import httpx as _hx
+    from netguard import httpx_request_hook
     if _direct_client is None:
         if os.environ.get("TATAP_IS_TV") == "1":
             limits = _hx.Limits(max_connections=30, max_keepalive_connections=20, keepalive_expiry=90.0)
@@ -2551,7 +2571,9 @@ def _get_video_client(url: str):
             follow_redirects=True,
             timeout=_hx.Timeout(30.0, connect=15.0),
             limits=limits,
-            http2=False
+            http2=False,
+            # Validasi SSRF di setiap hop redirect (bukan cuma URL awal).
+            event_hooks={"request": [httpx_request_hook]},
         )
     return _direct_client
 
@@ -2561,6 +2583,7 @@ async def _pipe_video(url: str, referer: str, range_header: str = ""):
     import asyncio as _asyncio
     import re as _re
     from api.hianime import STRIP_BYTES as _SB, STRIP_RE as _SR2
+    from netguard import UnsafeURL
     c = _get_video_client(url)
 
     headers = {
@@ -2577,6 +2600,7 @@ async def _pipe_video(url: str, referer: str, range_header: str = ""):
         if orig:
             headers["Origin"] = orig
 
+    sent_any = False
     for attempt in range(2):
         try:
             async with c.stream("GET", url, headers=headers) as r:
@@ -2595,6 +2619,7 @@ async def _pipe_video(url: str, referer: str, range_header: str = ""):
                     cached_txt = _master_cache_get(url)
                     if cached_txt is not None:
                         yield _rewrite_m3u8_content(cached_txt, url, referer).encode("utf-8")
+                        sent_any = True
                         return
                     body = await r.aread()
                     try:
@@ -2605,11 +2630,13 @@ async def _pipe_video(url: str, referer: str, range_header: str = ""):
                         raise HTTPException(status_code=502, detail="upstream response missing #EXTM3U")
                     _master_cache_set(url, txt)
                     yield _rewrite_m3u8_content(txt, url, referer).encode("utf-8")
+                    sent_any = True
                     return
 
                 skipped = 0
                 need_strip = bool(_SR2.search(url))
-                collected = []
+                collected = [] if (not range_header and not is_playlist) else None
+                collected_n = 0
                 async for chunk in r.aiter_bytes(65536):
                     if need_strip and skipped < _SB:
                         cut = min(len(chunk), _SB - skipped)
@@ -2618,13 +2645,26 @@ async def _pipe_video(url: str, referer: str, range_header: str = ""):
                         if not chunk:
                             continue
                     if chunk:
-                        if not range_header and not is_playlist:
-                            collected.append(chunk)
+                        if collected is not None:
+                            collected_n += len(chunk)
+                            if collected_n > _SEGMENT_CACHE_ITEM_MAX:
+                                # Body terlalu besar untuk cache: lepas buffer,
+                                # jangan tahan seluruh file di RAM.
+                                collected = None
+                            else:
+                                collected.append(chunk)
                         yield chunk
-                if not range_header and not is_playlist and collected:
+                        sent_any = True
+                if collected:
                     _segment_cache_set(url, "video/mp2t", b"".join(collected))
                 return
+        except UnsafeURL:
+            raise HTTPException(status_code=403, detail="redirect ke host lokal ditolak")
         except HTTPException as he:
+            if sent_any:
+                # Header 200 sudah terkirim; retry akan menggandakan byte di
+                # response yang sama. Biarkan player yang request ulang.
+                raise
             if attempt == 0 and ("403" in str(he.detail) or "502" in str(he.detail)):
                 await _asyncio.sleep(0.2)
                 continue
@@ -2638,6 +2678,8 @@ async def _pipe_video(url: str, referer: str, range_header: str = ""):
             except Exception:
                 raise he
         except Exception as e:
+            if sent_any:
+                raise HTTPException(status_code=502, detail=f"stream terputus setelah data terkirim: {type(e).__name__}")
             if attempt == 0:
                 await _asyncio.sleep(0.3)
                 continue
@@ -2658,6 +2700,7 @@ async def _pipe_video(url: str, referer: str, range_header: str = ""):
 async def _fetch_sub_text(target_url, ref):
     """Helper fetcher yang mendukung desync bila host terblokir DPI atau butuh referer khusus."""
     from api.hianime import _host_from, _BLOCKED_DPI_HOSTS
+    from netguard import UnsafeURL, httpx_request_hook
     h = _host_from(target_url)
 
     candidates = []
@@ -2709,10 +2752,16 @@ async def _fetch_sub_text(target_url, ref):
 
         # 2. Coba direct request via httpx
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as c:
+            async with httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=12.0,
+                event_hooks={"request": [httpx_request_hook]},
+            ) as c:
                 r = await c.get(target_url, headers=headers)
                 if r.status_code == 200 and _is_valid_sub(r.text):
                     return r.text
+        except UnsafeURL:
+            raise HTTPException(status_code=403, detail="redirect ke host lokal ditolak")
         except Exception as e:
             last_err = e
             # Jika direct gagal (koneksi terputus/RST), coba desync
@@ -2766,7 +2815,7 @@ async def _prewarm_sub_translation(url: str, referer: str, src: str = "en", lang
     if not url or not url.startswith("http") or not lang or lang == src:
         return
     try:
-        _validate_external_proxy_url(url)
+        await _avalidate_url(url)
     except HTTPException:
         return
     import hashlib
@@ -2833,7 +2882,7 @@ async def proxy_sub(url: str = Query(""),
     dengan deduplikasi inflight dan proteksi cache poisoning."""
     if not url.startswith("http"):
         return Response(status_code=400)
-    _validate_external_proxy_url(url)
+    await _avalidate_url(url)
 
     is_os_mode = mode in ("os_merge", "os_dual", "smart_merge")
     # Hapus mode bilingual dan opsi terjemahan mentah sesuai direktif
@@ -3595,7 +3644,7 @@ async def api_merge_external_subtitle(body: dict = None):
         builtin_cues = []
         if base_sub_url and base_sub_url.startswith("http"):
             try:
-                _validate_external_proxy_url(base_sub_url)
+                await _avalidate_url(base_sub_url)
                 base_txt = await _fetch_sub_text(base_sub_url, referer)
                 builtin_cues = merge_overlapping_cues(parse_vtt(base_txt))
             except Exception:
@@ -3654,7 +3703,7 @@ async def upload_custom_sub(body: dict = None):
 
     if not text and url:
         try:
-            _validate_external_proxy_url(url)
+            await _avalidate_url(url)
             text = await _fetch_sub_text(url, "")
         except Exception as e:
             return fail(f"Gagal mengunduh subtitle dari URL: {e}")
@@ -3699,7 +3748,7 @@ async def get_custom_sub(id: str = Query(""),
     if id:
         vtt_text = await get_subtitle_cache(f"custom|{id}")
     elif url:
-        _validate_external_proxy_url(url)
+        await _avalidate_url(url)
         try:
             vtt_text = await _fetch_sub_text(url, "")
             from api.translate import parse_vtt, build_vtt
@@ -3814,7 +3863,9 @@ async def play_mpv(body: dict = None):
         # Helper download async; return None kalau gagal (skip track).
         async def _download_sub(url):
             try:
+                await _avalidate_url(url)
                 from api.hianime import _host_from, _BLOCKED_DPI_HOSTS
+                from netguard import httpx_request_hook
                 h = _host_from(url)
                 if h in _BLOCKED_DPI_HOSTS:
                     from api.desync import tls_desync_request
@@ -3822,7 +3873,10 @@ async def play_mpv(body: dict = None):
                     raw = await loop.run_in_executor(None, lambda: tls_desync_request(url, headers={"Referer": got.get("referer", "")}))
                     text = raw.decode("utf-8", errors="replace")
                 else:
-                    async with httpx.AsyncClient(timeout=15) as c:
+                    async with httpx.AsyncClient(
+                        timeout=15,
+                        event_hooks={"request": [httpx_request_hook]},
+                    ) as c:
                         sr = await c.get(url, headers={"User-Agent": HI_UA,
                                                         "Referer": got.get("referer", "")})
                         if sr.status_code != 200 or not sr.text:
@@ -3831,9 +3885,9 @@ async def play_mpv(body: dict = None):
 
                 if not text:
                     return None
-                fp = os.path.join(tempfile.gettempdir(),
-                                  f"{slug}-ep{ep}-{abs(hash(url)) % 10**8}.vtt")
-                open(fp, "w").write(text)
+                fp = os.path.join(tempfile.gettempdir(), _safe_sub_filename(slug, ep, url))
+                with open(fp, "w", encoding="utf-8") as f:
+                    f.write(text)
                 return fp
             except Exception:
                 return None
@@ -3857,7 +3911,7 @@ async def play_mpv(body: dict = None):
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=creationflags)
-        await add_history(slug, body.get("title", slug), ep, mode, poster=body.get("poster", ""), type=body.get("type", ""))
+        await add_history(slug, str(body.get("title") or slug), ep, mode, poster=body.get("poster", ""), type=body.get("type", ""))
         return ok({"cmd": cmd, "picked": picked, "subs_attached": len(downloaded)})
     except Exception as e:
         return fail(str(e))
@@ -3881,7 +3935,7 @@ async def save_hist(body: dict = None):
     body = body or {}
     await add_history(
         body.get("slug", ""),
-        body.get("title", ""),
+        str(body.get("title") or body.get("slug") or ""),
         int(body.get("episode", 1)),
         body.get("mode", "sub"),
         int(body.get("progress", 0)),
@@ -3965,7 +4019,7 @@ async def save_bookmark(body: dict = None):
     body = body or {}
     slug = (body.get("slug") or body.get("id") or "").strip()
     if not slug:
-        return err("Slug wajib diisi", 400)
+        return fail("Slug wajib diisi")
     _ANIME_FAILOVER_CACHE.pop(slug, None)
     await add_bookmark(
         slug=slug,

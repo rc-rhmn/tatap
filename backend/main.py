@@ -1,7 +1,7 @@
 import sys, os, re, time, html
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import asyncio, subprocess, tempfile
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
@@ -2294,7 +2294,7 @@ def _is_m3u8_url(url: str, ctype: str = "") -> bool:
 
 
 @app.get("/api/player/video")
-async def proxy_video(url: str = Query(""), referer: str = Query(""), range: str = Query("")):
+async def proxy_video(request: Request = None, url: str = Query(""), referer: str = Query(""), range: str = Query("")):  # type: ignore[assignment]
     # Proxy cepat: koneksi dipakai ulang, segmen di-stream (tanpa buffer penuh),
     # Range diteruskan ke upstream supaya seek tidak mengunduh ulang segmen dari awal.
     from fastapi import Request
@@ -2303,13 +2303,8 @@ async def proxy_video(url: str = Query(""), referer: str = Query(""), range: str
         return Response(status_code=400)
     # Sanitasi header Range: hanya izinkan bentuk "bytes=<start>-<end>" agar tidak
     # menjadi vektor request smuggling / header injection ke upstream CDN.
-    range_header = ""
-    if range and isinstance(range, str):
-        _rg = range.strip()
-        if _rg.lower().startswith("bytes="):
-            _rg = _rg[6:].strip()
-            if _rg and all(c.isdigit() or c == "-" for c in _rg) and _rg.count("-") <= 1:
-                range_header = f"bytes={_rg}"
+    # Header Range dari browser/ExoPlayer diutamakan; query `range=` tetap didukung.
+    range_header = _sanitize_range((request.headers.get("range") if request is not None else None) or range)
     from api.hianime import SEG_RE, SEG_KEY, SEG_IV, STRIP_BYTES, STRIP_RE
     import re as _re
     m = SEG_RE.search(url)
@@ -2376,17 +2371,116 @@ async def proxy_video(url: str = Query(""), referer: str = Query(""), range: str
         raise HTTPException(status_code=502, detail="Gagal mengunduh atau menulis ulang playlist m3u8")
 
     resp_headers["Cache-Control"] = "public, max-age=86400, immutable"
-    resp_headers["Accept-Ranges"] = "bytes"
 
-    # Jika host terdeteksi diblokir DPI ISP, gunakan TLS desync murni (aman dari Sangfor)
     from api.hianime import _host_from, _is_dpi_blocked_host
     host = _host_from(url)
-    if _is_dpi_blocked_host(host):
+    dpi_blocked = _is_dpi_blocked_host(host)
+    # Range hanya bisa dihormati di jalur httpx langsung. Jalur desync tidak
+    # mengekspos status/header upstream, dan URL ber-prefix palsu (STRIP_RE)
+    # menggeser offset byte -> keduanya selalu 200 penuh dan jujur menyatakannya.
+    rangeable = not dpi_blocked and not STRIP_RE.search(url)
+    resp_headers["Accept-Ranges"] = "bytes" if rangeable else "none"
+
+    if range_header and rangeable:
+        ranged = await _proxy_ranged(url, referer, range_header, media_type)
+        if ranged is not None:
+            return ranged
+    range_header = ""   # fallback: 200 penuh lewat jalur lama
+
+    # Jika host terdeteksi diblokir DPI ISP, gunakan TLS desync murni (aman dari Sangfor)
+    if dpi_blocked:
         return _SR(_pipe_desync_video(url, referer, range_header=range_header), media_type=media_type,
                    headers=resp_headers)
 
     return _SR(_pipe_video(url, referer, range_header=range_header), media_type=media_type,
                headers=resp_headers)
+
+
+_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
+_RANGE_PASSTHRU = ("content-range", "content-length", "last-modified", "etag")
+
+
+def _sanitize_range(raw) -> str:
+    """Hanya single-range `bytes=a-b`, `bytes=a-`, `bytes=-n`. Selain itu diabaikan.
+
+    Multi-range dan nilai aneh dibuang agar tidak menjadi vektor header
+    injection ke CDN; request tanpa Range tetap dilayani 200 penuh.
+    """
+    if not raw or not isinstance(raw, str):
+        return ""
+    m = _RANGE_RE.match(raw.strip().lower().replace(" ", ""))
+    if not m or not (m.group(1) or m.group(2)):
+        return ""
+    if m.group(1) and m.group(2) and int(m.group(2)) < int(m.group(1)):
+        return ""
+    return f"bytes={m.group(1)}-{m.group(2)}"
+
+
+async def _proxy_ranged(url: str, referer: str, range_header: str, media_type: str):
+    """Teruskan request ber-Range dan balas dengan status/header upstream (206/416/200).
+
+    Stream upstream dibuka SEBELUM response dibuat, jadi status 206 dan
+    Content-Range bisa diteruskan apa adanya. Retry hanya terjadi di tahap ini,
+    sebelum ada byte yang dikirim ke klien. Return None -> pemanggil fallback
+    ke jalur 200 penuh.
+    """
+    import re as _re
+    from fastapi.responses import StreamingResponse as _SR
+    from starlette.background import BackgroundTask
+    from netguard import UnsafeURL
+
+    c = _get_video_client(url)
+    headers = {
+        "User-Agent": HI_UA,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+        # identity: byte yang diteruskan = byte di Content-Range/Content-Length.
+        "Accept-Encoding": "identity",
+        "Range": range_header,
+    }
+    if referer:
+        headers["Referer"] = referer
+        orig = _re.sub(r"^(https?://[^/]+).*", r"\1", referer)
+        if orig:
+            headers["Origin"] = orig
+
+    r = None
+    for attempt in range(2):
+        try:
+            r = await c.send(c.build_request("GET", url, headers=headers), stream=True)
+        except UnsafeURL:
+            raise HTTPException(status_code=403, detail="redirect ke host lokal ditolak")
+        except Exception:
+            r = None
+            if attempt == 0:
+                await asyncio.sleep(0.3)
+                continue
+            return None
+        if r.status_code in (401, 403) and attempt == 0:
+            await r.aclose()
+            r = None
+            await asyncio.sleep(0.2)
+            continue
+        break
+    if r is None:
+        return None
+
+    ctype = r.headers.get("content-type", "")
+    if r.status_code not in (200, 206, 416) or _is_m3u8_url(url, ctype):
+        await r.aclose()
+        return None
+
+    out = {k: r.headers[k] for k in _RANGE_PASSTHRU if k in r.headers}
+    out["Cache-Control"] = "public, max-age=86400, immutable"
+    # Upstream mengabaikan Range (balas 200) -> jangan klaim bisa seek per byte.
+    out["Accept-Ranges"] = "bytes" if r.status_code in (206, 416) else "none"
+    return _SR(
+        r.aiter_raw(),
+        status_code=r.status_code,
+        headers=out,
+        media_type=(ctype.split(";")[0].strip() or media_type),
+        background=BackgroundTask(r.aclose),
+    )
 
 
 def _rewrite_m3u8_content(txt, base_url: str, referer: str) -> str:

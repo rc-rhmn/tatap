@@ -13,6 +13,14 @@ Format versi menggunakan skema `MAJOR.MINOR.PATCH`:
 - **MINOR (x.Y.0):** Penambahan fitur atau kapabilitas baru yang tetap kompatibel ke belakang (*backward-compatible new features*). Digit PATCH direset ke 0.
 - **PATCH (x.y.Z):** Perbaikan bug, peningkatan stabilitas, atau perbaikan internal tanpa penambahan fitur baru (*backward-compatible bug fixes*).
 
+## [2.12.12] - 2026-11-14
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.12.11 -> 2.12.12)
+Perbaikan bug playback (#20 audit). Tidak ada perubahan kontrak API, skema database, atau fitur baru — cukup PATCH.
+
+### Fixed
+1. **Range dibalas 200, bukan 206 (#20 audit)** — `/api/player/video` kini membaca header `Range` dari browser/ExoPlayer (sebelumnya hanya query `range=` yang tidak pernah dikirim klien, jadi Range mati total meski response mengklaim `Accept-Ranges: bytes`). Request ber-Range di jalur httpx langsung membuka stream upstream lebih dulu, lalu meneruskan status `206`/`416` beserta `Content-Range` dan `Content-Length`. Jalur TLS desync dan URL ber-prefix palsu (`STRIP_RE`) tetap 200 penuh dan kini jujur menyatakan `Accept-Ranges: none`. Multi-range dan nilai tidak valid diabaikan. 7 test regresi baru di `tests/test_audit_fixes.py`.
+
 ## [2.12.11] - 2026-11-14
 
 ### Justifikasi SemVer 2.0.0 (PATCH: 2.12.10 -> 2.12.11)

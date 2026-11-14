@@ -369,3 +369,131 @@ def test_pipe_video_no_retry_after_bytes_sent(monkeypatch):
     got = asyncio.run(run())
     assert fake.calls == 1, "tidak boleh retry setelah byte pertama terkirim"
     assert got == 1024 * 1024, "byte tidak boleh terkirim dua kali"
+
+
+# ---------------------------------------------------------------------------
+# #20 — Range diteruskan sebagai 206 + Content-Range
+# ---------------------------------------------------------------------------
+
+_MEDIA = bytes(range(256)) * 4096  # 1 MiB, isi deterministik
+
+
+class _ChunkStream(__import__("httpx").AsyncByteStream):
+    """AsyncByteStream seperti jaringan sungguhan (bisa di-aiter_raw)."""
+
+    def __init__(self, data, size=65536):
+        self.data, self.size = data, size
+
+    async def __aiter__(self):
+        for i in range(0, len(self.data), self.size):
+            yield self.data[i:i + self.size]
+
+    async def aclose(self):
+        pass
+
+
+def _range_upstream(honor_range=True, seen=None):
+    import httpx
+
+    def handler(req):
+        if seen is not None:
+            seen.append(dict(req.headers))
+        rg = req.headers.get("range")
+        if not honor_range or not rg:
+            return httpx.Response(200, stream=_ChunkStream(_MEDIA), headers={"content-type": "video/mp4", "content-length": str(len(_MEDIA))})
+        a, b = rg.split("=", 1)[1].split("-")
+        start = int(a) if a else len(_MEDIA) - int(b)
+        end = int(b) if (a and b) else len(_MEDIA) - 1
+        if start >= len(_MEDIA):
+            return httpx.Response(416, stream=_ChunkStream(b""), headers={"content-range": f"bytes */{len(_MEDIA)}"})
+        end = min(end, len(_MEDIA) - 1)
+        return httpx.Response(
+            206,
+            stream=_ChunkStream(_MEDIA[start:end + 1]),
+            headers={
+                "content-type": "video/mp4",
+                "content-length": str(end - start + 1),
+                "content-range": f"bytes {start}-{end}/{len(_MEDIA)}",
+                "accept-ranges": "bytes",
+            },
+        )
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.fixture()
+def range_client(monkeypatch):
+    import httpx
+    import main
+
+    state = {"transport": _range_upstream(), "seen": []}
+
+    async def _noop(url):
+        return None
+
+    monkeypatch.setattr(main, "_avalidate_url", _noop)
+    monkeypatch.setattr(main, "_segment_cache_get", lambda url: None)
+    monkeypatch.setattr(
+        main, "_get_video_client", lambda url: httpx.AsyncClient(transport=state["transport"])
+    )
+    client = TestClient(main.app, base_url="http://127.0.0.1:8767")
+    return client, state
+
+
+_VID = "/api/player/video?url=https://cdn.example/ep1.mp4"
+
+
+def test_range_header_returns_206_with_content_range(range_client):
+    client, _ = range_client
+    r = client.get(_VID, headers={"Range": "bytes=1000-1999"})
+    assert r.status_code == 206
+    assert r.headers["content-range"] == f"bytes 1000-1999/{len(_MEDIA)}"
+    assert r.headers["content-length"] == "1000"
+    assert r.headers["accept-ranges"] == "bytes"
+    assert r.content == _MEDIA[1000:2000]
+
+
+def test_open_ended_and_suffix_ranges(range_client):
+    client, _ = range_client
+    r = client.get(_VID, headers={"Range": "bytes=1048000-"})
+    assert r.status_code == 206 and r.content == _MEDIA[1048000:]
+    r = client.get(_VID, headers={"Range": "bytes=-576"})
+    assert r.status_code == 206 and r.content == _MEDIA[-576:]
+
+
+def test_unsatisfiable_range_passes_416(range_client):
+    client, _ = range_client
+    r = client.get(_VID, headers={"Range": f"bytes={len(_MEDIA) + 10}-"})
+    assert r.status_code == 416
+    assert r.headers["content-range"] == f"bytes */{len(_MEDIA)}"
+
+
+def test_upstream_ignoring_range_is_honest_200(range_client):
+    client, state = range_client
+    state["transport"] = _range_upstream(honor_range=False)
+    r = client.get(_VID, headers={"Range": "bytes=10-20"})
+    assert r.status_code == 200
+    assert r.headers["accept-ranges"] == "none"
+    assert r.content == _MEDIA
+
+
+def test_malformed_or_multi_range_ignored():
+    import main
+
+    assert main._sanitize_range("bytes=0-99") == "bytes=0-99"
+    assert main._sanitize_range("bytes=0-1,5-9") == ""
+    assert main._sanitize_range("bytes=9-1") == ""
+    assert main._sanitize_range("bytes=-") == ""
+    assert main._sanitize_range("bytes=0-1\r\nX-Evil: 1") == ""
+
+
+def test_legacy_range_query_still_supported(range_client):
+    client, _ = range_client
+    r = client.get(_VID + "&range=bytes=0-9")
+    assert r.status_code == 206 and r.content == _MEDIA[:10]
+
+
+def test_no_range_keeps_full_200(range_client):
+    client, _ = range_client
+    r = client.get(_VID)
+    assert r.status_code == 200 and r.content == _MEDIA

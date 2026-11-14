@@ -34,6 +34,7 @@ var (
 	procSetWindowPos          = user32.NewProc("SetWindowPos")
 	procMonitorFromWindow     = user32.NewProc("MonitorFromWindow")
 	procGetMonitorInfoW       = user32.NewProc("GetMonitorInfoW")
+	procGetSystemMetrics      = user32.NewProc("GetSystemMetrics")
 )
 
 const (
@@ -46,7 +47,7 @@ const (
 	DWMWA_USE_IMMERSIVE_DARK_MODE_NEW = 20
 	DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19
 
-	// Win32 constants untuk fullscreen monitor
+	// Win32 constants untuk fullscreen monitor & Always on Top (PiP Opsi B)
 	WS_OVERLAPPEDWINDOW      = 0x00CF0000
 	WS_POPUP                 = 0x80000000
 	WS_VISIBLE               = 0x10000000
@@ -57,6 +58,10 @@ const (
 	SWP_FRAMECHANGED         = 0x0020
 	SWP_SHOWWINDOW           = 0x0040
 	MONITOR_DEFAULTTONEAREST = 0x00000002
+	HWND_TOPMOST             = ^uintptr(0) // (HWND)-1: Always On Top
+	HWND_NOTOPMOST           = ^uintptr(1) // (HWND)-2: Normal Z-Order (Unpin Topmost)
+	SM_CXSCREEN              = 0
+	SM_CYSCREEN              = 1
 )
 
 type RECT struct {
@@ -91,7 +96,77 @@ var (
 	isNativeFullscreen bool
 	prevPlacement      WINDOWPLACEMENT
 	prevStyle          uint32
+
+	isPinnedMini      bool
+	prevMiniPlacement WINDOWPLACEMENT
 )
+
+func setPinnedMiniPlayer(hwnd uintptr, enable bool) {
+	if hwnd == 0 {
+		return
+	}
+	if enable == isPinnedMini {
+		return
+	}
+
+	if enable {
+		// Simpan posisi & ukuran normal jendela saat ini
+		prevMiniPlacement.Length = uint32(unsafe.Sizeof(prevMiniPlacement))
+		ret, _, _ := procGetWindowPlacement.Call(hwnd, uintptr(unsafe.Pointer(&prevMiniPlacement)))
+		if ret == 0 {
+			return
+		}
+
+		// Cari monitor tempat jendela berada untuk mengambil ukuran area kerja (RcWork)
+		hMon, _, _ := procMonitorFromWindow.Call(hwnd, MONITOR_DEFAULTTONEAREST)
+		pipW := int32(560)
+		pipH := int32(315)
+		posX := int32(100)
+		posY := int32(100)
+
+		if hMon != 0 {
+			var mi MONITORINFO
+			mi.CbSize = uint32(unsafe.Sizeof(mi))
+			if ret, _, _ := procGetMonitorInfoW.Call(hMon, uintptr(unsafe.Pointer(&mi))); ret != 0 {
+				workW := mi.RcWork.Right - mi.RcWork.Left
+				workH := mi.RcWork.Bottom - mi.RcWork.Top
+				posX = mi.RcWork.Left + workW - pipW - 24
+				posY = mi.RcWork.Top + workH - pipH - 24
+				if posX < mi.RcWork.Left {
+					posX = mi.RcWork.Left
+				}
+				if posY < mi.RcWork.Top {
+					posY = mi.RcWork.Top
+				}
+			}
+		}
+
+		// Terapkan HWND_TOPMOST (Always On Top) dan resize jendela utama menjadi mini player
+		procSetWindowPos.Call(
+			hwnd,
+			HWND_TOPMOST,
+			uintptr(posX),
+			uintptr(posY),
+			uintptr(pipW),
+			uintptr(pipH),
+			SWP_SHOWWINDOW|SWP_FRAMECHANGED,
+		)
+		isPinnedMini = true
+	} else {
+		// Pulihkan posisi & ukuran jendela semula
+		if prevMiniPlacement.Length != 0 {
+			procSetWindowPlacement.Call(hwnd, uintptr(unsafe.Pointer(&prevMiniPlacement)))
+		}
+		// Lepaskan HWND_TOPMOST -> HWND_NOTOPMOST
+		procSetWindowPos.Call(
+			hwnd,
+			HWND_NOTOPMOST,
+			0, 0, 0, 0,
+			SWP_NOMOVE|SWP_NOSIZE|SWP_FRAMECHANGED|SWP_SHOWWINDOW,
+		)
+		isPinnedMini = false
+	}
+}
 
 func setNativeFullscreen(hwnd uintptr, fullscreen bool) {
 	if hwnd == 0 {
@@ -327,6 +402,16 @@ func runWebView(appURL, dataPath string) {
 		return nil
 	})
 
+	// Bridge JS tatap_set_pinned_mini untuk mode Pinned Mini Player Always On Top
+	_ = w.Bind("tatap_set_pinned_mini", func(enable bool) error {
+		setPinnedMiniPlayer(hwnd, enable)
+		return nil
+	})
+
+	_ = w.Bind("tatap_is_pinned_mini", func() bool {
+		return isPinnedMini
+	})
+
 	w.Navigate(appURL)
 	w.Run()
 }
@@ -345,8 +430,10 @@ func main() {
 		exePath, _ = filepath.Abs(os.Args[0])
 	}
 	appDir := filepath.Dir(exePath)
+
 	appURL := "http://127.0.0.1:8767"
 	pingURL := appURL + "/api/ping"
+	startURL := appURL
 
 	var pyCmd *exec.Cmd
 
@@ -410,35 +497,61 @@ func main() {
 			procDone <- pyCmd.Wait()
 		}()
 
-		// 5. Polling hingga /api/ping merespons (maksimal 15 detik)
-		ready := false
-		for i := 0; i < 75; i++ {
-			time.Sleep(200 * time.Millisecond)
-			if isServerRunning(pingURL) {
-				ready = true
-				break
-			}
-
-			select {
-			case <-procDone:
-				i = 75 // Proses backend keluar lebih awal (crash)
-			default:
-			}
+		// Tentukan URL awal: gunakan bootscreen jika tersedia untuk respons visual instan
+		bootscreenPath := filepath.Join(appDir, "frontend", "bootscreen.html")
+		useBootscreen := false
+		if _, err := os.Stat(bootscreenPath); err == nil {
+			startURL = "file:///" + filepath.ToSlash(bootscreenPath)
+			useBootscreen = true
 		}
 
-		if !ready {
-			if pyCmd.Process != nil {
-				_ = pyCmd.Process.Kill()
-				pidFile := filepath.Join(cacheDir, "server.pid")
-				_ = os.Remove(pidFile)
+		if useBootscreen {
+			// Pantau kemungkinan backend crash di latar belakang selama inisialisasi awal
+			go func() {
+				select {
+				case err := <-procDone:
+					if err != nil {
+						logSnippet := getLastLogLines(logPath, 10)
+						msg := "Server backend tidak dapat berjalan atau gagal merespons."
+						if strings.TrimSpace(logSnippet) != "" {
+							msg += "\n\nLog Kesalahan Terakhir:\n" + logSnippet
+						}
+						showMessage("Tatap - Kesalahan Backend", msg, MB_OK|MB_ICONERROR)
+					}
+				case <-time.After(15 * time.Second):
+				}
+			}()
+		} else {
+			// Fallback: Polling hingga /api/ping merespons jika bootscreen tidak ditemukan
+			ready := false
+			for i := 0; i < 75; i++ {
+				time.Sleep(200 * time.Millisecond)
+				if isServerRunning(pingURL) {
+					ready = true
+					break
+				}
+
+				select {
+				case <-procDone:
+					i = 75 // Proses backend keluar lebih awal (crash)
+				default:
+				}
 			}
-			logSnippet := getLastLogLines(logPath, 10)
-			msg := "Server backend tidak dapat berjalan atau gagal merespons dalam 15 detik."
-			if strings.TrimSpace(logSnippet) != "" {
-				msg += "\n\nLog Kesalahan Terakhir:\n" + logSnippet
+
+			if !ready {
+				if pyCmd.Process != nil {
+					_ = pyCmd.Process.Kill()
+					pidFile := filepath.Join(cacheDir, "server.pid")
+					_ = os.Remove(pidFile)
+				}
+				logSnippet := getLastLogLines(logPath, 10)
+				msg := "Server backend tidak dapat berjalan atau gagal merespons dalam 15 detik."
+				if strings.TrimSpace(logSnippet) != "" {
+					msg += "\n\nLog Kesalahan Terakhir:\n" + logSnippet
+				}
+				showMessage("Tatap - Gagal Memulai", msg, MB_OK|MB_ICONERROR)
+				return
 			}
-			showMessage("Tatap - Gagal Memulai", msg, MB_OK|MB_ICONERROR)
-			return
 		}
 	}
 
@@ -458,7 +571,10 @@ func main() {
 	}
 
 	// 7. Jendela native WebView2
+	if os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") == "" {
+		_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--enable-gpu-rasterization --enable-zero-copy")
+	}
 	dataPath := filepath.Join(appDir, "cache", "webview2-data")
 	_ = os.MkdirAll(dataPath, 0755)
-	runWebView(appURL, dataPath)
+	runWebView(startURL, dataPath)
 }

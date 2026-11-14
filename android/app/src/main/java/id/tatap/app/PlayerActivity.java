@@ -457,6 +457,62 @@ public class PlayerActivity extends Activity {
         }
     }
 
+    private void fetchSkipTimesAsync(final String curSlug, final int curEp, final String curTitle, final String curMalId) {
+        final int targetResolveId = currentResolveLoadId;
+        new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                String u = "http://127.0.0.1:8767/api/episode/skip_times?slug=" + URLEncoder.encode(curSlug != null ? curSlug : "", "UTF-8")
+                        + "&ep=" + curEp
+                        + (curTitle != null && !curTitle.isEmpty() ? "&title=" + URLEncoder.encode(curTitle, "UTF-8") : "")
+                        + (curMalId != null && !curMalId.isEmpty() ? "&mal_id=" + URLEncoder.encode(curMalId, "UTF-8") : "");
+                conn = (HttpURLConnection) new URL(u).openConnection();
+                conn.setConnectTimeout(6000);
+                conn.setReadTimeout(10000);
+                if (conn.getResponseCode() == 200) {
+                    BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = r.readLine()) != null) sb.append(line);
+                    r.close();
+                    JSONObject res = new JSONObject(sb.toString());
+                    if (res.optBoolean("success", false)) {
+                        JSONObject data = res.optJSONObject("data");
+                        if (data != null) {
+                            JSONObject inObj = data.optJSONObject("intro");
+                            JSONObject outObj = data.optJSONObject("outro");
+                            long sIn = inObj != null ? (long) (inObj.optDouble("start", 0) * 1000) : 0;
+                            long eIn = inObj != null ? (long) (inObj.optDouble("end", 0) * 1000) : 0;
+                            long sOut = outObj != null ? (long) (outObj.optDouble("start", 0) * 1000) : 0;
+                            long eOut = outObj != null ? (long) (outObj.optDouble("end", 0) * 1000) : 0;
+
+                            runOnUiThread(() -> {
+                                if (targetResolveId != currentResolveLoadId) return;
+                                boolean updated = false;
+                                if (eIn > sIn && eIn > 0 && (eIn - sIn) >= 5000 && introEndMs == 0) {
+                                    introStartMs = sIn;
+                                    introEndMs = eIn;
+                                    updated = true;
+                                }
+                                if (eOut > sOut && eOut > 0 && (eOut - sOut) >= 5000 && outroEndMs == 0) {
+                                    outroStartMs = sOut;
+                                    outroEndMs = eOut;
+                                    updated = true;
+                                }
+                                if (updated && player != null) {
+                                    checkSkipTimes(player.getCurrentPosition());
+                                }
+                            });
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }).start();
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -2974,6 +3030,11 @@ public class PlayerActivity extends Activity {
                     }
                     currentSkipTargetMs = 0;
 
+                    if (introEndMs == 0 || outroEndMs == 0) {
+                        String malIdStr = data.optString("mal_id", "");
+                        fetchSkipTimesAsync(slug, ep, title, malIdStr);
+                    }
+
                     if (!rawStreamUrl.isEmpty()) {
                         runOnUiThread(() -> {
                             if (resolveId != currentResolveLoadId) return;
@@ -4506,8 +4567,8 @@ public class PlayerActivity extends Activity {
 
         Button btnPresetGemini = dialog.findViewById(R.id.btn_preset_gemini);
         Button btnPresetGroq = dialog.findViewById(R.id.btn_preset_groq);
-        Button btnPresetOllama = dialog.findViewById(R.id.btn_preset_ollama);
-        Button btnPresetOpenAI = dialog.findViewById(R.id.btn_preset_openai);
+        Button btnPresetOpenRouter = dialog.findViewById(R.id.btn_preset_openrouter);
+        Button btnPresetCerebras = dialog.findViewById(R.id.btn_preset_cerebras);
 
         Button btnPromptCasual = dialog.findViewById(R.id.btn_prompt_preset_casual);
         Button btnPromptFormal = dialog.findViewById(R.id.btn_prompt_preset_formal);
@@ -4527,14 +4588,14 @@ public class PlayerActivity extends Activity {
                     etModel.setText("llama-3.3-70b-versatile");
                     etUrl.setText("https://api.groq.com/openai/v1");
                 } else if (k.startsWith("AQ.") || k.startsWith("AIza") || k.startsWith("AQ")) {
-                    etModel.setText("gemini-2.0-flash");
+                    etModel.setText("gemini-3.1-flash-lite");
                     etUrl.setText("https://generativelanguage.googleapis.com/v1beta/openai");
                 } else if (k.startsWith("sk-or-")) {
                     etModel.setText("google/gemini-2.0-flash-exp:free");
                     etUrl.setText("https://openrouter.ai/api/v1");
-                } else if (k.startsWith("ollama_") || k.startsWith("ol_") || (k.length() > 35 && k.contains("."))) {
-                    etModel.setText("gpt-oss:20b");
-                    etUrl.setText("https://ollama.com/v1");
+                } else if (k.startsWith("csk-")) {
+                    etModel.setText("llama3.3-70b");
+                    etUrl.setText("https://api.cerebras.ai/v1");
                 } else if (k.startsWith("sk-") || k.startsWith("sk_")) {
                     etModel.setText("gpt-4o-mini");
                     etUrl.setText("https://api.openai.com/v1");
@@ -4549,28 +4610,34 @@ public class PlayerActivity extends Activity {
         }
 
         btnPresetGemini.setOnClickListener(v -> {
-            etModel.setText("gemini-2.0-flash");
+            etModel.setText("gemini-3.1-flash-lite");
             etUrl.setText("https://generativelanguage.googleapis.com/v1beta/openai");
-            Toast.makeText(this, "Preset Google Gemini dipilih", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Preset Google Gemini dipilih (gemini-3.1-flash-lite)", Toast.LENGTH_SHORT).show();
         });
 
         btnPresetGroq.setOnClickListener(v -> {
             etModel.setText("llama-3.3-70b-versatile");
             etUrl.setText("https://api.groq.com/openai/v1");
-            Toast.makeText(this, "Preset Groq Cloud dipilih", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Preset Groq Cloud dipilih (llama-3.3-70b)", Toast.LENGTH_SHORT).show();
         });
 
-        btnPresetOllama.setOnClickListener(v -> {
-            etModel.setText("gpt-oss:20b");
-            etUrl.setText("https://ollama.com/v1");
-            Toast.makeText(this, "Preset Ollama Cloud dipilih", Toast.LENGTH_SHORT).show();
-        });
+        if (btnPresetOpenRouter != null) {
+            btnPresetOpenRouter.setOnClickListener(v -> {
+                etModel.setText("google/gemini-2.0-flash-exp:free");
+                etUrl.setText("https://openrouter.ai/api/v1");
+                Toast.makeText(this, "Preset OpenRouter Free dipilih (gemini-2.0-flash-exp:free)", Toast.LENGTH_SHORT).show();
+            });
+            TvFocusHelper.attachFocusScale(btnPresetOpenRouter, 1.05f, 4f);
+        }
 
-        btnPresetOpenAI.setOnClickListener(v -> {
-            etModel.setText("gpt-4o-mini");
-            etUrl.setText("https://api.openai.com/v1");
-            Toast.makeText(this, "Preset OpenAI dipilih", Toast.LENGTH_SHORT).show();
-        });
+        if (btnPresetCerebras != null) {
+            btnPresetCerebras.setOnClickListener(v -> {
+                etModel.setText("llama3.3-70b");
+                etUrl.setText("https://api.cerebras.ai/v1");
+                Toast.makeText(this, "Preset Cerebras Fast dipilih (llama3.3-70b)", Toast.LENGTH_SHORT).show();
+            });
+            TvFocusHelper.attachFocusScale(btnPresetCerebras, 1.05f, 4f);
+        }
 
         if (btnPromptCasual != null) {
             btnPromptCasual.setOnClickListener(v -> {
@@ -4667,7 +4734,7 @@ public class PlayerActivity extends Activity {
                 JSONObject d = res.optJSONObject("data");
                 if (d == null) d = res;
                 String k = d.optString("translate_apikey", "");
-                String m = d.optString("translate_model", "gemini-2.0-flash");
+                String m = d.optString("translate_model", "gemini-3.1-flash-lite");
                 String u = d.optString("translate_apiurl", "https://generativelanguage.googleapis.com/v1beta/openai");
                 String p = d.optString("translate_custom_prompt", "");
 
@@ -4688,8 +4755,8 @@ public class PlayerActivity extends Activity {
         TvFocusHelper.attachFocusScale(btnReset, 1.05f, 4f);
         TvFocusHelper.attachFocusScale(btnPresetGemini, 1.05f, 4f);
         TvFocusHelper.attachFocusScale(btnPresetGroq, 1.05f, 4f);
-        TvFocusHelper.attachFocusScale(btnPresetOllama, 1.05f, 4f);
-        TvFocusHelper.attachFocusScale(btnPresetOpenAI, 1.05f, 4f);
+        if (btnPresetOpenRouter != null) TvFocusHelper.attachFocusScale(btnPresetOpenRouter, 1.05f, 4f);
+        if (btnPresetCerebras != null) TvFocusHelper.attachFocusScale(btnPresetCerebras, 1.05f, 4f);
         if (btnPromptCasual != null) TvFocusHelper.attachFocusScale(btnPromptCasual, 1.05f, 4f);
         if (btnPromptFormal != null) TvFocusHelper.attachFocusScale(btnPromptFormal, 1.05f, 4f);
         if (btnPromptWibu != null) TvFocusHelper.attachFocusScale(btnPromptWibu, 1.05f, 4f);

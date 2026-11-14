@@ -26,10 +26,10 @@
             android:id="@+id/btn_close_ai_dialog"
             android:layout_width="30dp"
             android:layout_height="30dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/bg_menu_toggle"
             android:drawableStart="@drawable/ic_close"
-            android:drawableTint="#8892B0"
-            android:padding="8dp"
+            android:drawableTint="@color/accent_cyan"
+            android:padding="7dp"
             android:focusable="true"
             android:focusableInTouchMode="false" />
     </LinearLayout>
@@ -68,7 +68,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="3dp"
-                    android:text="Model   : gemini-2.0-flash"
+                    android:text="Model   : gemini-3.1-flash-lite"
                     android:textColor="#E1E7EF"
                     android:textSize="11.5sp" />
 
@@ -131,23 +131,23 @@
                 android:layout_marginBottom="12dp">
 
                 <Button
-                    android:id="@+id/btn_preset_ollama"
+                    android:id="@+id/btn_preset_openrouter"
                     android:layout_width="0dp"
                     android:layout_height="34dp"
                     android:layout_weight="1"
                     android:layout_marginEnd="3dp"
-                    android:text="Ollama Cloud"
+                    android:text="OpenRouter (Free)"
                     android:textColor="#FFFFFF"
                     android:backgroundTint="#161922"
                     android:textSize="10.5sp" />
 
                 <Button
-                    android:id="@+id/btn_preset_openai"
+                    android:id="@+id/btn_preset_cerebras"
                     android:layout_width="0dp"
                     android:layout_height="34dp"
                     android:layout_weight="1"
                     android:layout_marginStart="3dp"
-                    android:text="OpenAI"
+                    android:text="Cerebras (Fast)"
                     android:textColor="#FFFFFF"
                     android:backgroundTint="#161922"
                     android:textSize="10.5sp" />
@@ -167,7 +167,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="40dp"
                 android:background="@drawable/bg_input_field"
-                android:hint="Tempel API key di sini"
+                android:hint="Tempel API key (AQ..., gsk_..., sk-or-..., csk-...)"
                 android:textColorHint="#5A6578"
                 android:textColor="#F1F5F9"
                 android:textSize="12sp"
@@ -189,7 +189,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="40dp"
                 android:background="@drawable/bg_input_field"
-                android:hint="gemini-2.0-flash"
+                android:hint="gemini-3.1-flash-lite"
                 android:textColorHint="#5A6578"
                 android:textColor="#F1F5F9"
                 android:textSize="12sp"
@@ -318,30 +318,30 @@
                     android:id="@+id/btn_ai_view_logs"
                     android:layout_width="wrap_content"
                     android:layout_height="34dp"
-                    android:text="Log"
+                    android:text="[ 記録 · LOG ]"
                     android:textColor="#8892B0"
-                    android:backgroundTint="#161922"
-                    android:textSize="11.5sp"
+                    android:background="@drawable/bg_menu_toggle"
+                    android:textSize="11sp"
                     android:layout_marginEnd="6dp" />
 
                 <Button
                     android:id="@+id/btn_ai_reset_key"
                     android:layout_width="wrap_content"
                     android:layout_height="34dp"
-                    android:text="Hapus Key"
-                    android:textColor="#EF4444"
-                    android:backgroundTint="#161922"
-                    android:textSize="11.5sp"
+                    android:text="[ 破棄 · HAPUS ]"
+                    android:textColor="@color/text_danger"
+                    android:background="@drawable/bg_menu_toggle"
+                    android:textSize="11sp"
                     android:layout_marginEnd="6dp" />
 
                 <Button
                     android:id="@+id/btn_ai_save"
                     android:layout_width="wrap_content"
                     android:layout_height="34dp"
-                    android:text="Simpan"
-                    android:textColor="@color/text_primary"
-                    android:backgroundTint="#1E2433"
-                    android:textSize="@dimen/text_caption"
+                    android:text="[ 保存 · SIMPAN ]"
+                    android:textColor="#0A0C14"
+                    android:backgroundTint="@color/accent_cyan"
+                    android:textSize="@dimen/text_badge"
                     android:fontFamily="sans-serif-medium" />
             </LinearLayout>
         </LinearLayout>

@@ -1,8 +1,8 @@
 """Subtitle translation module.
 
 Multi-tier fallback translate subtitle cues (orkestrasi di main._translate_with_fallback):
-  Tier 1: AI Fansub LLM (OpenAI-compatible: Ollama Cloud free / Gemini / Groq / OpenRouter /
-          Ollama lokal). Format ber-ID `N|teks`, batch paralel, rotasi model saat limit,
+  Tier 1: AI Fansub LLM (OpenAI-compatible: Google Gemini / Groq / OpenRouter /
+          Cerebras / Custom). Format ber-ID `N|teks`, batch paralel, rotasi model saat limit,
           baris yang gagal diisi Google GTX (hybrid) — tidak lagi all-or-nothing.
   Tier 2: Google GTX Web RPC (zero-key, terjemahan literal/kaku)
   Tier 3: MyMemory REST API publik (gratis, 5000 char/day per IP, soft limit 4500)
@@ -450,49 +450,132 @@ def _extract_err(resp):
 # Tier 1: AI Fansub (LLM, OpenAI-compatible)
 # ---------------------------------------------------------------------------
 
-# Model Ollama Cloud yang masuk Free plan (khusus gpt-oss)
-OLLAMA_FREE_MODELS = ["gpt-oss:20b", "gpt-oss:120b"]
+# Katalog Resmi Provider AI Free Tier & Model-Model yang Didukung
+FREE_TIER_CATALOG = {
+    "google": {
+        "name": "Google Gemini",
+        "label": "Google AI Studio",
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "default": "gemini-3.1-flash-lite",
+        "key_prefix": ["AIza", "AQ.", "AQ"],
+        "models": [
+            {"id": "gemini-3.1-flash-lite", "tag": "Rekomendasi", "desc": "Cepat & Ringan"},
+            {"id": "gemini-3.5-flash", "tag": "Akurat", "desc": "Multitask Kuat"},
+            {"id": "gemini-3.5-flash-lite", "tag": "Hemat", "desc": "Ultra Low Cost"},
+            {"id": "gemini-flash-lite-latest", "tag": "Terbaru", "desc": "Versi Flash Lite Terbaru"},
+        ],
+        "chain": [
+            "gemini-3.1-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-flash-lite-latest",
+        ],
+    },
+    "groq": {
+        "name": "Groq",
+        "label": "Groq Cloud",
+        "url": "https://api.groq.com/openai/v1",
+        "default": "llama-3.3-70b-versatile",
+        "key_prefix": ["gsk_"],
+        "models": [
+            {"id": "llama-3.3-70b-versatile", "tag": "Rekomendasi", "desc": "70B Akurasi Tinggi"},
+            {"id": "llama-3.1-8b-instant", "tag": "Cepat", "desc": "Instant Low Latency"},
+            {"id": "gemma2-9b-it", "tag": "Gemma 2", "desc": "Google Gemma 2 9B"},
+        ],
+        "chain": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"],
+    },
+    "openrouter": {
+        "name": "OpenRouter",
+        "label": "OpenRouter (Free)",
+        "url": "https://openrouter.ai/api/v1",
+        "default": "google/gemini-2.0-flash-exp:free",
+        "key_prefix": ["sk-or-"],
+        "models": [
+            {"id": "google/gemini-2.0-flash-exp:free", "tag": "Rekomendasi", "desc": "Gemini 2.0 Free"},
+            {"id": "meta-llama/llama-3.3-70b-instruct:free", "tag": "Llama 3.3", "desc": "Llama 70B Free"},
+            {"id": "deepseek/deepseek-r1:free", "tag": "DeepSeek", "desc": "R1 Reasoning Free"},
+            {"id": "qwen/qwen-2.5-coder-32b-instruct:free", "tag": "Qwen", "desc": "Qwen 32B Free"},
+            {"id": "mistralai/mistral-7b-instruct:free", "tag": "Mistral", "desc": "Mistral 7B Free"},
+        ],
+        "chain": [
+            "google/gemini-2.0-flash-exp:free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "deepseek/deepseek-r1:free",
+            "qwen/qwen-2.5-coder-32b-instruct:free",
+        ],
+    },
+    "cerebras": {
+        "name": "Cerebras",
+        "label": "Cerebras (Fast)",
+        "url": "https://api.cerebras.ai/v1",
+        "default": "llama3.3-70b",
+        "key_prefix": ["csk-"],
+        "models": [
+            {"id": "llama3.3-70b", "tag": "Rekomendasi", "desc": "2000+ t/s High Quality"},
+            {"id": "llama3.1-8b", "tag": "Instan", "desc": "Ultra Fast Latency"},
+        ],
+        "chain": ["llama3.3-70b", "llama3.1-8b"],
+    },
+}
 
 # Normalisasi penamaan model lama ke model aktif
 _LEGACY_MODEL_UPGRADE = {
     "ollama": {
-        "gemma4:31b": "gpt-oss:20b",
-        "gemma3:12b": "gpt-oss:20b",
-        "gemma4": "gpt-oss:20b",
-        "gpt-oss:20b-cloud": "gpt-oss:20b",
-        "gpt-oss-20b": "gpt-oss:20b",
+        "gpt-oss:20b": "llama-3.3-70b-versatile",
+        "gpt-oss:120b": "llama-3.3-70b-versatile",
+        "gpt-oss:20b-cloud": "llama-3.3-70b-versatile",
+        "gpt-oss-20b": "llama-3.3-70b-versatile",
     },
     "google": {
-        "gemini-3.1-flash-lite": "gemini-2.0-flash",
-        "gemini-3.8-flash": "gemini-2.0-flash",
-        "gemini-1.5-flash-latest": "gemini-1.5-flash",
+        "gemini-2.0-flash": "gemini-3.1-flash-lite",
+        "gemini-2.0-flash-lite": "gemini-3.1-flash-lite",
+        "gemini-2.5-flash": "gemini-3.5-flash",
+        "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
+        "gemini-1.5-flash": "gemini-3.1-flash-lite",
+        "gemini-1.5-flash-latest": "gemini-3.1-flash-lite",
+        "gemini-flash-latest": "gemini-3.5-flash",
     },
 }
 
+def _normalize_model_name(prov: str, model: str) -> str:
+    """Normalisasi nama model: tangani variasi penulisan/typo dan pembaruan model lama."""
+    m = (model or "").strip()
+    if not m:
+        return _DEFAULT_MODEL.get(prov, "gemini-3.1-flash-lite")
+    # Bersihkan prefix "models/" jika pengguna memasukkannya
+    if m.startswith("models/"):
+        m = m[7:].strip()
+    # Koreksi typo penulisan umum (misal genma -> gemma)
+    if "genma" in m.lower():
+        m = _re.sub(r"(?i)genma", "gemma", m)
+    return _LEGACY_MODEL_UPGRADE.get(prov, {}).get(m, m)
+
 _DEFAULT_MODEL = {
-    "ollama": "gpt-oss:20b",
-    "ollama_local": "gpt-oss:20b",
-    "google": "gemini-2.0-flash",
+    "google": "gemini-3.1-flash-lite",
     "groq": "llama-3.3-70b-versatile",
     "openrouter": "google/gemini-2.0-flash-exp:free",
+    "cerebras": "llama3.3-70b",
     "openai": "gpt-4o-mini",
-    "custom": "gpt-4o-mini",
+    "custom": "gemini-3.1-flash-lite",
 }
 
 # batch = jumlah cue per request, conc = request paralel.
 _PROVIDER_CFG = {
     "google": {"batch": 80, "conc": 2},
-    "ollama": {"batch": 50, "conc": 3},
-    "ollama_local": {"batch": 20, "conc": 1},
     "groq": {"batch": 40, "conc": 2},
     "openrouter": {"batch": 40, "conc": 2},
+    "cerebras": {"batch": 40, "conc": 2},
     "openai": {"batch": 60, "conc": 3},
     "custom": {"batch": 40, "conc": 2},
 }
 
 _PROVIDER_LABEL = {
-    "google": "Google AI Studio", "ollama": "Ollama Cloud", "ollama_local": "Ollama Lokal",
-    "groq": "Groq", "openrouter": "OpenRouter", "openai": "OpenAI", "custom": "OpenAI-compatible",
+    "google": "Google AI Studio",
+    "groq": "Groq",
+    "openrouter": "OpenRouter (Free)",
+    "cerebras": "Cerebras (Fast Free)",
+    "openai": "OpenAI",
+    "custom": "OpenAI-compatible",
 }
 
 
@@ -506,14 +589,12 @@ def detect_provider(apiurl: str) -> str:
     u = (apiurl or "").lower()
     if "googleapis.com" in u:
         return "google"
-    if "ollama.com" in u:
-        return "ollama"
-    if is_local_llm(u):
-        return "ollama_local"
     if "groq.com" in u:
         return "groq"
     if "openrouter.ai" in u:
         return "openrouter"
+    if "cerebras.ai" in u:
+        return "cerebras"
     if "openai.com" in u:
         return "openai"
     return "custom"
@@ -523,29 +604,25 @@ def detect_provider_from_key(key: str) -> tuple:
     """Mengembalikan (provider, default_model, default_apiurl) menyesuaikan apikey dari user."""
     k = (key or "").strip().strip("\"'").strip()
     if not k:
-        return ("google", "gemini-2.0-flash", "https://generativelanguage.googleapis.com/v1beta/openai")
+        return ("google", "gemini-3.1-flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai")
     if k.startswith("gsk_"):
         return ("groq", "llama-3.3-70b-versatile", "https://api.groq.com/openai/v1")
     if k.startswith("AQ.") or k.startswith("AIza") or k.startswith("AQ"):
-        return ("google", "gemini-2.0-flash", "https://generativelanguage.googleapis.com/v1beta/openai")
+        return ("google", "gemini-3.1-flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai")
     if k.startswith("sk-or-"):
         return ("openrouter", "google/gemini-2.0-flash-exp:free", "https://openrouter.ai/api/v1")
-    if k.startswith("ollama_") or k.startswith("ol_") or (len(k) > 35 and "." in k):
-        return ("ollama", "gpt-oss:20b", "https://ollama.com/v1")
+    if k.startswith("csk-"):
+        return ("cerebras", "llama3.3-70b", "https://api.cerebras.ai/v1")
     if k.startswith("sk-") or k.startswith("sk_"):
         return ("openai", "gpt-4o-mini", "https://api.openai.com/v1")
-    return ("custom", "gpt-4o-mini", "https://api.openai.com/v1")
+    return ("custom", "gemini-3.1-flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai")
 
 
 def _model_chain(prov: str, model: str):
     """Urutan model yang dicoba; model berikutnya dipakai saat limit/402/404."""
     chain = [model]
-    if prov == "ollama":
-        chain += OLLAMA_FREE_MODELS
-    elif prov == "google":
-        chain += ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]
-    elif prov == "groq":
-        chain.append("llama-3.3-70b-versatile")
+    if prov in FREE_TIER_CATALOG:
+        chain += FREE_TIER_CATALOG[prov].get("chain", [])
     seen, out = set(), []
     for m in chain:
         if m and m not in seen:
@@ -557,11 +634,14 @@ def _model_chain(prov: str, model: str):
 _FANSUB_PROMPT_ID = """Kamu adalah penerjemah sekaligus editor (TLC/Translation Checker) fansub anime Indonesia berpengalaman. Terjemahkan subtitle {src} menjadi bahasa Indonesia yang sangat luwes, hidup, enak dibaca sekilas, dan adaptif mengikuti situasi adegan (scene) serta kepribadian karakter — BUKAN terjemahan harfiah yang kaku ala mesin penerjemah.
 
 PRINSIP UTAMA KELUWESAN FANSUB:
-1. Terjemahkan Makna & Emosi, Bukan Kata demi Kata:
+1. Murni Bahasa Indonesia (ZERO DIKSI MELAYU/MALAYSIA):
+   - DILARANG KERAS menggunakan kosakata atau struktur Bahasa Melayu/Malaysia (seperti "awak", "kerana", "ialah", "sahaja", "tak", "tengok", "pula", "mereka itu", "kau orang", "jangan risau", "pelik", "comel", "sekejap", "lepas tu", "bercakap").
+   - WAJIB 100% menggunakan Bahasa Indonesia lisan/fansub yang alami ("kamu/aku", "karena", "adalah", "saja", "nggak/tidak", "lihat", "kalian", "jangan khawatir", "aneh", "imut", "sebentar", "setelah itu", "bicara")!
+2. Terjemahkan Makna & Emosi, Bukan Kata demi Kata:
    - Ubah struktur kalimat bahasa Inggris menjadi susunan kalimat lisan bahasa Indonesia yang mengalir alami saat diucapkan.
    - Hindari pengulangan kata ganti atau kepemilikan ("aku", "kamu", "dia", "milikku") jika sudah jelas dari konteks kalimat.
    - Pilih diksi yang ringkas dan padat emosi agar nyaman dibaca mengikuti tempo bicara karakter.
-2. Pertahankan Identitas & Format Teknis:
+3. Pertahankan Identitas & Format Teknis:
    - Pertahankan nama orang, tempat, honorifik Jepang (-san, -kun, -chan, -sama, -dono, Senpai, Sensei), serta gagap & interjeksi emosi ("A-Apa?!", "Tch", "Cih", "Hmph").
    - Pertahankan token <br> persis pada posisinya untuk ganti baris dalam 1 cue.
    - DILARANG membiarkan kata sifat bahasa Inggris tanpa terjemahan di tengah kalimat:
@@ -947,6 +1027,45 @@ Output format (MANDATORY): one line per input as "N|translation" with the same N
 
 
 def _fansub_system_prompt(src_name: str, tgt: str, tgt_name: str, custom_prompt: str = "") -> str:
+    cp = (custom_prompt or "").strip()
+    technical_format_rule = (
+        "\n\n==============================\n"
+        "FORMAT KELUARAN (WAJIB):\n"
+        "1. Output WAJIB berupa baris-baris bernomor persis: N|teks_terjemahan (contoh: 1|Halo, 2|Apa kabar?).\n"
+        "2. Jangan sertakan teks pembuka, penutup, atau tanda kurung/kutip tambahan.\n"
+        "3. Pertahankan token <br> persis pada posisinya untuk ganti baris dalam 1 cue.\n"
+        "4. Jumlah baris dan nomor ID output WAJIB PERSIS SAMA dengan baris input yang diminta.\n"
+        "==============================\n"
+    )
+
+    if cp:
+        # Jika pengguna menyetel custom prompt lengkap / mandiri (lebih dari 200 karakter atau punya struktur section),
+        # jadikan custom prompt pengguna sebagai instruksi fansub utama tanpa menumpuk 400 baris prompt default.
+        if len(cp) > 200 or any(k in cp.upper() for k in ("PERAN", "PRINSIP", "PANDUAN", "ATURAN", "ROLE", "SYSTEM")):
+            return cp + technical_format_rule
+        elif (tgt or "").lower() == "id":
+            # Custom prompt pendek (gaya bahasa/dialek spesifik): padukan dengan instruksi fansub ringkas
+            src_label = "bahasa Inggris" if (src_name or "").lower() in ("en", "english") else (src_name or "bahasa Inggris")
+            compact_base = (
+                f"Kamu adalah penerjemah fansub anime Indonesia berpengalaman. Terjemahkan subtitle {src_label} "
+                "menjadi bahasa Indonesia yang sangat luwes, hidup, enak dibaca sekilas, dan adaptif mengikuti adegan.\n"
+                "Hindari bahasa kaku mesin penerjemah. Gunakan Bahasa Indonesia lisan/fansub alami. "
+                "Pertahankan nama orang, istilah anime, dan honorifik Jepang (-san, -kun, -chan, Senpai, Sensei).\n\n"
+                "INSTRUKSI KHUSUS & GAYA DARI PENGGUNA (PRIORITAS TINGGI):\n"
+                f"{cp}"
+            )
+            return compact_base + technical_format_rule
+        else:
+            compact_base = (
+                f"You are an experienced anime fansub translator. Translate the subtitles from {src_name} to natural, fluent {tgt_name}.\n\n"
+                "INSTRUKSI KHUSUS & GAYA DARI PENGGUNA (PRIORITAS TINGGI):\n"
+                f"{cp}\n\n"
+                "Output format (MANDATORY):\n"
+                "1. Each line MUST be formatted as: N|translation\n"
+                "2. Preserve <br> tokens exactly for line breaks."
+            )
+            return compact_base
+
     base = ""
     if (tgt or "").lower() == "id":
         src_label = "bahasa Inggris" if (src_name or "").lower() in ("en", "english") else (src_name or "bahasa Inggris")
@@ -956,17 +1075,6 @@ def _fansub_system_prompt(src_name: str, tgt: str, tgt_name: str, custom_prompt:
             base = _FANSUB_PROMPT_ID
     else:
         base = _FANSUB_PROMPT_GENERIC.format(src=src_name, tgt=tgt_name)
-
-    if custom_prompt and custom_prompt.strip():
-        cp = custom_prompt.strip()
-        user_block = (
-            "\n\n==============================\n"
-            "INSTRUKSI KHUSUS & GAYA DARI PENGGUNA (PRIORITAS TINGGI):\n"
-            f"{cp}\n"
-            "Patuhi instruksi gaya bahasa, dialek, dan istilah di atas dalam menerjemahkan dialog.\n"
-            "==============================\n"
-        )
-        base = base + user_block
     return base
 
 
@@ -1252,6 +1360,31 @@ _PRE_GTX_EN_SLANG_RULES = [
     (r"\bin the same boat\b", "in the same difficult situation"),
     (r"\blet the cat out of the bag\b", "accidentally reveal the secret"),
     (r"\badd(ing)? fuel to the fire\b", "making the situation worse"),
+    # Stage-1: Spoken English Anime & Spoken Idioms Disambiguation
+    (r"\b(?:i\s+got|i've\s+got)\s+this\b", "I will handle this myself"),
+    (r"\byou\s+got\s+it\b", "consider it done"),
+    (r"\bgive\s+me\s+a\s+break\b", "give me peace and be serious"),
+    (r"\bwhat\s+a\s+drag\b", "how very troublesome"),
+    (r"\bspeak\s+of\s+the\s+devil\b", "speaking of that person right now"),
+    (r"\blike\s+hell\s+i\s+(?:will|would)\b", "there is no way I will"),
+    (r"\blike\s+hell\s+you\s+(?:will|would)\b", "there is no way you will"),
+    (r"\bover\s+my\s+dead\s+body\b", "never as long as I am alive"),
+    (r"\bi\s+mean\s+it\b", "I am completely serious"),
+    (r"\byou\s+had\s+me\s+worried\b", "you made me worry so much"),
+    (r"\bleave\s+it\s+to\s+me\b", "entrust this matter to me"),
+    (r"\bwhat\s+do\s+you\s+mean\b", "what is your meaning"),
+    (r"\bnever\s+mind\b", "forget about it"),
+    (r"\bcome\s+to\s+think\s+of\s+it\b", "now that I think about it"),
+    (r"\bfair\s+enough\b", "that makes good sense"),
+    (r"\bbe\s+my\s+guest\b", "please go right ahead"),
+    (r"\bway\s+to\s+go\b", "you did a great job"),
+    (r"\bfor\s+real\s*\?", "seriously?"),
+    (r"\bfor\s+real\b", "seriously"),
+    (r"\bno\s+way\s+in\s+hell\b", "there is no way ever"),
+    (r"\bcut\s+it\s+out\b", "stop doing that right now"),
+    (r"\bbeat\s+around\s+the\s+bush\b", "avoid speaking directly"),
+    (r"\bsave\s+your\s+breath\b", "do not waste your words"),
+    (r"\bget\s+a\s+grip\b", "calm down and regain control"),
     # Stage-1: Spoken English Contractions (Agar Struktur Kalimat Tidak Rusak di GTX)
     (r"\bwhatcha\b", "what are you"),
     (r"\bgotcha\b", "I understand"),
@@ -1313,6 +1446,71 @@ def _proper_title(title: str):
 
 # Aturan universal: selalu dikoreksi (karena merupakan blunder/calque harfiah).
 _UNIVERSAL_FANSUB_RULES = [
+    # Normalisasi kosakata Bahasa Melayu/Malaysia ke Bahasa Indonesia baku/luwes
+    (r"\bawak semua\b", "kalian semua"),
+    (r"\bkau orang\b", "kalian"),
+    (r"\bkorang\b", "kalian"),
+    (r"\bdia orang\b", "mereka"),
+    (r"\bmereka itu\b", "mereka"),
+    (r"\bawak\b(?!\s+(?:kapal|pesawat|kendaraan|helikopter|pesiar))", "kamu"),
+    (r"\bkerana\b", "karena"),
+    (r"\bialah\b", "adalah"),
+    (r"\bsahaja\b", "saja"),
+    (r"\bjangan risau\b", "jangan khawatir"),
+    (r"\bjangan bimbang\b", "jangan khawatir"),
+    (r"\bbimbang\b", "khawatir"),
+    (r"\btak guna\b", "tidak berguna"),
+    (r"\btidak guna\b", "tidak berguna"),
+    (r"\brisau\b", "khawatir"),
+    (r"\bmerisaukan\b", "mengkhawatirkan"),
+    (r"\btengok tu\b", "lihat itu"),
+    (r"\btengok\b", "lihat"),
+    (r"\bmenengok\b", "melihat"),
+    (r"\bjom\b", "ayo"),
+    (r"\bsenang je\b", "gampang banget"),
+    (r"\bpadan muka\b", "rasakan itu"),
+    (r"\bmacam mana\b", "bagaimana"),
+    (r"\bterlampau\b", "terlalu"),
+    (r"\bpelik\b", "aneh"),
+    (r"\bcomel\b", "imut"),
+    (r"\bseronok\b", "menyenangkan"),
+    (r"\bkeseronokan\b", "kesenangan"),
+    (r"\btunggu sekejap\b", "tunggu sebentar"),
+    (r"\bsekejap lagi\b", "sebentar lagi"),
+    (r"\bsekejap saja\b", "sebentar saja"),
+    (r"\bkejap lagi\b", "sebentar lagi"),
+    (r"\bkejap saja\b", "sebentar saja"),
+    (r"\btunggu kejap\b", "tunggu sebentar"),
+    (r"\bsekejap\b", "sebentar"),
+    (r"\bkejap\b", "sebentar"),
+    (r"\blepas ni\b", "setelah ini"),
+    (r"\blepas tu\b", "setelah itu"),
+    (r"\blepas itu\b", "setelah itu"),
+    (r"\bbilakah\b", "kapan"),
+    (r"\bmengapakah\b", "mengapa"),
+    (r"\bkenapakah\b", "kenapa"),
+    (r"\bbagaimanakah\b", "bagaimana"),
+    (r"\bsiapakah\b", "siapa"),
+    (r"\bdi manakah\b", "di mana"),
+    (r"\badakah\b", "apakah"),
+    (r"\bapakah yang\b", "apa yang"),
+    (r"\bbercakap\b", "berbicara"),
+    (r"\bcakap\b", "bicara"),
+    (r"\bbualkan\b", "bicarakan"),
+    (r"\bberbual\b", "mengobrol"),
+    (r"\bpasal apa\b", "soal apa"),
+    (r"\bpasal tu\b", "soal itu"),
+    (r"\bmak cik\b", "bibi"),
+    (r"\bpak cik\b", "paman"),
+    (r"\btakkan\b", "tidak akan"),
+    (r"\btak nak\b", "tidak mau"),
+    (r"\btak boleh\b", "tidak bisa"),
+    (r"\btak ada\b", "tidak ada"),
+    (r"\btak tahu\b", "tidak tahu"),
+    (r"\btak pernah\b", "tidak pernah"),
+    (r"\btakkanlah\b", "mana mungkin"),
+    (r"\bsudah tentu\b", "tentu saja"),
+
     (r"\bapakah kamu\b", "kamu"),
     (r"\bapakah kau\b", "kamu"),
     (r"\bapakah anda\b", "Anda"),
@@ -1968,6 +2166,10 @@ _CASUAL_FANSUB_RULES = [
     (r"\bbertahanlah\b", "tunggu sebentar"),
     (r"\baku melihat\b", "begitu rupanya"),
     (r"\bkulihat\b", "begitu rupanya"),
+    (r"\bsemuanya akan baik-baik saja\b", "semuanya bakal baik-baik aja"),
+    (r"\bsemua akan baik-baik saja\b", "semuanya bakal baik-baik aja"),
+    (r"\baku baik-baik saja kok\b", "aku nggak apa-apa kok"),
+    (r"\baku baik-baik saja\b", "aku nggak apa-apa kok"),
     (r"\btidak apa-apa\b", "nggak apa-apa"),
     (r"\btak apa-apa\b", "nggak apa-apa"),
     (r"\btak apa\b", "nggak apa-apa"),
@@ -1991,6 +2193,13 @@ _CASUAL_FANSUB_RULES = [
     (r"\btidak usah\b", "nggak usah"),
     (r"\btidak boleh\b", "nggak boleh"),
     (r"\btak boleh\b", "nggak boleh"),
+    (r"\btidak ada gunanya\b", "percuma aja"),
+    (r"\btak ada gunanya\b", "percuma aja"),
+    (r"\bnggak ada gunanya\b", "percuma aja"),
+    (r"\btidak ada pilihan lain\b", "nggak ada pilihan lain"),
+    (r"\btak ada pilihan lain\b", "nggak ada pilihan lain"),
+    (r"\btidak salah lagi\b", "nggak salah lagi"),
+    (r"\btak salah lagi\b", "nggak salah lagi"),
     (r"\btidak ada\b", "nggak ada"),
     (r"\btak ada\b", "nggak ada"),
     (r"\b(?:emang\s+)?(?:sudah|udah)\s+kuduga\b", "emang udah kuduga"),
@@ -2022,6 +2231,8 @@ _CASUAL_FANSUB_RULES = [
     (r"\bsangat banyak\b", "banget"),
     (r"\bbodoh sekali\b", "bodoh banget"),
     (r"\bbagus sekali\b", "hebat banget"),
+    (r"\bcantik sekali\b", "cantik banget"),
+    (r"\bsangat cantik\b", "cantik banget"),
     (r"\bdi sini untuk mengambil\b", "mau mengambil"),
     (r"\banda berpikir\b", "kamu rasa"),
     (r"\bmau bagaimana lagi\b", "mau gimana lagi"),
@@ -2050,6 +2261,45 @@ _CASUAL_FANSUB_RULES = [
     (r"\bgampang sekali\b", "gampang banget"),
     (r"\bmudah sekali\b", "gampang banget"),
     (r"\bapa-apaan ini\b", "ada apa-apaan nih"),
+    (r"\bapa yang sedang terjadi\b", "ada apa sebenarnya nih"),
+    (r"\bapa yang terjadi di sini\b", "ada apa sih di sini"),
+    (r"\bapa katamu\b", "kamu bilang apa"),
+    (r"\bpercuma saja\b", "percuma aja"),
+    (r"\bjangan khawatirkan aku\b", "nggak usah khawatirin aku"),
+    (r"\bjangan khawatirkan hal itu\b", "nggak usah dipikirin"),
+    (r"\bjangan pedulikan aku\b", "nggak usah peduliin aku"),
+    (r"\bterserah padamu\b", "terserah kamu aja"),
+    (r"\bterserah kepadamu\b", "terserah kamu aja"),
+    (r"\bapa yang harus (?:kita|kami) lakukan\b", "gimana nih"),
+    (r"\bapa yang harus (?:ku|aku) lakukan\b", "aku harus gimana nih"),
+    (r"\bapa yang harus saya lakukan\b", "aku harus gimana nih"),
+    (r"\blepaskan aku\b", "lepasin aku"),
+    (r"\btinggalkan aku sendiri\b", "tinggalin aku sendiri"),
+    (r"\bbiarkan aku sendiri\b", "biarin aku sendiri"),
+    (r"\bjangan dekati aku\b", "jangan deket-deket"),
+    (r"\bjangan sentuh aku\b", "jangan pegang-pegang"),
+    (r"\bbukan masalah besar\b", "nggak masalah kok"),
+    (r"\bbukan masalah\b", "nggak masalah kok"),
+    (r"\btidak masalah\b", "nggak masalah"),
+    (r"\btak masalah\b", "nggak masalah"),
+    (r"\bjangan salah paham dulu\b", "jangan salah paham dulu"),
+    (r"\bjangan salah paham\b", "jangan salah paham dulu"),
+    (r"\bjangan dipikirkan\b", "nggak usah dipikirin"),
+    (r"\bjangan menyerah\b", "jangan nyerah"),
+    (r"\bkamu pasti bisa melakukannya\b", "kamu pasti bisa"),
+    (r"\bkamu bisa melakukannya\b", "kamu pasti bisa"),
+    (r"\bkita pasti bisa melakukannya\b", "kita pasti bisa"),
+    (r"\bkita bisa melakukannya\b", "kita pasti bisa"),
+    (r"\bseperti itu\b", "kayak gitu"),
+    (r"\bseperti ini\b", "kayak gini"),
+    (r"\bseperti biasanya\b", "kayak biasanya"),
+    (r"\bsebagaimana mestinya\b", "kayak biasanya"),
+    (r"\bterima kasih atas bantuannya\b", "makasih atas bantuannya"),
+    (r"\bterima kasih bantuannya\b", "makasih bantuannya"),
+    (r"\bsampai jumpa besok\b", "sampai ketemu besok"),
+    (r"\bhati-hati di jalan\b", "hati-hati ya"),
+    (r"\bjangan buru-buru\b", "nggak usah buru-buru"),
+    (r"\baku tidak tahu apa yang harus kulakukan\b", "aku nggak tahu harus gimana"),
     (r"\bsedikit pun\b", "dikit pun"),
     # Diksi Percakapan & Slang Santai Tambahan
     (r"\bbercanda kan\b", "bercanda ya"),
@@ -2075,6 +2325,7 @@ _CASUAL_FANSUB_RULES = [
     (r",\s*tidakkah begitu\s*\?", ", kan?"),
     (r",\s*bukankah begitu\s*\?", ", kan?"),
     (r",\s*benar kan\s*\?", ", ya kan?"),
+    (r",\s*benarkah\s*\?", ", beneran?"),
     (r"\bapakah kamu baik-baik saja\b", "kamu nggak apa-apa"),
     (r"\bapakah kamu nggak apa-apa\b", "kamu nggak apa-apa"),
     (r"\bapakah kau baik-baik saja\b", "kamu nggak apa-apa"),
@@ -2430,10 +2681,15 @@ class _RateLimited(RuntimeError):
 
 
 async def _chat_completion(client, apiurl, headers, payload) -> str:
-    r = await client.post(apiurl + "/chat/completions", json=payload, headers=headers)
+    clean_url = (apiurl or "").strip().rstrip("/")
+    if not clean_url.endswith("/chat/completions"):
+        endpoint_url = clean_url + "/chat/completions"
+    else:
+        endpoint_url = clean_url
+    r = await client.post(endpoint_url, json=payload, headers=headers)
     if r.status_code == 400 and any(k in payload for k in ("reasoning_format", "reasoning_effort")):
         payload = {k: v for k, v in payload.items() if k not in ("reasoning_format", "reasoning_effort")}
-        r = await client.post(apiurl + "/chat/completions", json=payload, headers=headers)
+        r = await client.post(endpoint_url, json=payload, headers=headers)
     if r.status_code == 429:
         raise _RateLimited(f"Rate limit (429): {_extract_err(r)}")
     if r.status_code in (401, 403):
@@ -2451,7 +2707,12 @@ async def _chat_completion(client, apiurl, headers, payload) -> str:
         raise RuntimeError(f"HTTP {r.status_code}: {_extract_err(r)}")
     d = r.json()
     msg = (d.get("choices") or [{}])[0].get("message") or {}
-    return (msg.get("content") or "").strip()
+    content = (msg.get("content") or "").strip()
+    if not content and (msg.get("reasoning") or msg.get("reasoning_content")):
+        raw_r = (msg.get("reasoning") or msg.get("reasoning_content") or "").strip()
+        if _re.search(r'^\d+\|', raw_r, _re.M):
+            content = raw_r
+    return content
 
 
 async def call_openai_translate(cues, src, tgt, apikey, model, apiurl, timeout=120.0, fill_with_gtx=True, custom_prompt=None):
@@ -2471,20 +2732,32 @@ async def call_openai_translate(cues, src, tgt, apikey, model, apiurl, timeout=1
     if not cues:
         return cues, stats
     apikey = (apikey or "").strip().strip("\"'").strip()
-    apiurl = (apiurl or "https://generativelanguage.googleapis.com/v1beta/openai").strip().rstrip("/")
-    prov = detect_provider(apiurl)
+    apiurl = (apiurl or "").strip().rstrip("/")
+    prov = detect_provider(apiurl) if apiurl else ""
 
-    # Otomatis sesuaikan model & apiurl berdasarkan format apikey dari pengguna
+    # Otomatis sesuaikan model & apiurl HANYA JIKA belum disetel pengguna (jangan timpa pilihan pengguna)
     if apikey:
         inferred_prov, inferred_model, inferred_url = detect_provider_from_key(apikey)
-        if inferred_prov != "custom" and (prov != inferred_prov or not model):
-            prov = inferred_prov
+        if not apiurl and inferred_url:
             apiurl = inferred_url
+            prov = inferred_prov
+        if not model and inferred_model:
             model = inferred_model
 
-    model = (model or "").strip() or _DEFAULT_MODEL[prov]
-    model = _LEGACY_MODEL_UPGRADE.get(prov, {}).get(model, model)
-    cfg = _PROVIDER_CFG[prov]
+    if not apiurl:
+        apiurl = "https://generativelanguage.googleapis.com/v1beta/openai"
+        prov = "google"
+    if not prov:
+        prov = detect_provider(apiurl)
+
+    if prov == "google":
+        # Google Generative Language OpenAI endpoint wajib berakhiran /v1beta/openai
+        clean_u = apiurl.rstrip("/")
+        if "generativelanguage.googleapis.com" in clean_u and not clean_u.endswith("/openai"):
+            apiurl = "https://generativelanguage.googleapis.com/v1beta/openai"
+
+    model = _normalize_model_name(prov, model)
+    cfg = _PROVIDER_CFG.get(prov, _PROVIDER_CFG["custom"])
     stats["provider"] = prov
 
     src_name = LANG_NAMES.get((src or "").lower(), src or "English")
@@ -2509,6 +2782,14 @@ async def call_openai_translate(cues, src, tgt, apikey, model, apiurl, timeout=1
     src_lines = [_prep_line(c["text"]) for c in cues]
     n = len(cues)
     B = cfg["batch"]
+
+    # Deteksi model penalaran / reasoning / thinking (Nemotron, GPT-OSS, DeepSeek-R1, QwQ, dll.)
+    is_reasoning_target = any(x in (model or "").lower() for x in (
+        "gpt-oss", "nemotron", "deepseek-r1", "qwq", "o1-", "o3-", "reason", "thinking"
+    ))
+    if is_reasoning_target and B > 25:
+        B = 20  # Batch lebih ramping agar respon reasoning cepat dan tidak bottleneck timeout
+
     ranges = [(lo, min(n, lo + B)) for lo in range(0, n, B)]
     state = {"models": _model_chain(prov, model), "fatal": "", "last_err": "",
              "used": _collections.Counter()}
@@ -2527,19 +2808,23 @@ async def call_openai_translate(cues, src, tgt, apikey, model, apiurl, timeout=1
                          + "\n".join("- " + x for x in ctx))
         parts.append(f"Terjemahkan {len(ids)} baris berikut:\n"
                      + "\n".join(f"{i}|{src_lines[lo + i - 1]}" for i in ids))
-        reasoning = "gpt-oss" in cur_model
-        # Direct instruction to prevent unnecessary chain-of-thought delay on reasoning models
+        is_cur_reasoning = any(x in (cur_model or "").lower() for x in (
+            "gpt-oss", "nemotron", "deepseek-r1", "qwq", "o1-", "o3-", "reason", "thinking"
+        ))
         user_body = "\n\n".join(parts)
-        if reasoning:
-            user_body = "JANGAN sertakan penalaran/thinking. Langsung keluarkan format N|terjemahan secara ringkas.\n\n" + user_body
+        if is_cur_reasoning:
+            user_body = "JANGAN sertakan penalaran/thinking panjang. Langsung keluarkan format N|terjemahan secara ringkas.\n\n" + user_body
+            calc_tokens = min(8192, max(3072, len(ids) * 90 + 2500))
+        else:
+            calc_tokens = min(8192, max(1024, len(ids) * 75 + 500))
         p = {
             "model": cur_model,
             "messages": [{"role": "system", "content": system_prompt},
                          {"role": "user", "content": user_body}],
             "temperature": 0.3,
-            "max_tokens": min(8192, len(ids) * 65 + 250),
+            "max_tokens": calc_tokens,
         }
-        if reasoning:
+        if is_cur_reasoning:
             p["reasoning_effort"] = "low"
             if prov == "groq":
                 p["reasoning_format"] = "hidden"

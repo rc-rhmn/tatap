@@ -13,6 +13,18 @@ Format versi menggunakan skema `MAJOR.MINOR.PATCH`:
 - **MINOR (x.Y.0):** Penambahan fitur atau kapabilitas baru yang tetap kompatibel ke belakang (*backward-compatible new features*). Digit PATCH direset ke 0.
 - **PATCH (x.y.Z):** Perbaikan bug, peningkatan stabilitas, atau perbaikan internal tanpa penambahan fitur baru (*backward-compatible bug fixes*).
 
+## [2.12.11] - 2026-11-14
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.12.10 -> 2.12.11)
+Pengetatan guard keamanan dan perbaikan dokumentasi. Tidak ada perubahan kontrak API, skema database, atau fitur baru — cukup PATCH.
+
+### Security
+1. **Origin loopback port lain ditolak.** `_origin_allowed()` sebelumnya menerima `http://localhost:<port apa pun>` karena memakai fallback host. Halaman dari aplikasi lain di `localhost:3000` bisa membaca `/api/settings` beserta API key. Sekarang origin harus **persis** ada di `_ALLOWED_ORIGINS` (origin aplikasi sendiri di `APP_PORT`); mode lain didaftarkan eksplisit via `TATAP_ALLOWED_HOSTS`.
+2. **Deteksi `pytest` dihapus dari kode produksi.** Host khusus test (`testserver`, `test`, `127.0.0.1:8799`) sekarang didaftarkan lewat env di `tests/conftest.py`, bukan cabang `if "pytest" in sys.modules` di `main.py`.
+
+### Fixed
+1. **README download links** — APK mobile & TV kini menunjuk rilis fork `rc-rhmn/tatap` v2.12.11 (bukan tautan upstream v2.12.7). Aset desktop Windows/AppImage tetap menunjuk upstream karena fork tidak memproduksinya.
+
 ## [2.12.10] - 2026-11-14
 
 ### Justifikasi SemVer 2.0.0 (PATCH: 2.12.9 -> 2.12.10)

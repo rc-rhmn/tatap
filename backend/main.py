@@ -197,32 +197,21 @@ _ALLOWED_HOSTS = {f"127.0.0.1:{APP_PORT}", f"localhost:{APP_PORT}", "127.0.0.1",
 _ALLOWED_HOSTS |= {
     h.strip().lower() for h in os.getenv("TATAP_ALLOWED_HOSTS", "").split(",") if h.strip()
 }
-if "pytest" in sys.modules:      # TestClient/ASGITransport memakai Host: testserver / test
-    _ALLOWED_HOSTS |= {"testserver", "test"}
 _ALLOWED_ORIGINS = {f"http://{h}" for h in _ALLOWED_HOSTS}
 
 
 def _host_allowed(host: str) -> bool:
-    """Host header valid? Loopback dengan port apa pun diizinkan (instance kedua/E2E)."""
-    host = (host or "").lower()
-    if host in _ALLOWED_HOSTS:
-        return True
-    import urllib.parse as _up
-
-    name = (_up.urlsplit(f"//{host}").hostname or "").lower()
-    return name in ("127.0.0.1", "localhost", "::1")
+    """Host header harus persis salah satu yang diizinkan (cegah DNS rebinding)."""
+    return (host or "").lower() in _ALLOWED_HOSTS
 
 
 def _origin_allowed(origin: str) -> bool:
-    if not origin:
-        return True
-    import urllib.parse as _up
+    """Origin harus persis terdaftar — port loopback lain TIDAK otomatis dipercaya.
 
-    p = _up.urlsplit(origin)
-    if p.scheme not in ("http", "https"):
-        return False
-    host = (p.netloc or "").lower()
-    return host in _ALLOWED_ORIGINS or _host_allowed(host)
+    Halaman dari `http://localhost:3000` bukan aplikasi kita; kalau diizinkan,
+    halaman itu bisa membaca /api/settings beserta API key.
+    """
+    return not origin or origin in _ALLOWED_ORIGINS
 
 
 @app.middleware("http")

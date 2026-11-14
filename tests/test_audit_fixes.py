@@ -117,6 +117,23 @@ def test_native_client_without_origin_allowed():
     assert r.status_code == 200
 
 
+def test_other_loopback_port_origin_blocked():
+    """Halaman dari localhost:3000 bukan aplikasi kita — tidak boleh baca API key."""
+    from backend.main import app
+
+    client = TestClient(app, base_url="http://127.0.0.1:8767")
+    blocked = client.get("/api/settings", headers={"Origin": "http://localhost:3000"})
+    assert blocked.status_code == 403
+    # Origin aplikasi sendiri harus tetap lolos (POST same-origin mengirim Origin).
+    allowed = client.get("/api/settings", headers={"Origin": "http://127.0.0.1:8767"})
+    assert allowed.status_code == 200
+
+
+def test_production_backend_has_no_pytest_hook():
+    src = open(os.path.join(BACKEND_DIR, "main.py"), encoding="utf-8").read()
+    assert '"pytest"' not in src, "kode produksi tidak boleh mendeteksi pytest"
+
+
 def test_safe_sub_filename_cannot_escape_tempdir():
     import main
 

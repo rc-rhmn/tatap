@@ -4,7 +4,7 @@
   <p>Aplikasi pemutar anime mandiri multiplatform (Android Mobile, Android TV, Windows, Linux, Web) yang berfokus pada kemudahan penggunaan dan penyimpanan data lokal.</p>
 
   <p>
-    <a href="https://github.com/asfaraguest/tatap/releases/latest"><img src="https://img.shields.io/github/v/release/asfaraguest/tatap?style=flat-square&color=00dbeb&label=Rilis" alt="Release"></a>
+    <a href="https://github.com/rc-rhmn/tatap/releases/latest"><img src="https://img.shields.io/github/v/release/asfaraguest/tatap?style=flat-square&color=00dbeb&label=Rilis" alt="Release"></a>
     <a href="https://somsubhra.github.io/github-release-stats/?username=asfaraguest&repository=tatap" target="_blank" title="Lihat Statistik Unduhan Lengkap"><img src="https://img.shields.io/github/downloads/asfaraguest/tatap/total?style=flat-square&color=3fb950&label=Statistik%20Unduhan" alt="Statistik Unduhan"></a>
     <a href="https://github.com/asfaraguest/tatap/stargazers"><img src="https://img.shields.io/github/stars/asfaraguest/tatap?style=flat-square&logo=github&color=e3b341&label=Stars" alt="Stars"></a>
     <a href="https://github.com/asfaraguest/tatap/network/members"><img src="https://img.shields.io/github/forks/asfaraguest/tatap?style=flat-square&logo=github&color=58a6ff&label=Forks" alt="Forks"></a>
@@ -13,8 +13,8 @@
   </p>
 
   <p>
-    <a href="https://github.com/asfaraguest/tatap/releases/latest/download/tatap-release-v2.12.7.apk"><img src="https://img.shields.io/badge/Download-Android%20Mobile-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android Mobile APK"></a>
-    <a href="https://github.com/asfaraguest/tatap/releases/latest/download/tatap-tv-release-v2.12.7.apk"><img src="https://img.shields.io/badge/Download-Android%20TV-0081C9?style=for-the-badge&logo=android&logoColor=white" alt="Android TV APK"></a>
+    <a href="https://github.com/rc-rhmn/tatap/releases/latest/download/tatap-release-v2.12.11.apk"><img src="https://img.shields.io/badge/Download-Android%20Mobile-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android Mobile APK"></a>
+    <a href="https://github.com/rc-rhmn/tatap/releases/latest/download/tatap-tv-release-v2.12.11.apk"><img src="https://img.shields.io/badge/Download-Android%20TV-0081C9?style=for-the-badge&logo=android&logoColor=white" alt="Android TV APK"></a>
     <a href="https://github.com/asfaraguest/tatap/releases/latest/download/tatap-windows-x64-portable.zip"><img src="https://img.shields.io/badge/Download-Windows%20x64-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows Portable"></a>
     <a href="https://github.com/asfaraguest/tatap/releases/latest/download/Tatap-x86_64.AppImage"><img src="https://img.shields.io/badge/Download-Linux%20AppImage-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux AppImage"></a>
   </p>
@@ -73,8 +73,8 @@ Pilih paket instalasi resmi sesuai perangkat Anda:
 
 | Platform Perangkat | Tombol Unduh Langsung | Format Berkas | Keterangan & Kompatibilitas |
 | :--- | :---: | :---: | :--- |
-| **Android Ponsel / Tablet** | [![Unduh Android APK](https://img.shields.io/badge/Download-Android%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/asfaraguest/tatap/releases/latest/download/tatap-release-v2.12.7.apk) | `.apk` (~35 MB) | Signed Production APK (Android 7.0 s/d 16, Watch Portrait View & Adaptive Icons) |
-| **Android TV / Google TV** | [![Unduh Android TV APK](https://img.shields.io/badge/Download-Android%20TV%20APK-0081C9?style=for-the-badge&logo=android&logoColor=white)](https://github.com/asfaraguest/tatap/releases/latest/download/tatap-tv-release-v2.12.7.apk) | `.apk` (~35 MB) | Signed Production APK khusus TV (Leanback 10-foot UI & Remote D-pad) |
+| **Android Ponsel / Tablet** | [![Unduh Android APK](https://img.shields.io/badge/Download-Android%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/rc-rhmn/tatap/releases/latest/download/tatap-release-v2.12.11.apk) | `.apk` (~35 MB) | Signed Production APK (Android 7.0 s/d 16, Watch Portrait View & Adaptive Icons) |
+| **Android TV / Google TV** | [![Unduh Android TV APK](https://img.shields.io/badge/Download-Android%20TV%20APK-0081C9?style=for-the-badge&logo=android&logoColor=white)](https://github.com/rc-rhmn/tatap/releases/latest/download/tatap-tv-release-v2.12.11.apk) | `.apk` (~35 MB) | Signed Production APK khusus TV (Leanback 10-foot UI & Remote D-pad) |
 | **Windows (x64)** | [![Unduh Windows Portable](https://img.shields.io/badge/Download-Windows%20Portable-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/asfaraguest/tatap/releases/latest/download/tatap-windows-x64-portable.zip) | `.zip` (~26 MB) | Standalone Portable (Ekstrak zip & jalankan `Tatap.exe`) |
 | **Linux (x86_64)** | [![Unduh Linux AppImage](https://img.shields.io/badge/Download-Linux%20AppImage-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/asfaraguest/tatap/releases/latest/download/Tatap-x86_64.AppImage) | `.AppImage` (~58 MB) | Standalone AppImage (Berikan izin `chmod +x` lalu jalankan) |
 
@@ -82,7 +82,7 @@ Pilih paket instalasi resmi sesuai perangkat Anda:
 > **Mengalami Kendala Pemasangan pada Android (Samsung One UI, Xiaomi/HyperOS, dll.)?**  
 > Jika ponsel Anda (khususnya Samsung One UI 6.0+) memblokir pemasangan dengan pesan *"Pemasangan diblokir (Auto Blocker)"* atau *"Diblokir oleh Play Protect"*, ikuti solusi langkah-demi-langkah pada **[Panduan Pemecahan Masalah Instalasi Android](docs/TROUBLESHOOTING_ANDROID.md)**.
 
-Seluruh arsip versi rilis stabil sebelumnya tersedia di [Halaman Rilis Resmi GitHub](https://github.com/asfaraguest/tatap/releases). Untuk memantau grafik dan riwayat total unduhan secara transparan, kunjungi [Dasbor Statistik Unduhan Tatap](https://somsubhra.github.io/github-release-stats/?username=asfaraguest&repository=tatap).
+Seluruh arsip versi rilis stabil sebelumnya tersedia di [Halaman Rilis Resmi GitHub](https://github.com/rc-rhmn/tatap/releases). Untuk memantau grafik dan riwayat total unduhan secara transparan, kunjungi [Dasbor Statistik Unduhan Tatap](https://somsubhra.github.io/github-release-stats/?username=asfaraguest&repository=tatap).
 
 ### Panduan Penggunaan Tatap Windows (Portable x64)
 

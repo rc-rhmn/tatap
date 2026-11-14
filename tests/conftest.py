@@ -16,6 +16,9 @@ import sys
 
 import pytest
 
+# Host khusus test (TestClient & server E2E) — jangan ada di kode produksi.
+os.environ.setdefault("TATAP_ALLOWED_HOSTS", "testserver,test,127.0.0.1:8799")
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 

@@ -13,6 +13,32 @@ Format versi menggunakan skema `MAJOR.MINOR.PATCH`:
 - **MINOR (x.Y.0):** Penambahan fitur atau kapabilitas baru yang tetap kompatibel ke belakang (*backward-compatible new features*). Digit PATCH direset ke 0.
 - **PATCH (x.y.Z):** Perbaikan bug, peningkatan stabilitas, atau perbaikan internal tanpa penambahan fitur baru (*backward-compatible bug fixes*).
 
+## [2.12.10] - 2026-11-14
+
+### Justifikasi SemVer 2.0.0 (PATCH: 2.12.9 -> 2.12.10)
+Audit keamanan & stabilitas. Tidak ada perubahan kontrak API publik, skema database, maupun fitur baru — hanya penutupan celah keamanan dan perbaikan bug internal, sehingga cukup PATCH.
+
+### Security
+1. **Guard Host/Origin menggantikan CORS `*`** — server lokal tanpa auth + `allow_origins=["*"]` membuat halaman web mana pun di device yang sama bisa membaca `/api/settings` (termasuk API key), mengubah setting, dan memanggil `/api/shutdown`. Kini request dengan `Host`/`Origin` asing atau `Sec-Fetch-Site: cross-site` ditolak 403. Mode LAN diatur via `TATAP_ALLOWED_HOSTS`.
+2. **Validasi SSRF per hop redirect** — modul baru `backend/netguard.py` menjadi satu-satunya pintu validasi, dipasang sebagai httpx request hook di proxy video/subtitle dan download mpv, serta di setiap redirect `api/desync.py`. Redirect dari domain publik ke `127.0.0.1` tidak lagi bisa membaca endpoint internal.
+3. **Path traversal `play-mpv` ditutup** — nama file subtitle memakai `_safe_sub_filename()`; URL subtitle divalidasi SSRF sebelum diunduh; file ditulis dengan context manager.
+
+### Fixed
+1. **Transaksi DB menggantung di pool** — koneksi kini di-rollback sebelum kembali ke pool; write yang gagal tidak lagi meng-commit perubahan parsial atau memicu `database is locked` 5 detik.
+2. **LIKE wildcard injection** — slug `%` tidak lagi menghapus/menimpa seluruh `episode_cache` (4 query memakai `ESCAPE '\'` via `_like_escape()`).
+3. **Timeout translate** — `asyncio.wait` + `_collect_batch_results()`: batch yang gagal memakai teks asli di slotnya sendiri (index cue tidak bergeser), dan `CancelledError` tidak lagi menggagalkan seluruh terjemahan.
+4. **Buffer streaming dibatasi** — `_pipe_video` berhenti menampung body setelah 6 MB (MP4 besar tidak lagi menelan seluruh RAM); retry/fallback dilarang setelah byte pertama terkirim sehingga segmen tidak terduplikasi.
+5. **Otakudesu desync** — payload hex (kunci `/api/pk`) diterima sebagai respons valid.
+6. **`_fmt_ts`** — tidak lagi menghasilkan detik `60.000` (timestamp WebVTT invalid).
+7. **`_match_title_tokens`** — entri dengan angka berbeda tidak dianggap judul yang sama.
+8. **Cache `/api/seasonal`** — key `v5` membedakan `which=now`/`prev`/tanpa filter; tab Ongoing tidak lagi menampilkan anime tamat dari cache.
+9. **Purge TTL** — `browse_cache` dan `subtitle_cache` disamakan ke 30 hari sesuai TTL pembaca.
+10. **Task "Masih Tayang"** — memakai registry `_spawn_background` agar tidak di-GC sebelum selesai.
+11. **`err()` undefined** — endpoint bookmark mengembalikan error rapi, bukan 500.
+12. **Android: race daftar stream/subtitle** — `streamVariants`/`subtitleTracks` di-swap atomik (volatile + unmodifiable list); dialog kualitas/subtitle memakai snapshot.
+13. **Android: kebocoran koneksi poster** — `ImageLoader` menutup `HttpURLConnection` di `finally`.
+14. **Android: state paging** — `totalPages`/`hasNextPage`/`hasPagingInfo` hanya ditulis di UI thread.
+
 ## [2.12.9] - 2026-11-14
 
 ### Justifikasi SemVer 2.0.0 (PATCH: 2.12.8 -> 2.12.9)
